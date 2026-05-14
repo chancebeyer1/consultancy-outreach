@@ -54,4 +54,9 @@ Iterate on `backend/prompts/*.md` until the output reads like you wrote it yours
 - [ ] Anonymization sign-off from StratEdge AI on the case study copy in `landing/`
 - [ ] Domain pointed at Vercel
 - [ ] Cal.com handle
-- [ ] 20+ past LinkedIn DMs + posts pasted into `backend/prompts/voice_corpus.md` for voice cloning
+- [ ] Bootstrap your voice corpus:
+  ```powershell
+  copy backend\prompts\voice_corpus.example.md backend\prompts\voice_corpus.md
+  ```
+  Then paste 20+ of your past LinkedIn DMs and posts into the new file. It's
+  gitignored so your real messages never get pushed.

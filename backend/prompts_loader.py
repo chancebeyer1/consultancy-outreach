@@ -9,8 +9,15 @@ from backend.config import PROMPTS_DIR
 
 @lru_cache(maxsize=None)
 def load_prompt(name: str) -> str:
-    """Load a prompt file by stem name. Cached for the process lifetime."""
+    """Load a prompt file by stem name. Cached for the process lifetime.
+
+    Special case: `voice_corpus` falls back to `voice_corpus.example` if the
+    user's filled-in copy isn't present. The filled-in copy is gitignored to
+    keep real DMs out of public repos.
+    """
     path = PROMPTS_DIR / f"{name}.md"
+    if not path.exists() and name == "voice_corpus":
+        path = PROMPTS_DIR / "voice_corpus.example.md"
     if not path.exists():
         raise FileNotFoundError(f"Prompt not found: {path}")
     return path.read_text(encoding="utf-8")
