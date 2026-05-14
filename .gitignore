@@ -1,0 +1,33 @@
+.env
+.env.local
+.env.*.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# node
+node_modules/
+.next/
+.vercel/
+out/
+
+# data dumps / scratch
+data/
+scratch/
+*.csv
+*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

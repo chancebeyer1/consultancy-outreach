@@ -1,0 +1,33 @@
+[project]
+name = "consultancy-outreach-backend"
+version = "0.1.0"
+description = "Outreach pipeline: enrich, score, draft, send."
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40.0",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.1",
+    "pydantic>=2.9.0",
+    "tenacity>=9.0.0",
+    "rich>=13.9.0",
+    "typer>=0.13.0",
+]
+
+[project.optional-dependencies]
+worker = [
+    "modal>=0.66.0",
+    "psycopg[binary]>=3.2.0",
+    "supabase>=2.10.0",
+]
+dev = [
+    "ruff>=0.7.0",
+    "pytest>=8.3.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501"]
