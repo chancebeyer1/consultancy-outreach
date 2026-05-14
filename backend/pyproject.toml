@@ -13,6 +13,10 @@ dependencies = [
     "typer>=0.13.0",
 ]
 
+[tool.uv]
+# Application, not a publishable library — don't try to build a wheel.
+package = false
+
 [project.optional-dependencies]
 worker = [
     "modal>=0.66.0",

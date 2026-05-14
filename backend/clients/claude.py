@@ -10,13 +10,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from functools import lru_cache
+
 from anthropic import Anthropic
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from backend.config import Config
-from backend.prompts_loader import cached_system_prefix
+from config import Config, require
+from prompts_loader import cached_system_prefix
 
-_client = Anthropic(api_key=Config.anthropic_api_key)
+
+@lru_cache(maxsize=1)
+def _client() -> Anthropic:
+    """Lazy Anthropic client. Validates the API key on first call, not at import."""
+    return Anthropic(api_key=require("ANTHROPIC_API_KEY"))
 
 
 def _system_blocks(extra: str | None = None) -> list[dict[str, Any]]:
@@ -48,7 +54,7 @@ def call(
     `user_payload` is the per-call variable content (the enrichment JSON, etc.).
     """
     model = model or Config.claude_model_draft
-    response = _client.messages.create(
+    response = _client().messages.create(
         model=model,
         max_tokens=max_tokens,
         temperature=temperature,

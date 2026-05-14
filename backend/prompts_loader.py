@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from backend.config import PROMPTS_DIR
+from config import PROMPTS_DIR
 
 
 @lru_cache(maxsize=None)

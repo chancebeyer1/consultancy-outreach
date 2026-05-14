@@ -6,9 +6,9 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from backend.clients import claude
-from backend.config import Config
-from backend.prompts_loader import load_prompt
+from clients import claude
+from config import Config
+from prompts_loader import load_prompt
 
 
 # Channel budget — max characters for each kind of draft.

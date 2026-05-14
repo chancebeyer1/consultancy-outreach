@@ -24,7 +24,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
-from backend.workers import draft, enrich, score
+from workers import draft, enrich, score
 
 app = typer.Typer(add_completion=False, help=__doc__)
 console = Console()

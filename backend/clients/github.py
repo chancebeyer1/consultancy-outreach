@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from backend.config import Config
+from config import Config
 
 BASE = "https://api.github.com"
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from backend.clients import claude
-from backend.config import Config
-from backend.prompts_loader import load_prompt
+from clients import claude
+from config import Config
+from prompts_loader import load_prompt
 
 
 def _compact_enrichment(enrichment: dict[str, Any]) -> dict[str, Any]:

@@ -1,4 +1,9 @@
-"""Config loader. Reads .env from project root."""
+"""Config loader. Reads .env from project root.
+
+Env vars are read lazily — `Config` exposes them as attributes, but missing
+required keys are only flagged when a caller actually tries to use them.
+This lets `--help` and offline tests run without a populated .env.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,16 @@ PROMPTS_DIR = BACKEND_DIR / "prompts"
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-def _required(key: str) -> str:
+def _env(key: str, default: str = "") -> str:
+    return os.environ.get(key, default)
+
+
+def require(key: str) -> str:
+    """Read a required env var. Raises with a helpful message if missing.
+
+    Call this at the use site, not at module import, so CLIs can boot
+    without a fully-populated .env.
+    """
     value = os.environ.get(key)
     if not value:
         raise RuntimeError(
@@ -23,29 +37,25 @@ def _required(key: str) -> str:
     return value
 
 
-def _optional(key: str, default: str = "") -> str:
-    return os.environ.get(key, default)
-
-
 class Config:
     # LLM
-    anthropic_api_key: str = _required("ANTHROPIC_API_KEY")
-    claude_model_draft: str = _optional("CLAUDE_MODEL_DRAFT", "claude-sonnet-4-6")
-    claude_model_reason: str = _optional("CLAUDE_MODEL_REASON", "claude-opus-4-7")
+    anthropic_api_key: str = _env("ANTHROPIC_API_KEY")
+    claude_model_draft: str = _env("CLAUDE_MODEL_DRAFT", "claude-sonnet-4-6")
+    claude_model_reason: str = _env("CLAUDE_MODEL_REASON", "claude-opus-4-7")
 
     # Enrichment
-    proxycurl_api_key: str = _optional("PROXYCURL_API_KEY")
-    tavily_api_key: str = _optional("TAVILY_API_KEY")
-    serper_api_key: str = _optional("SERPER_API_KEY")
-    github_token: str = _optional("GITHUB_TOKEN")
+    proxycurl_api_key: str = _env("PROXYCURL_API_KEY")
+    tavily_api_key: str = _env("TAVILY_API_KEY")
+    serper_api_key: str = _env("SERPER_API_KEY")
+    github_token: str = _env("GITHUB_TOKEN")
 
     # Senders (Phase 2+)
-    heyreach_api_key: str = _optional("HEYREACH_API_KEY")
-    smartlead_api_key: str = _optional("SMARTLEAD_API_KEY")
+    heyreach_api_key: str = _env("HEYREACH_API_KEY")
+    smartlead_api_key: str = _env("SMARTLEAD_API_KEY")
 
     # DB
-    database_url: str = _optional("DATABASE_URL")
+    database_url: str = _env("DATABASE_URL")
 
     # Outreach content
-    landing_url: str = _optional("LANDING_URL", "https://your-domain.com")
-    calcom_url: str = _optional("CALCOM_URL", "https://cal.com/your-handle")
+    landing_url: str = _env("LANDING_URL", "https://your-domain.com")
+    calcom_url: str = _env("CALCOM_URL", "https://cal.com/your-handle")

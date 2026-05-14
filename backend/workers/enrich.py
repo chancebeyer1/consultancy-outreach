@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-from backend.clients import github, proxycurl, tavily
+from clients import github, proxycurl, tavily
 
 
 def _github_username_from_profile(profile: dict[str, Any]) -> str | None:
