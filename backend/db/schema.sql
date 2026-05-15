@@ -102,17 +102,23 @@ create index if not exists sends_draft_idx on sends(draft_id);
 -- ---------------------------------------------------------------
 create table if not exists replies (
     id              uuid primary key default gen_random_uuid(),
-    lead_id         uuid not null references leads(id) on delete cascade,
+    lead_id         uuid references leads(id) on delete cascade,    -- nullable: cron may see replies before lead is in DB
     channel         text not null,
+    -- provider-side message id (Heyreach / Smartlead). Used to dedupe
+    -- across cron runs; NULL only for hand-inserted rows.
+    external_id     text,
     body            text not null,
-    sentiment       text,        -- positive | neutral | negative
-    intent          text,        -- interested | objection | not_now | referral | unsubscribe | oof | other
-    suggested_reply text,        -- LLM-drafted response, awaiting your approval
+    sentiment       text,           -- positive | neutral | negative
+    intent          text,           -- interested | objection | not_now | referral | unsubscribe | oof | other
+    summary         text,           -- one-sentence LLM summary
+    suggested_reply text,           -- LLM-drafted response, awaiting your approval
+    next_action     text,           -- send_calendar_link | send_one_pager | wait_per_their_request | drop | needs_human
     handled_at      timestamptz,
     received_at     timestamptz not null default now()
 );
-create index if not exists replies_lead_idx   on replies(lead_id);
-create index if not exists replies_intent_idx on replies(intent);
+create index        if not exists replies_lead_idx       on replies(lead_id);
+create index        if not exists replies_intent_idx     on replies(intent);
+create unique index if not exists replies_external_uidx  on replies(external_id) where external_id is not null;
 
 -- ---------------------------------------------------------------
 -- campaigns — for A/B testing and segment-level analytics

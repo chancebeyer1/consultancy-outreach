@@ -30,10 +30,8 @@ manually from your laptop after each batch of sends.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -45,9 +43,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from clients import heyreach
 from config import BACKEND_DIR
-from workers import reply_triage
+from workers.replies import fetch_and_classify_new_replies
 
 app = typer.Typer(add_completion=False, help=__doc__)
 console = Console()
@@ -82,90 +79,6 @@ def _append_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
             f.write(json.dumps(r, default=str) + "\n")
 
 
-def _message_id(msg: dict[str, Any]) -> str:
-    """Stable id per message. Falls back to a content+timestamp hash if
-    Heyreach doesn't return one."""
-    mid = msg.get("id") or msg.get("messageId")
-    if mid:
-        return str(mid)
-    blob = f"{msg.get('sentAt')}|{msg.get('body', '')[:200]}".encode()
-    return hashlib.sha1(blob).hexdigest()[:16]
-
-
-def _find_last_outbound(messages: list[dict[str, Any]], before_idx: int) -> str | None:
-    """Walk backward from a reply to find the most recent outbound we sent.
-
-    Used as the `original_message` context for the classifier prompt.
-    """
-    for i in range(before_idx - 1, -1, -1):
-        m = messages[i]
-        if (m.get("direction") or "").lower() == "outbound":
-            return m.get("body")
-    return None
-
-
-def _process_conversation(
-    convo: dict[str, Any],
-    seen_ids: set[str],
-) -> list[dict[str, Any]]:
-    """Fetch messages for one conversation, classify any new inbound replies.
-
-    Returns the list of new reply records (each ready to write to JSONL).
-    """
-    convo_id = str(convo.get("id") or convo.get("conversationId") or "")
-    if not convo_id:
-        return []
-
-    messages = heyreach.list_conversation_messages(convo_id)
-    new_records: list[dict[str, Any]] = []
-
-    for idx, msg in enumerate(messages):
-        if (msg.get("direction") or "").lower() != "inbound":
-            continue
-        mid = _message_id(msg)
-        if mid in seen_ids:
-            continue
-
-        reply_body = msg.get("body") or ""
-        original = _find_last_outbound(messages, idx)
-
-        try:
-            classification = reply_triage.classify_reply(
-                reply_body=reply_body,
-                original_message=original,
-                lead_name=convo.get("firstName")
-                or (convo.get("leadName") if "leadName" in convo else None),
-                lead_role=convo.get("role"),
-                lead_company=convo.get("companyName") or convo.get("company"),
-            )
-        except Exception as e:  # noqa: BLE001
-            console.print(f"[yellow]classifier failed on {mid}: {e}[/yellow]")
-            continue
-
-        new_records.append(
-            {
-                "message_id": mid,
-                "conversation_id": convo_id,
-                "linkedin_url": convo.get("leadLinkedinUrl") or convo.get("linkedinUrl"),
-                "lead_name": convo.get("firstName"),
-                "lead_company": convo.get("companyName") or convo.get("company"),
-                "campaign_id": convo.get("campaignId"),
-                "channel": "linkedin_dm",  # Heyreach inbox is LinkedIn DM today
-                "body": reply_body,
-                "original_message": original,
-                "received_at": msg.get("sentAt") or datetime.now(UTC).isoformat(),
-                "classified_at": datetime.now(UTC).isoformat(),
-                "intent": classification.get("intent"),
-                "sentiment": classification.get("sentiment"),
-                "summary": classification.get("summary"),
-                "suggested_reply": classification.get("suggested_reply"),
-                "next_action": classification.get("next_action"),
-            }
-        )
-
-    return new_records
-
-
 @app.command()
 def main(
     limit: Annotated[
@@ -189,25 +102,12 @@ def main(
     seen_records = _read_jsonl(SEEN_PATH)
     seen_ids = {r.get("message_id") for r in seen_records if r.get("message_id")}
 
-    payload = heyreach.list_inbox_conversations(
+    all_new = fetch_and_classify_new_replies(
+        seen_message_ids=seen_ids,
         limit=limit,
         only_with_unread=not include_read,
-        campaign_ids=[campaign_id] if campaign_id else None,
+        campaign_id=campaign_id,
     )
-    conversations = payload.get("items") or payload.get("conversations") or []
-
-    if not conversations:
-        console.print("[green]Inbox quiet — nothing to triage.[/green]")
-        return
-
-    console.print(f"[dim]Scanning {len(conversations)} conversation(s)…[/dim]")
-
-    all_new: list[dict[str, Any]] = []
-    for convo in conversations:
-        new_records = _process_conversation(convo, seen_ids)
-        for r in new_records:
-            seen_ids.add(r["message_id"])
-        all_new.extend(new_records)
 
     if not all_new:
         console.print("[green]No new replies since last run.[/green]")

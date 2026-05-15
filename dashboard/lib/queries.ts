@@ -208,12 +208,14 @@ export async function getReplyRows(): Promise<ReplyReviewRow[]> {
 
 type SupabaseReplyRow = {
   id: string;
-  lead_id: string;
+  lead_id: string | null;     // nullable since the Modal cron may persist a reply before the lead row exists
   channel: Channel;
   body: string;
   sentiment: Reply["sentiment"];
   intent: Intent | null;
+  summary: string | null;
   suggested_reply: string | null;
+  next_action: Reply["next_action"];
   handled_at: string | null;
   received_at: string;
 };
@@ -232,7 +234,9 @@ async function loadReplyRowsFromSupabase(): Promise<ReplyReviewRow[]> {
   if (!replies || replies.length === 0) return [];
 
   const replyRows = replies as unknown as SupabaseReplyRow[];
-  const leadIds = Array.from(new Set(replyRows.map((r) => r.lead_id)));
+  const leadIds = Array.from(
+    new Set(replyRows.map((r) => r.lead_id).filter((id): id is string => !!id)),
+  );
 
   // Pull the lead + the most recent outbound draft we sent (for context in the
   // suggested-reply UX). We join via drafts.lead_id where status='sent'.
@@ -265,6 +269,7 @@ async function loadReplyRowsFromSupabase(): Promise<ReplyReviewRow[]> {
 
   return replyRows
     .map((r) => {
+      if (!r.lead_id) return null;            // orphan reply — drop for now
       const lead = leadById.get(r.lead_id);
       if (!lead) return null;
       return {
