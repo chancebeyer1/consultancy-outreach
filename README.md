@@ -19,7 +19,7 @@ See the architecture plan at `~/.claude/plans/i-just-did-a-dynamic-nygaard.md` f
 |---|---|---|
 | 0 | Landing page live at your domain | scaffolded in `landing/` |
 | 1 | `draft_one.py` generates a personalized message from a LinkedIn URL — validate quality by hand-sending 15 messages | scaffolded in `backend/scripts/` |
-| 2 | Dashboard + Heyreach/Smartlead integration | scaffolded in `backend/workers/`, `dashboard/` |
+| 2 | Dashboard + Heyreach/Smartlead integration | scaffolded in `backend/workers/`, `dashboard/`; DB scripts in `backend/scripts/` |
 | 3 | Signal-mode triggers, sequencing, voice cloning, analytics | TODO |
 
 ## Quick start (Phase 1)
@@ -54,6 +54,26 @@ Iterate on `backend/prompts/*.md` until the output reads like you wrote it yours
    ```
 5. **Output:** `runs/<date>.jsonl` (machine-readable) + `runs/<date>.md` (eyeball-readable summary, sorted by fit score).
 6. **Review in the dashboard** (Phase 2) or read the markdown summary directly.
+
+## Phase 2: Supabase wiring (when you're ready)
+
+```powershell
+# 1. Create a Supabase project. Copy DATABASE_URL into .env.
+cd backend
+uv sync --extra worker
+
+# 2. Apply the schema
+uv run python -m scripts.init_db --check    # verify connection, list current tables
+uv run python -m scripts.init_db            # apply backend/db/schema.sql
+
+# 3. Load a pipeline run into the DB
+uv run python -m scripts.ingest_run runs/2026-05-14.jsonl
+
+# 4. Point the dashboard at Supabase
+cd ..\dashboard
+# in .env.local: set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, NEXT_PUBLIC_DATA_SOURCE=supabase
+# then wire the TODO in dashboard/lib/queries.ts to query leads + drafts directly
+```
 
 ## Required accounts
 
