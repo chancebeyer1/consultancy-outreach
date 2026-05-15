@@ -56,7 +56,13 @@ async function findLatestJsonl(): Promise<string | null> {
   try {
     const entries = await fs.readdir(ROOT, { withFileTypes: true });
     const files = entries
-      .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
+      .filter(
+        (e) =>
+          e.isFile() &&
+          e.name.endsWith(".jsonl") &&
+          // decisions.jsonl is operator output, not pipeline output
+          e.name !== "decisions.jsonl",
+      )
       .map((e) => path.join(ROOT, e.name));
     if (files.length === 0) return null;
     // Pick most recently modified

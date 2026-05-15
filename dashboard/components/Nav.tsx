@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { dataSource } from "../lib/supabase";
 
 const links = [
   { href: "/drafts", label: "Drafts" },
@@ -6,6 +7,12 @@ const links = [
   { href: "/replies", label: "Replies" },
   { href: "/sequences", label: "Sequences" },
 ];
+
+const sourceColor = {
+  mock: "text-amber-400",
+  file: "text-sky-400",
+  supabase: "text-emerald-400",
+} as const;
 
 export function Nav() {
   return (
@@ -21,8 +28,8 @@ export function Nav() {
             </Link>
           ))}
         </nav>
-        <div className="ml-auto text-xs text-neutral-500">
-          {process.env.NEXT_PUBLIC_USE_MOCK_DATA === "1" ? "MOCK DATA" : "LIVE"}
+        <div className={`ml-auto font-mono text-[10px] uppercase tracking-wide ${sourceColor[dataSource]}`}>
+          source · {dataSource}
         </div>
       </div>
     </header>

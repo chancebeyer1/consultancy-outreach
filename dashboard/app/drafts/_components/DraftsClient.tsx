@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DraftReviewRow } from "../../../lib/types";
+import { persistDecision } from "../../../lib/decisions";
+import type { Draft, DraftReviewRow } from "../../../lib/types";
 import { LeadList } from "./LeadList";
 import { LeadReview } from "./LeadReview";
 import { KeyboardHelp } from "./KeyboardHelp";
@@ -33,8 +34,25 @@ export function DraftsClient({ initialRows }: Props) {
     [pendingRows.length],
   );
 
+  // Helper: find the row + a specific draft on it so persistDecision has the
+  // full lead metadata Heyreach/Smartlead need (first_name, company, …).
+  const findRowAndDraft = useCallback(
+    (leadId: string, draftId: string): { row: DraftReviewRow; draft: Draft } | null => {
+      const row = rows.find((r) => r.lead.id === leadId);
+      if (!row) return null;
+      const draft = row.drafts.find((d) => d.id === draftId);
+      if (!draft) return null;
+      return { row, draft };
+    },
+    [rows],
+  );
+
   const decideAll = useCallback(
     (leadId: string, status: "approved" | "rejected") => {
+      // Capture which drafts we just decided on for persistence (post-state-update).
+      const row = rows.find((r) => r.lead.id === leadId);
+      const pendingDrafts = row?.drafts.filter((d) => d.status === "draft") ?? [];
+
       setRows((prev) =>
         prev.map((r) =>
           r.lead.id === leadId
@@ -49,15 +67,28 @@ export function DraftsClient({ initialRows }: Props) {
             : r,
         ),
       );
+
+      if (row) {
+        for (const draft of pendingDrafts) {
+          void persistDecision({
+            row,
+            draft,
+            action: status === "approved" ? "approve" : "reject",
+          });
+        }
+      }
+
       // Advance after a decision; UI shows the next pending lead automatically
       // because pendingRows is recomputed.
       setActiveIdx((i) => Math.min(i, pendingRows.length - 2));
     },
-    [pendingRows.length],
+    [rows, pendingRows.length],
   );
 
   const decideOne = useCallback(
     (leadId: string, draftId: string, status: "approved" | "rejected", editedBody?: string) => {
+      const ctx = findRowAndDraft(leadId, draftId);
+
       setRows((prev) =>
         prev.map((r) =>
           r.lead.id === leadId
@@ -77,8 +108,17 @@ export function DraftsClient({ initialRows }: Props) {
             : r,
         ),
       );
+
+      if (ctx) {
+        void persistDecision({
+          row: ctx.row,
+          draft: ctx.draft,
+          action: status === "approved" ? "approve" : "reject",
+          editedBody,
+        });
+      }
     },
-    [],
+    [findRowAndDraft],
   );
 
   // Keyboard shortcuts
