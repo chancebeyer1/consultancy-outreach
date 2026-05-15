@@ -105,12 +105,22 @@ def _existing_urls(jsonl_path: Path) -> set[str]:
     return out
 
 
-def _process_one(url: str, *, skip_score: bool) -> dict[str, Any]:
+VALID_TRIGGERS = {
+    "list",
+    "profile_view",
+    "post_engagement",
+    "funding_event",
+    "new_role",
+}
+
+
+def _process_one(url: str, *, skip_score: bool, trigger: str = "list") -> dict[str, Any]:
     """Run the full pipeline for one URL. Catches its own exceptions so
     one failed lead doesn't kill the whole run."""
     record: dict[str, Any] = {
         "linkedin_url": url,
         "processed_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "trigger": trigger,
     }
     try:
         enrichment = enrich.enrich(url)
@@ -221,7 +231,22 @@ def main(
         int,
         typer.Option(help="Parallel workers. Keep low (<= 4) to respect ProxyCurl rate limits."),
     ] = 3,
+    trigger: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Tag every record in this run with this trigger type. Use 'list' for cold "
+                "sourcing (default), or a signal-mode value: profile_view | post_engagement "
+                "| funding_event | new_role. Surfaces as a badge in the dashboard."
+            ),
+        ),
+    ] = "list",
 ) -> None:
+    if trigger not in VALID_TRIGGERS:
+        console.print(
+            f"[red]Invalid --trigger '{trigger}'. Use one of: {sorted(VALID_TRIGGERS)}[/red]"
+        )
+        raise typer.Exit(2)
     if not csv_path.exists():
         console.print(f"[red]CSV not found:[/red] {csv_path}")
         raise typer.Exit(2)
@@ -256,7 +281,10 @@ def main(
     ):
         task = progress.add_task("pipeline", total=len(urls))
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {pool.submit(_process_one, u, skip_score=skip_score): u for u in urls}
+            futures = {
+                pool.submit(_process_one, u, skip_score=skip_score, trigger=trigger): u
+                for u in urls
+            }
             for fut in as_completed(futures):
                 rec = fut.result()
                 results.append(rec)
