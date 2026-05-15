@@ -28,13 +28,32 @@ See the architecture plan at `~/.claude/plans/i-just-did-a-dynamic-nygaard.md` f
 # one-time setup
 cd backend
 uv sync
-cp ..\.env.example ..\.env   # then fill in API keys
+copy ..\.env.example ..\.env   # then fill in API keys
 
 # generate a draft for one LinkedIn URL
-uv run python scripts\draft_one.py https://linkedin.com/in/example
+uv run python -m scripts.draft_one https://linkedin.com/in/example
+
+# or run a whole CSV through the pipeline
+uv run python -m scripts.run_pipeline sample_leads.example.csv --limit 5
 ```
 
 Iterate on `backend/prompts/*.md` until the output reads like you wrote it yourself.
+
+## Sales Nav → CSV → pipeline workflow
+
+1. **Build a saved search in Sales Navigator** for each ICP segment (see `backend/prompts/icp.md` for the three segments). Save the URL.
+2. **Export to CSV.** Sales Nav's native export caps at 25 leads per search; the realistic options are:
+   - **Apify `linkedin-sales-navigator-scraper` actor** — paste the search URL, get back a CSV with up to ~1000 leads. ~$5/1000 rows. Best for scale.
+   - **Phantombuster's Sales Nav Search Export** — similar, slightly cheaper but more brittle.
+   - **Manual export → augment** — fine for the first 10–20 leads while you're calibrating.
+3. **Drop the CSV anywhere.** The pipeline auto-detects URL columns named `Profile Url`, `linkedinUrl`, `profile_url`, etc.
+4. **Run the pipeline:**
+   ```powershell
+   cd backend
+   uv run python -m scripts.run_pipeline path\to\export.csv --min-fit 70
+   ```
+5. **Output:** `runs/<date>.jsonl` (machine-readable) + `runs/<date>.md` (eyeball-readable summary, sorted by fit score).
+6. **Review in the dashboard** (Phase 2) or read the markdown summary directly.
 
 ## Required accounts
 

@@ -25,8 +25,12 @@ out/
 # data dumps / scratch
 data/
 scratch/
+runs/
 *.csv
 *.jsonl
+# but keep the example fixtures in git
+!*.example.csv
+!*.example.jsonl
 
 # OS
 .DS_Store

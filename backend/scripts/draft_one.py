@@ -18,6 +18,11 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
+# Force UTF-8 on Windows consoles (cp1252 chokes on rich's box-drawing chars).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown

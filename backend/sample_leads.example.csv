@@ -1,0 +1,6 @@
+First Name,Last Name,Title,Company,Profile Url,Location
+Rachel,Patel,CTO,Bracket Labs,https://linkedin.com/in/rachel-cto-bracket,New York NY
+Marcus,Lin,VP Engineering,Pivotworks Studio,https://linkedin.com/in/marcus-vp-eng-pivotworks,Austin TX
+Alex,Chen,Founding Engineer,Treble,https://linkedin.com/in/alex-founding-eng-treble,London UK
+,,,,not-a-linkedin-url,
+,,,,https://linkedin.com/in/alex-founding-eng-treble,duplicate
