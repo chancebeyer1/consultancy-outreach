@@ -3,9 +3,10 @@ import { dataSource } from "../lib/supabase";
 
 const links = [
   { href: "/drafts", label: "Drafts" },
-  { href: "/leads", label: "Leads" },
   { href: "/replies", label: "Replies" },
+  { href: "/leads", label: "Leads" },
   { href: "/sequences", label: "Sequences" },
+  { href: "/analytics", label: "Analytics" },
 ];
 
 const sourceColor = {
