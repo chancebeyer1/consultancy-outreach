@@ -50,7 +50,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from clients import heyreach
+from clients import heyreach, smartlead
 from config import BACKEND_DIR
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -64,8 +64,10 @@ RUNS_DIR = BACKEND_DIR / "runs"
 DECISIONS_PATH = RUNS_DIR / "decisions.jsonl"
 SENT_PATH = RUNS_DIR / "sent.jsonl"
 
-# Heyreach LinkedIn channels we can push from this script.
+# Channels grouped by the provider that sends them.
 LINKEDIN_CHANNELS = {"linkedin_connect", "linkedin_dm", "linkedin_followup_1", "linkedin_followup_2"}
+EMAIL_CHANNELS = {"email", "email_followup_1", "email_followup_2"}
+ALL_CHANNELS = LINKEDIN_CHANNELS | EMAIL_CHANNELS
 
 # Daily safety caps (calibrated against Valley's published per-seat numbers).
 # These are upper bounds for a single account on a single day; the script
@@ -75,6 +77,9 @@ DAILY_CAPS = {
     "linkedin_dm": 30,
     "linkedin_followup_1": 30,
     "linkedin_followup_2": 30,
+    "email": 80,
+    "email_followup_1": 80,
+    "email_followup_2": 80,
 }
 
 
@@ -104,8 +109,11 @@ def _append_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
 def _campaign_id_for(channel: str, override: str | None) -> str:
     if override:
         return override
-    # Channel-specific env var wins, else the default.
+    # Channel-specific env var wins, else the per-provider default.
     env_key = f"HEYREACH_CAMPAIGN_{channel.upper()}"
+    if channel in EMAIL_CHANNELS:
+        env_key = f"SMARTLEAD_CAMPAIGN_{channel.upper()}"
+        return os.environ.get(env_key) or os.environ.get("SMARTLEAD_CAMPAIGN_DEFAULT") or ""
     return os.environ.get(env_key) or os.environ.get("HEYREACH_CAMPAIGN_DEFAULT") or ""
 
 
@@ -121,6 +129,35 @@ def _to_heyreach_lead(decision: dict[str, Any]) -> dict[str, Any]:
             #   `{{custom_body}}` for the personalized message
             #   `{{custom_hook}}` for the anchor reference (optional)
             "custom_body": decision["body"],
+            "custom_hook": decision.get("hook_reference") or "",
+        },
+    }
+
+
+def _parse_email_body(body: str) -> tuple[str, str]:
+    """Split the email draft (which is `Subject: ...\\n\\n<body>`) into
+    (subject, body). Falls back to ("", body) if no subject line is present."""
+    if body.lower().startswith("subject:"):
+        first, _, rest = body.partition("\n")
+        return first.split(":", 1)[1].strip(), rest.lstrip("\n")
+    return "", body
+
+
+def _to_smartlead_lead(decision: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a decision record → Smartlead lead payload. Returns None if no
+    email is present (run enrich_emails.py first)."""
+    email = decision.get("email")
+    if not email:
+        return None
+    subject, body = _parse_email_body(decision["body"])
+    return {
+        "first_name": decision.get("first_name") or "",
+        "last_name": decision.get("last_name") or "",
+        "email": email,
+        "company_name": decision.get("company") or "",
+        "custom_fields": {
+            "custom_subject": subject,
+            "custom_body": body,
             "custom_hook": decision.get("hook_reference") or "",
         },
     }
@@ -160,11 +197,9 @@ def main(
         typer.Option(help="Path to sent JSONL (idempotency ledger)."),
     ] = SENT_PATH,
 ) -> None:
-    if channel not in LINKEDIN_CHANNELS:
-        console.print(
-            f"[red]send_approvals.py only supports LinkedIn channels for now. Got: {channel}[/red]"
-        )
-        console.print(f"[dim]Supported: {sorted(LINKEDIN_CHANNELS)}[/dim]")
+    if channel not in ALL_CHANNELS:
+        console.print(f"[red]Unsupported channel: {channel}[/red]")
+        console.print(f"[dim]Supported: {sorted(ALL_CHANNELS)}[/dim]")
         raise typer.Exit(2)
 
     decisions = _read_jsonl(decisions_path)
@@ -221,31 +256,59 @@ def main(
 
     cid = _campaign_id_for(channel, campaign_id)
     if not cid:
+        provider = "Smartlead" if channel in EMAIL_CHANNELS else "Heyreach"
+        env = "SMARTLEAD" if channel in EMAIL_CHANNELS else "HEYREACH"
         console.print(
-            f"[red]No Heyreach campaign id configured. Set HEYREACH_CAMPAIGN_{channel.upper()} "
-            "or HEYREACH_CAMPAIGN_DEFAULT, or pass --campaign-id.[/red]"
+            f"[red]No {provider} campaign id configured. Set {env}_CAMPAIGN_{channel.upper()} "
+            f"or {env}_CAMPAIGN_DEFAULT, or pass --campaign-id.[/red]"
         )
         raise typer.Exit(2)
 
-    # Push in batches of 50 (Heyreach's recommended max per request).
+    is_email = channel in EMAIL_CHANNELS
+
+    # For email, every queued decision needs an email field. Drop those that
+    # don't and warn the operator to run enrich_emails first.
+    missing_emails: list[dict[str, Any]] = []
+    if is_email:
+        missing_emails = [d for d in queue if not d.get("email")]
+        queue = [d for d in queue if d.get("email")]
+        if missing_emails:
+            console.print(
+                f"[yellow]Skipping {len(missing_emails)} email decisions without an `email` field. "
+                "Run: uv run python -m scripts.enrich_emails[/yellow]"
+            )
+        if not queue:
+            console.print("[yellow]Nothing left to send after email check.[/yellow]")
+            return
+
+    # Push in batches of 50 (good for both providers).
     BATCH = 50
     pushed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for start in range(0, len(queue), BATCH):
         batch = queue[start : start + BATCH]
-        payload = [_to_heyreach_lead(d) for d in batch]
         try:
-            response = heyreach.add_leads_to_campaign(cid, payload)
+            if is_email:
+                payload = [p for p in (_to_smartlead_lead(d) for d in batch) if p]
+                response = smartlead.add_leads_to_campaign(cid, payload)
+                provider_name = "Smartlead"
+            else:
+                payload = [_to_heyreach_lead(d) for d in batch]
+                response = heyreach.add_leads_to_campaign(cid, payload)
+                provider_name = "Heyreach"
             console.print(
-                f"[green]✓[/green] pushed {len(batch)} leads (Heyreach response: {response})"
+                f"[green]✓[/green] pushed {len(batch)} {channel} leads "
+                f"({provider_name} response: {response})"
             )
             now = datetime.now(UTC).isoformat()
             pushed.extend(
                 {
                     "draft_id": d["draft_id"],
                     "lead_id": d.get("lead_id"),
-                    "linkedin_url": d["linkedin_url"],
+                    "linkedin_url": d.get("linkedin_url"),
+                    "email": d.get("email"),
                     "channel": channel,
+                    "provider": provider_name.lower(),
                     "campaign_id": cid,
                     "sent_at": now,
                 }

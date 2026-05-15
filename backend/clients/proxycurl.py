@@ -22,11 +22,15 @@ def _headers() -> dict[str, str]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
-def fetch_profile(linkedin_url: str) -> dict[str, Any]:
+def fetch_profile(linkedin_url: str, *, with_email: bool = False) -> dict[str, Any]:
     """Fetch the full person-profile payload for a LinkedIn URL.
 
     Pulls a generous set of fields: experience, education, accomplishments,
     skills, current company, recommendations. Costs ~1 credit per call.
+
+    `with_email=True` adds personal_email + work_email to the response. Extra
+    credit cost per email returned — use after a draft is approved, not on
+    every list-mode lead.
     """
     params = {
         "linkedin_profile_url": linkedin_url,
@@ -34,7 +38,7 @@ def fetch_profile(linkedin_url: str) -> dict[str, Any]:
         "fallback_to_cache": "on-error",
         "extra": "include",
         "github_profile_id": "include",
-        "personal_email": "exclude",  # avoid extra cost
+        "personal_email": "include" if with_email else "exclude",
         "personal_contact_number": "exclude",
         "twitter_profile_id": "include",
         "facebook_profile_id": "exclude",

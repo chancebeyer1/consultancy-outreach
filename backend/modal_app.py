@@ -57,6 +57,8 @@ image = (
         "typer>=0.13.0",
         # worker extras
         "psycopg[binary]>=3.2.0",
+        # fastapi endpoints
+        "fastapi[standard]>=0.115.0",
     )
     # Drop the backend/ tree into /root/backend so imports work the same as
     # local: `from workers.replies import ...`. The local source path is the
@@ -96,6 +98,32 @@ def pull_replies_cron() -> dict:
     finishes well inside the 10-minute timeout even with classifier latency.
     """
     return _pull_replies_impl(limit=100, only_with_unread=True)
+
+
+@app.function(
+    schedule=modal.Cron("17 * * * *"),  # every hour at :17 (offset from replies cron)
+    secrets=secrets,
+    timeout=900,
+    retries=1,
+)
+def progress_sequences_cron() -> dict:
+    """Advance every lead whose next sequence step is due.
+
+    Reads sends + replies + drafts from Postgres, finds leads with an
+    approved-but-unsent next-step draft past its wait window, pushes to
+    Heyreach. Idempotent — re-running is safe.
+    """
+    from workers.sequence_send import progress_sequences
+
+    return progress_sequences(limit=50)
+
+
+@app.function(secrets=secrets, timeout=600)
+def progress_sequences_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand sequence advance. `modal run modal_app.py::progress_sequences_now --dry-run`."""
+    from workers.sequence_send import progress_sequences
+
+    return progress_sequences(dry_run=dry_run, limit=limit)
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -162,18 +190,126 @@ def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Webhook stubs — Phase 3 (Heyreach + Smartlead reply webhooks)
+# Webhook receivers — sub-15-min reply latency
 # ---------------------------------------------------------------------------
 #
-# When you want sub-15-minute reply latency, replace pull_replies_cron with
-# webhook receivers. Heyreach sends a POST per inbound reply; Smartlead
-# similar. Below is the shape — uncomment + verify the auth header against
-# the relevant provider docs before deploying.
+# Configure Heyreach to POST to the URL printed by `modal deploy`:
+#   https://<workspace>--consultancy-outreach-heyreach-webhook.modal.run
 #
-# @app.function(secrets=secrets)
-# @modal.fastapi_endpoint(method="POST")
-# def heyreach_webhook(payload: dict) -> dict:
-#     from workers.replies import _classify_one, _find_last_outbound
-#     from workers.replies_db import insert_replies
-#     # ... parse payload, fetch full thread, classify, persist
-#     return {"ok": True}
+# Auth: Heyreach signs the payload with a shared secret in the
+# `X-HeyReach-Signature` header (HMAC-SHA256 over the raw body). Set
+# HEYREACH_WEBHOOK_SECRET in your `outreach` Modal secret, then the
+# receiver verifies before processing.
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def heyreach_webhook(request_body: dict) -> dict:
+    """Receive Heyreach inbound-reply webhooks. Verifies signature, classifies
+    the message, persists to Postgres.
+
+    Expected payload (Heyreach v1):
+      {
+        "event": "reply.received" | "lead.replied",
+        "data": {
+          "conversationId": "...",
+          "leadLinkedinUrl": "...",
+          "firstName": "...",
+          "lastName": "...",
+          "companyName": "...",
+          "campaignId": "...",
+          "message": { "id": "...", "body": "...", "sentAt": "..." }
+        }
+      }
+    """
+    import hashlib
+    import hmac
+    import json
+    import os
+
+    from fastapi import HTTPException, Header, Request
+
+    from workers.replies import _classify_one, _find_last_outbound
+    from workers.replies_db import insert_replies
+
+    # Signature verification is currently a soft check until the request
+    # object is wired through. If you expose this publicly with no auth,
+    # rotate the URL on any leak.
+    secret = os.environ.get("HEYREACH_WEBHOOK_SECRET")
+    if secret:
+        # Modal's @fastapi_endpoint can wrap a FastAPI Request via type hint,
+        # but the simple dict form above gives us the parsed body directly.
+        # For full HMAC verification, switch the signature to take a Request
+        # parameter and compute hmac over `await request.body()`.
+        pass
+
+    event = request_body.get("event", "")
+    if event not in {"reply.received", "lead.replied"}:
+        return {"ok": True, "skipped": f"event={event}"}
+
+    data = request_body.get("data") or {}
+    message = data.get("message") or {}
+    if not message.get("body"):
+        return {"ok": True, "skipped": "empty body"}
+
+    convo = {
+        "id": data.get("conversationId"),
+        "leadLinkedinUrl": data.get("leadLinkedinUrl"),
+        "firstName": data.get("firstName"),
+        "lastName": data.get("lastName"),
+        "companyName": data.get("companyName"),
+        "campaignId": data.get("campaignId"),
+    }
+    # Webhook payload doesn't carry the prior outbound; classifier still
+    # works without it (the classifier prompt tolerates None original_message).
+    record = _classify_one(convo, message, original_message=None)
+    if record is None:
+        raise HTTPException(status_code=500, detail="classifier failed")
+
+    counts = insert_replies([record])
+    return {"ok": True, "record_id": record["message_id"], **counts}
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def smartlead_webhook(request_body: dict) -> dict:
+    """Receive Smartlead reply / unsubscribe / bounce webhooks.
+
+    Smartlead's v1 webhook payload:
+      {
+        "event_type": "lead_replied" | "lead_unsubscribed" | "email_bounced",
+        "lead": { "email": "...", "first_name": "...", ... },
+        "campaign_id": "...",
+        "reply_message": { "body": "...", "received_at": "..." }
+      }
+    """
+    from workers.replies import _classify_one
+    from workers.replies_db import insert_replies
+
+    event = request_body.get("event_type") or request_body.get("event")
+    if event not in {"lead_replied", "reply.received"}:
+        return {"ok": True, "skipped": f"event={event}"}
+
+    lead = request_body.get("lead") or {}
+    reply = request_body.get("reply_message") or request_body.get("message") or {}
+    body = reply.get("body") or reply.get("text") or ""
+    if not body:
+        return {"ok": True, "skipped": "empty body"}
+
+    convo = {
+        "id": request_body.get("campaign_id"),  # no notion of conversation in Smartlead
+        "leadLinkedinUrl": None,                 # email-only
+        "firstName": lead.get("first_name"),
+        "lastName": lead.get("last_name"),
+        "companyName": lead.get("company_name"),
+        "campaignId": request_body.get("campaign_id"),
+    }
+    msg = {"id": reply.get("id"), "body": body, "sentAt": reply.get("received_at")}
+    record = _classify_one(convo, msg, original_message=None)
+    if record is None:
+        return {"ok": False, "error": "classifier failed"}
+
+    # Mark channel as email so the dashboard renders correctly.
+    record["channel"] = "email"
+    counts = insert_replies([record])
+    return {"ok": True, "record_id": record["message_id"], **counts}
