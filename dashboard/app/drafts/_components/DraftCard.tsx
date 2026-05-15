@@ -4,6 +4,15 @@ import { useState } from "react";
 import clsx from "clsx";
 import type { Draft, Hook } from "../../../lib/types";
 
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 interface Props {
   draft: Draft;
   hook: Hook | null;
@@ -30,8 +39,17 @@ const channelLimit: Record<string, number> = {
 export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(draft.edited_body ?? draft.body);
+  const [copied, setCopied] = useState(false);
   const limit = channelLimit[draft.channel] ?? 1000;
   const over = text.length > limit;
+
+  async function handleCopy() {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    }
+  }
 
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-950">
@@ -107,6 +125,17 @@ export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
                 className="rounded-md bg-emerald-900/60 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-900"
               >
                 Approve
+              </button>
+              <button
+                onClick={handleCopy}
+                className={clsx(
+                  "rounded-md border px-3 py-1.5 text-sm",
+                  copied
+                    ? "border-emerald-700 bg-emerald-900/40 text-emerald-300"
+                    : "border-neutral-700 text-neutral-300 hover:bg-neutral-900",
+                )}
+              >
+                {copied ? "Copied" : "Copy"}
               </button>
               <button
                 onClick={() => setEditing(true)}

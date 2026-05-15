@@ -10,13 +10,24 @@ note + DM + email.
 cd dashboard
 npm install
 copy .env.example .env.local
-# default .env.local has NEXT_PUBLIC_USE_MOCK_DATA=1
+# default .env.local has NEXT_PUBLIC_DATA_SOURCE=mock
 npm run dev
 # http://localhost:3000 → redirects to /drafts
 ```
 
-The mock layer ships 3 example leads so the review UI is testable
-end-to-end with zero setup.
+The mock layer ships 3 example leads so the review UI is testable end-to-end with zero setup.
+
+## Three data source modes
+
+Set `NEXT_PUBLIC_DATA_SOURCE` in `.env.local`:
+
+| Mode | Source | Use when |
+|---|---|---|
+| `mock` | `lib/mock-data.ts` | Iterating on the UI. Default. |
+| `file` | latest `../backend/runs/<date>.jsonl` from `run_pipeline.py` | Phase 1 — real leads, no Supabase yet. |
+| `supabase` | live DB | Phase 2 — fully wired pipeline. |
+
+In `file` mode, run `uv run python -m scripts.run_pipeline leads.csv` from `backend/`, then refresh the dashboard — it'll auto-pick the most recently modified JSONL.
 
 ## Routes
 

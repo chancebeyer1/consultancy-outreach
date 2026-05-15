@@ -1,29 +1,31 @@
-// Data-fetching layer. Swap mock fixtures for real Supabase queries when
-// `useMockData` flips to false.
+// Data-fetching layer. Three modes (lib/supabase.ts):
+//   - mock:     in-memory fixtures (lib/mock-data.ts)
+//   - file:     latest JSONL produced by backend/scripts/run_pipeline.py
+//   - supabase: live DB (Phase 2 — not yet wired)
 
+import { loadDraftReviewRowsFromFile } from "./jsonl-source";
 import { MOCK_DRAFT_ROWS } from "./mock-data";
-import { useMockData } from "./supabase";
+import { dataSource } from "./supabase";
 import type { DraftReviewRow } from "./types";
 
 export async function getDraftReviewRows(): Promise<DraftReviewRow[]> {
-  if (useMockData) {
-    return Promise.resolve(MOCK_DRAFT_ROWS);
+  if (dataSource === "mock") {
+    return MOCK_DRAFT_ROWS;
+  }
+  if (dataSource === "file") {
+    return loadDraftReviewRowsFromFile();
   }
   // TODO Phase 2: real Supabase query joining leads + scores + drafts + enrichments
-  // const supabase = await serverClient();
-  // const { data, error } = await supabase
-  //   .from("leads")
-  //   .select(`*, scores(*), drafts!inner(*), enrichments(hooks_json, recent_posts_json, company_signals_json, github_json)`)
-  //   .eq("drafts.status", "draft")
-  //   .order("created_at", { ascending: false });
-  throw new Error("Supabase queries not yet wired — set NEXT_PUBLIC_USE_MOCK_DATA=1 for now");
+  throw new Error(
+    "Supabase data source not yet implemented. Set NEXT_PUBLIC_DATA_SOURCE=mock or =file.",
+  );
 }
 
 export type DraftDecision = { draftId: string; action: "approve" | "reject"; editedBody?: string };
 
 export async function decideDraft(_decision: DraftDecision): Promise<void> {
-  if (useMockData) {
-    // In mock mode we just no-op; the UI updates optimistically.
+  if (dataSource !== "supabase") {
+    // mock + file modes are review-only — decisions live in client state.
     return;
   }
   // TODO Phase 2: update drafts.status + decided_at; insert into sends queue if approved
