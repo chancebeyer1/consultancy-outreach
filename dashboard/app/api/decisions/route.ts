@@ -1,13 +1,18 @@
-// Persists approve/reject decisions to runs/decisions.jsonl (one record
-// per line). The backend's send_approvals.py reads this file and pushes
-// approved drafts to Heyreach / Smartlead. No Supabase required for the
-// Phase 1.5 loop.
+// Persists approve/reject decisions.
 //
-// Disabled when NEXT_PUBLIC_DATA_SOURCE=mock to keep the demo clean.
+// - mock     mode: 204 no-op (don't pollute runs/).
+// - file     mode: append one line to runs/decisions.jsonl (send_approvals.py
+//                  reads this).
+// - supabase mode: append to JSONL AND update drafts.status in the DB so the
+//                  dashboard's next render reflects the decision. JSONL stays
+//                  the canonical "what to send" file for send_approvals.py
+//                  regardless of mode.
 
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
+
+import { dataSource, serverAdminClient } from "@/lib/supabase";
 
 const ROOT =
   process.env.PIPELINE_OUTPUT_DIR ?? path.resolve(process.cwd(), "../backend/runs");
@@ -26,6 +31,7 @@ interface DecisionPayload {
   action: "approve" | "reject";
   body: string;
   hook_reference?: string | null;
+  edited_body?: string | null;
 }
 
 function isValid(p: unknown): p is DecisionPayload {
@@ -41,12 +47,30 @@ function isValid(p: unknown): p is DecisionPayload {
   );
 }
 
+async function appendToJsonl(payload: DecisionPayload): Promise<string> {
+  const record = { ...payload, decided_at: new Date().toISOString() };
+  const line = JSON.stringify(record) + "\n";
+  await fs.mkdir(ROOT, { recursive: true });
+  await fs.appendFile(DECISIONS_PATH, line, "utf-8");
+  return DECISIONS_PATH;
+}
+
+async function updateDraftInSupabase(payload: DecisionPayload): Promise<void> {
+  const supabase = serverAdminClient();
+  const status = payload.action === "approve" ? "approved" : "rejected";
+  const { error } = await supabase
+    .from("drafts")
+    .update({
+      status,
+      edited_body: payload.edited_body ?? null,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("id", payload.draft_id);
+  if (error) throw error;
+}
+
 export async function POST(request: Request) {
-  // In mock mode the dashboard runs as a demo; don't pollute the runs/ folder.
-  const isMock =
-    process.env.NEXT_PUBLIC_DATA_SOURCE === "mock" ||
-    (!process.env.NEXT_PUBLIC_DATA_SOURCE && process.env.NEXT_PUBLIC_USE_MOCK_DATA === "1");
-  if (isMock) {
+  if (dataSource === "mock") {
     return NextResponse.json({ persisted: false, reason: "mock mode" });
   }
 
@@ -55,24 +79,42 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid payload" }, { status: 400 });
   }
 
-  const record = {
-    ...payload,
-    decided_at: new Date().toISOString(),
-  };
-  const line = JSON.stringify(record) + "\n";
+  const jsonlPath = await appendToJsonl(payload);
 
-  await fs.mkdir(ROOT, { recursive: true });
-  await fs.appendFile(DECISIONS_PATH, line, "utf-8");
+  let supabaseUpdated = false;
+  if (dataSource === "supabase") {
+    try {
+      await updateDraftInSupabase(payload);
+      supabaseUpdated = true;
+    } catch (err) {
+      // JSONL is already written, so the operator can still send. Surface the
+      // DB error in the response and the server log; don't 500.
+      console.error("[decisions] Supabase update failed", err);
+      return NextResponse.json(
+        {
+          persisted: true,
+          path: jsonlPath,
+          supabaseUpdated: false,
+          supabaseError: err instanceof Error ? err.message : String(err),
+        },
+        { status: 207 },
+      );
+    }
+  }
 
-  return NextResponse.json({ persisted: true, path: DECISIONS_PATH });
+  return NextResponse.json({
+    persisted: true,
+    path: jsonlPath,
+    supabaseUpdated,
+  });
 }
 
 export async function GET() {
   try {
     const text = await fs.readFile(DECISIONS_PATH, "utf-8");
     const count = text.split("\n").filter((l) => l.trim()).length;
-    return NextResponse.json({ path: DECISIONS_PATH, count });
+    return NextResponse.json({ path: DECISIONS_PATH, count, source: dataSource });
   } catch {
-    return NextResponse.json({ path: DECISIONS_PATH, count: 0 });
+    return NextResponse.json({ path: DECISIONS_PATH, count: 0, source: dataSource });
   }
 }
