@@ -109,3 +109,32 @@ export interface DraftReviewRow {
     github_topics: string[];
   };
 }
+
+export interface Reply {
+  id: string;
+  lead_id: string;
+  channel: Channel;
+  body: string;
+  sentiment: "positive" | "neutral" | "negative" | null;
+  intent: Intent | null;
+  summary?: string | null;
+  suggested_reply: string | null;
+  next_action?:
+    | "send_calendar_link"
+    | "send_one_pager"
+    | "wait_per_their_request"
+    | "drop"
+    | "needs_human"
+    | null;
+  handled_at: string | null;
+  received_at: string;
+}
+
+// Aggregate view for /replies: a reply joined with the lead it came from
+// and the original outbound message we sent. Operator needs both to write
+// a sane response.
+export interface ReplyReviewRow {
+  reply: Reply;
+  lead: Lead;
+  original_message: string | null;
+}

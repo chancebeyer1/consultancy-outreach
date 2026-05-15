@@ -41,4 +41,79 @@ def list_campaigns() -> list[dict[str, Any]]:
         return r.json().get("items", [])
 
 
-# TODO Phase 2: implement set_custom_message, pause_campaign, webhook verification.
+# ---------------------------------------------------------------------------
+# Inbox / replies
+# ---------------------------------------------------------------------------
+#
+# Heyreach's inbox endpoints expose per-conversation message threads. We poll
+# them to surface inbound replies for our reply-triage pipeline.
+#
+# Endpoint shapes below match the public API as of 2025-Q2. If a request 404s
+# after a Heyreach release, check the dashboard's Settings → API page for the
+# latest paths and update accordingly.
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+def list_inbox_conversations(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    only_with_unread: bool = True,
+    campaign_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch conversations from the Heyreach inbox.
+
+    Returns the raw payload: typically {items: [...], total: N}. Each item has
+    `id`, `leadLinkedinUrl`, `firstName`, `lastName`, `companyName`,
+    `lastMessageAt`, `unreadCount`, `campaignId`.
+    """
+    payload: dict[str, Any] = {"limit": limit, "offset": offset}
+    if only_with_unread:
+        payload["onlyWithUnread"] = True
+    if campaign_ids:
+        payload["campaignIds"] = campaign_ids
+    with httpx.Client(timeout=30.0) as client:
+        r = client.post(
+            f"{BASE}/inbox/GetConversations",
+            headers=_headers(),
+            json=payload,
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+def list_conversation_messages(conversation_id: str) -> list[dict[str, Any]]:
+    """Fetch all messages for one Heyreach conversation.
+
+    Each message has at minimum: `id`, `direction` ("inbound"|"outbound"),
+    `body`, `sentAt`. We use direction to separate the prospect's reply
+    from our outbound that prompted it.
+    """
+    with httpx.Client(timeout=30.0) as client:
+        r = client.post(
+            f"{BASE}/inbox/GetConversationMessages",
+            headers=_headers(),
+            json={"conversationId": conversation_id},
+        )
+        r.raise_for_status()
+        data = r.json()
+        # Heyreach returns either a list or {items: [...]} depending on
+        # endpoint version. Normalize.
+        return data.get("items", data) if isinstance(data, dict) else data
+
+
+def mark_conversation_read(conversation_id: str) -> None:
+    """Mark a Heyreach conversation as read. Best-effort — swallow errors."""
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            client.post(
+                f"{BASE}/inbox/MarkAsRead",
+                headers=_headers(),
+                json={"conversationId": conversation_id},
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# TODO Phase 2: webhook signature verification (we currently rely on polling).

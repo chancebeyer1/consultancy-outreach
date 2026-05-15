@@ -4,7 +4,8 @@
 //   - supabase: live DB (Phase 2)
 
 import { loadDraftReviewRowsFromFile } from "./jsonl-source";
-import { MOCK_DRAFT_ROWS } from "./mock-data";
+import { MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
+import { loadReplyRowsFromFile } from "./replies-source";
 import { dataSource, serverClient } from "./supabase";
 import type {
   Channel,
@@ -12,8 +13,11 @@ import type {
   DraftReviewRow,
   DraftStatus,
   Hook,
+  Intent,
   Lead,
   LeadStatus,
+  Reply,
+  ReplyReviewRow,
   Score,
   Segment,
   Trigger,
@@ -186,4 +190,88 @@ async function loadDraftReviewRowsFromSupabase(): Promise<DraftReviewRow[]> {
       } satisfies DraftReviewRow;
     })
     .filter((r): r is DraftReviewRow => r !== null);
+}
+
+// ---------------------------------------------------------------------------
+// Replies — /replies page
+// ---------------------------------------------------------------------------
+
+export async function getReplyRows(): Promise<ReplyReviewRow[]> {
+  if (dataSource === "mock") {
+    return MOCK_REPLY_ROWS;
+  }
+  if (dataSource === "file") {
+    return loadReplyRowsFromFile();
+  }
+  return loadReplyRowsFromSupabase();
+}
+
+type SupabaseReplyRow = {
+  id: string;
+  lead_id: string;
+  channel: Channel;
+  body: string;
+  sentiment: Reply["sentiment"];
+  intent: Intent | null;
+  suggested_reply: string | null;
+  handled_at: string | null;
+  received_at: string;
+};
+
+async function loadReplyRowsFromSupabase(): Promise<ReplyReviewRow[]> {
+  const supabase = await serverClient();
+
+  // Unhandled replies first, ordered by recency.
+  const { data: replies, error: repliesErr } = await supabase
+    .from("replies")
+    .select("*")
+    .order("handled_at", { ascending: true, nullsFirst: true })
+    .order("received_at", { ascending: false })
+    .limit(200);
+  if (repliesErr) throw repliesErr;
+  if (!replies || replies.length === 0) return [];
+
+  const replyRows = replies as unknown as SupabaseReplyRow[];
+  const leadIds = Array.from(new Set(replyRows.map((r) => r.lead_id)));
+
+  // Pull the lead + the most recent outbound draft we sent (for context in the
+  // suggested-reply UX). We join via drafts.lead_id where status='sent'.
+  const [leadsRes, sentDraftsRes] = await Promise.all([
+    supabase.from("leads").select("*").in("id", leadIds),
+    supabase
+      .from("drafts")
+      .select("lead_id, body, edited_body, channel, decided_at")
+      .in("lead_id", leadIds)
+      .eq("status", "sent")
+      .order("decided_at", { ascending: false }),
+  ]);
+  if (leadsRes.error) throw leadsRes.error;
+  if (sentDraftsRes.error) throw sentDraftsRes.error;
+
+  const leads = (leadsRes.data ?? []) as unknown as Lead[];
+  const leadById = new Map<string, Lead>(leads.map((l) => [l.id, l]));
+
+  // First sent draft per lead is the most recent (rows are pre-sorted desc).
+  const lastOutboundByLead = new Map<string, string>();
+  for (const d of (sentDraftsRes.data ?? []) as Array<{
+    lead_id: string;
+    body: string;
+    edited_body: string | null;
+  }>) {
+    if (!lastOutboundByLead.has(d.lead_id)) {
+      lastOutboundByLead.set(d.lead_id, d.edited_body ?? d.body);
+    }
+  }
+
+  return replyRows
+    .map((r) => {
+      const lead = leadById.get(r.lead_id);
+      if (!lead) return null;
+      return {
+        reply: r as unknown as Reply,
+        lead,
+        original_message: lastOutboundByLead.get(r.lead_id) ?? null,
+      } satisfies ReplyReviewRow;
+    })
+    .filter((r): r is ReplyReviewRow => r !== null);
 }

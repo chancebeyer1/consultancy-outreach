@@ -1,4 +1,4 @@
-import type { DraftReviewRow, Hook, Lead, Score } from "./types";
+import type { DraftReviewRow, Hook, Lead, Reply, ReplyReviewRow, Score } from "./types";
 
 // In-memory fixtures so the dashboard renders without Supabase wired up.
 // Replace with real Supabase queries in lib/queries.ts once the DB is live.
@@ -329,4 +329,159 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
       github_topics: ["anthropic", "langgraph", "agents", "postgres"],
     },
   },
+];
+
+// ---------------------------------------------------------------------------
+// Mock replies — one per intent so the /replies UI exercises every code path.
+// ---------------------------------------------------------------------------
+
+const mockReply = (
+  id: string,
+  leadOverrides: Partial<Lead> & { id: string; linkedin_url: string },
+  replyOverrides: Partial<Reply> & { body: string; intent: Reply["intent"] },
+  originalMessage: string,
+): ReplyReviewRow => ({
+  reply: {
+    // Defaults — every key in here gets overridden by replyOverrides if it's
+    // present on the override object. `body` and `intent` are required by the
+    // override type so they always win.
+    id,
+    lead_id: leadOverrides.id,
+    channel: "linkedin_dm",
+    sentiment: "neutral",
+    summary: null,
+    suggested_reply: null,
+    next_action: null,
+    handled_at: null,
+    received_at: ts(0),
+    ...replyOverrides,
+  },
+  lead: lead(leadOverrides),
+  original_message: originalMessage,
+});
+
+export const MOCK_REPLY_ROWS: ReplyReviewRow[] = [
+  mockReply(
+    "r1",
+    {
+      id: "l_r1",
+      linkedin_url: "https://linkedin.com/in/rachel-cto-bracket",
+      name: "Rachel Patel",
+      headline: "CTO at Bracket Labs",
+      company: "Bracket Labs",
+      role: "CTO",
+      segment: "ai_native_consultancy",
+      status: "replied",
+    },
+    {
+      body: "appreciate the message. we are actually looking for a contractor to help with our eval layer next quarter — would love to chat. what's your availability looking like?",
+      intent: "interested",
+      sentiment: "positive",
+      summary: "Wants to chat about contract help with their eval layer next quarter.",
+      suggested_reply:
+        "happy to. how about tue 2pm or wed 10am ET? https://cal.com/your-handle/intro",
+      next_action: "send_calendar_link",
+      received_at: ts(0),
+    },
+    "your post about ripping out LangGraph — we hit the same wall at StratEdge…",
+  ),
+
+  mockReply(
+    "r2",
+    {
+      id: "l_r2",
+      linkedin_url: "https://linkedin.com/in/marcus-vp-eng-pivotworks",
+      name: "Marcus Lin",
+      headline: "VP Engineering at Pivotworks Studio",
+      company: "Pivotworks Studio",
+      role: "VP Engineering",
+      segment: "traditional_consultancy_pivot",
+      status: "replied",
+    },
+    {
+      body: "thanks but we hire FTE only, no contractors. good luck with the search.",
+      intent: "objection",
+      sentiment: "neutral",
+      summary: "Firm doesn't engage contractors; FTE only.",
+      suggested_reply:
+        "understood — appreciate the directness. if anything changes or you know peers who hire contractors, happy to be a referral.",
+      next_action: "drop",
+      received_at: ts(1),
+    },
+    "your AI Studio launch — saw the announcement…",
+  ),
+
+  mockReply(
+    "r3",
+    {
+      id: "l_r3",
+      linkedin_url: "https://linkedin.com/in/alex-founding-eng-treble",
+      name: "Alex Chen",
+      headline: "Founding engineer @ Treble",
+      company: "Treble",
+      role: "Founding Engineer",
+      segment: "ai_native_consultancy",
+      status: "replied",
+    },
+    {
+      body: "I'm OOO until June 2 — back then. ping me again if you don't hear from me.",
+      intent: "oof",
+      sentiment: "neutral",
+      summary: "Out of office until June 2.",
+      suggested_reply: null,
+      next_action: "wait_per_their_request",
+      received_at: ts(0),
+    },
+    "noticed you popped by my profile last week — appreciated…",
+  ),
+
+  mockReply(
+    "r4",
+    {
+      id: "l_r4",
+      linkedin_url: "https://linkedin.com/in/jeff-cto-stackpoint",
+      name: "Jeff Yamamoto",
+      headline: "CTO at Stackpoint",
+      company: "Stackpoint",
+      role: "CTO",
+      segment: "ai_native_consultancy",
+      status: "replied",
+    },
+    {
+      body: "interesting but we're slammed til end of Q3. revisit then?",
+      intent: "not_now",
+      sentiment: "positive",
+      summary: "Interested but capacity-constrained until end of Q3.",
+      suggested_reply:
+        "totally — I'll reach back out in early october. enjoy the sprint.",
+      next_action: "wait_per_their_request",
+      received_at: ts(2),
+    },
+    "your team's RAG → agents migration post nailed something…",
+  ),
+
+  mockReply(
+    "r5",
+    {
+      id: "l_r5",
+      linkedin_url: "https://linkedin.com/in/dana-ops-spinningup",
+      name: "Dana Foley",
+      headline: "Director, AI Practice at SpinningUp",
+      company: "SpinningUp",
+      role: "Director, AI Practice",
+      segment: "traditional_consultancy_pivot",
+      status: "replied",
+    },
+    {
+      body: "not the right fit for us but you should talk to my colleague mark, he runs our AI engineering team. happy to intro.",
+      intent: "referral",
+      sentiment: "positive",
+      summary: "Refers to colleague Mark, offers an intro.",
+      suggested_reply:
+        "appreciate the kind offer — please intro me to mark. happy to make it easy on you with a forwardable message if useful.",
+      next_action: "needs_human",
+      received_at: ts(1),
+    },
+    "your AI practice page caught my eye — specifically the bit about…",
+  ),
 ];
