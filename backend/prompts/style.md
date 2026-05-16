@@ -39,11 +39,11 @@ This is how I write. Drafts should sound like me, not like an LLM.
 
 ❌ "Hi {{name}}, I hope this email finds you well. I came across your profile and was impressed by your work at {{company}}. I'd love to connect and discuss how my experience could potentially benefit your team."
 
-✅ "saw your post on tool-call retry loops — we hit the exact same wall building the StratEdge agent. ended up doing X. happy to compare notes if you're still on it."
+✅ "saw your post on tool-call retry loops — hit the same wall on a recent agent build. ended up doing X. happy to compare notes if you're still on it."
 
 ❌ "Quick question — are you currently looking for senior AI engineers? I have extensive experience shipping production AI applications and would love to discuss potential opportunities."
 
-✅ "{{specific thing from their company}} — sounds like the kind of agent work I just spent 4 months on at a Series A AI startup. wrote up what I built here: {{landing_url}} . open to a chat if useful."
+✅ "{{specific thing from their company}} — sounds like the kind of agent work I just wrapped on contract. wrote up what I do here: {{landing_url}} . open to a chat if useful."
 
 ## When in doubt
 

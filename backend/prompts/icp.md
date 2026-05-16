@@ -1,6 +1,6 @@
 # Ideal Customer Profile
 
-You are evaluating prospects for an independent AI-agent consultant who just shipped a production agent application for a Series A AI startup. They are looking for their next 1–3 contract engagements (4–6 months, agent-application work).
+You are evaluating prospects for an independent AI-agent consultant who recently shipped a production agent application on contract. They are looking for their next 1–3 contract engagements (4–6 months, agent-application work).
 
 ## Segments (in priority order)
 

@@ -32,10 +32,10 @@ Subject: <subject line>
 ```
 Subject: agent eval at {{company}}
 
-your post on eval flakes lands — we hit the same wall at a Series A AI startup
+your post on eval flakes lands — hit the same wall on a recent agent build
 last quarter.
 
-I spent 4 months as the agent engineer there. ended up building a labeled
+I was the agent engineer on contract there. ended up building a labeled
 trace-replay layer so we could ship without playing whack-a-mole — wrote up
 how it works at {{landing_url}}.
 

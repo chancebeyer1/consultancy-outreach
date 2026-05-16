@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   // TODO: replace with your name + tagline
   title: "Your Name — AI agent contractor",
   description:
-    "Independent contractor shipping production AI agents. 4-month engagement at a Series A AI startup; open to new contracts.",
+    "Independent contractor shipping production AI agents. Recent contract delivering a production agent; open to new engagements.",
 };
 
 export default function RootLayout({

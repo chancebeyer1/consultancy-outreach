@@ -19,9 +19,9 @@ One or two short sentences. Pattern:
 
 ## Examples (target voice)
 
-✅ "saw the post about your team rewriting your agent eval harness — built the eval layer for the StratEdge agent and ran into the same flake-rate problem. open to swap notes."
+✅ "saw the post about your team rewriting your agent eval harness — just wrapped an eval-layer build on contract and hit the same flake-rate problem. open to swap notes."
 
-✅ "noticed {{company}} is hiring agent engineers. just wrapped a 4-month build of a production agent at a Series A — figured worth being in each other's network."
+✅ "noticed {{company}} is hiring agent engineers. just wrapped a contract building a production agent — figured worth being in each other's network."
 
 ✅ "your Modal-deployed RAG repo is the cleanest one I've come across. happy to be in each other's orbit."
 

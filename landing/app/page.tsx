@@ -3,11 +3,15 @@
 // not slick. The job: give a CTO 90 seconds of "yes, this person has
 // shipped real agent work" and a one-click way to talk.
 //
+// NDA NOTE: client is under mutual NDA — do not name them, do not
+// describe what their product does, do not reveal architecture details
+// you only learned from them. The defaults below stay on the safe side
+// (Tier 2 from prompts/proof.md). Bump to Tier 3 only with written sign-off.
+//
 // TODO before going live:
 //   - [ ] Replace YOUR_NAME, NAME, FIRST_NAME placeholders
-//   - [ ] Confirm anonymization with StratEdge AI
-//   - [ ] Replace the case-study bullets with real specifics (architecture,
-//         tool count, eval setup, infra, outcome metric)
+//   - [ ] Replace the case-study bullets with NDA-compliant specifics
+//         (your own role + generic patterns, never client product details)
 //   - [ ] Replace CAL_USERNAME with your Cal.com handle
 //   - [ ] Update <Metadata> in layout.tsx
 //   - [ ] Verify Lighthouse score ≥ 90 on Vercel preview before pointing DNS
@@ -36,9 +40,9 @@ function Hero() {
         I help AI consultancies ship production agents.
       </h1>
       <p className="mt-6 text-lg text-neutral-300">
-        Just wrapped four months as the agent engineer at a Series A AI startup —
-        architecture, tool layer, evals, and the production deploy. Looking for the
-        next one or two contracts like it.
+        Recently wrapped a multi-month contract as the agent engineer on a
+        production AI app — architecture, tool layer, evals, deploy. Looking for
+        the next one or two contracts like it.
       </p>
     </section>
   );
@@ -49,7 +53,7 @@ function CaseStudy() {
     <section className="mb-16 border-t border-neutral-800 pt-12">
       <h2 className="text-xl font-semibold">Most recent engagement</h2>
       <p className="mt-2 text-sm text-neutral-500">
-        Series A AI startup · 4 months · anonymised per NDA
+        Production AI agent · contract · details under NDA
       </p>
 
       <ul className="mt-6 space-y-4 text-neutral-300">

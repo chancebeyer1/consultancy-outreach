@@ -21,14 +21,14 @@ Sent AFTER they accept the connection request. The connect is the foot-in-the-do
 
 ✅
 > thanks for the accept. quick context since I doubt you remember the connect note —
-> just spent 4 months building the agent layer for a Series A AI startup
+> just wrapped a multi-month contract building the agent layer on a production app
 > ({{one-liner from proof.md}}). saw {{company}} is doing similar work and figured
 > worth introducing myself. happy to share architecture notes if useful:
 > {{landing_url}}
 
 ✅
-> appreciate the connect. the eval-harness thing you posted about — we ended up
-> rolling our own with a labeled trace replay setup. wrote up the whole build here
+> appreciate the connect. the eval-harness thing you posted about — ended up
+> rolling our own with a labeled trace replay setup. wrote up the approach here
 > if curious: {{landing_url}} . happy to compare notes either way.
 
 ## Rules
