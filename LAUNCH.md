@@ -2,7 +2,9 @@
 
 Sequenced checklist to get the pipeline from "code in github" to "running unattended on Modal with replies flowing into the dashboard."
 
-Each section roughly maps to a calendar day. Items are ordered by dependency, not by importance.
+> **Compressed timeline (~3-5 days):** sender inboxes are already warmed, so the usual 14-day Smartlead blocker is gone. Critical path is now: Heyreach campaign setup (1 hr) → voice corpus writing (2-3 hrs) → Phase 1 hand-send validation (1 day) → deploy. Everything else parallelizes.
+
+Each section roughly maps to a focused half-day or full-day work session. Items are ordered by dependency, not by importance.
 
 ---
 
@@ -16,15 +18,14 @@ The recent client engagement is under mutual NDA. Public-facing copy needs to st
 
 ---
 
-## Day 1 — Accounts + sender warmup (3 hrs of work, then 14d of waiting)
+## Day 1 — Accounts (3 hrs)
 
-You can do everything else while Smartlead warms your inbox. Start that clock today.
+> **Sender warmup is already done** — the user has warmed inboxes ready to plug in. That removes the usual 14-day blocker and collapses this whole checklist to a ~3-5 day push.
 
 ### Domains (~30 min)
 
 - [ ] Pick a primary domain for the landing page (e.g. `yourname.dev`). Buy if you don't have one
-- [ ] Pick a **separate** domain for cold email sending (e.g. `yourname.email`, `yourdomain.io`) — never use your primary inbox for cold sending; bad replies tank deliverability for everything
-- [ ] On the sender domain, add DNS records: SPF, DKIM, DMARC (Smartlead provides values during setup)
+- [x] ~~Sender domain + DNS + warmup~~ — already done (existing warmed inboxes will be wired into Smartlead below)
 
 ### Services (~5–15 min each)
 
@@ -32,7 +33,10 @@ You can do everything else while Smartlead warms your inbox. Start that clock to
 - [ ] **ProxyCurl** — sign up, add ~$50 credit. `PROXYCURL_API_KEY`
 - [ ] **Tavily** — free tier OK to start. `TAVILY_API_KEY`
 - [ ] **Heyreach** — $79/mo. Connect your **primary personal** LinkedIn (Sales Nav account). `HEYREACH_API_KEY`
-- [ ] **Smartlead** — $39/mo. Add 1–2 sender inboxes on the sender domain. **Start warmup today** (14-day cycle). `SMARTLEAD_API_KEY`
+- [ ] **Smartlead** — $39/mo. Connect your already-warmed inbox(es). If they're warmed inside a different tool (Instantly, Lemlist, etc.), either:
+  - **Path A (recommended):** keep them in the current tool and swap in its API client for `clients/smartlead.py` — the file is small and the call surface is similar across providers
+  - **Path B:** add the inboxes to Smartlead. Smartlead's "import inbox" preserves warmup history if you connect via the same SMTP/IMAP creds. Keep warmup running at low intensity for 3–5 days during the cutover so reputation doesn't dip
+  - Capture `SMARTLEAD_API_KEY` either way
 - [ ] **Apify** — sign up. `APIFY_API_TOKEN`. Note that LinkedIn signal actors usually need your `li_at` session cookie too
 - [ ] **Supabase** — create a new project. Capture `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and the connection string for `DATABASE_URL`
 - [ ] **Modal** — `pip install modal && modal token new` (one-time auth)
@@ -66,7 +70,7 @@ Create **one campaign per LinkedIn step** in Heyreach. Each campaign's message t
   - `HEYREACH_CAMPAIGN_LINKEDIN_DM=…`
   - `HEYREACH_CAMPAIGN_LINKEDIN_FOLLOWUP_1=…`
 
-### Smartlead campaigns (only after sender domain has warmed for 7+ days)
+### Smartlead campaigns (no warmup wait — inboxes already warmed)
 
 - [ ] Campaign: "email" — uses `{{custom_subject}}` + `{{custom_body}}`
 - [ ] Campaign: "email followup 1"
@@ -75,6 +79,7 @@ Create **one campaign per LinkedIn step** in Heyreach. Each campaign's message t
   - `SMARTLEAD_CAMPAIGN_EMAIL=…`
   - `SMARTLEAD_CAMPAIGN_EMAIL_FOLLOWUP_1=…`
   - `SMARTLEAD_CAMPAIGN_EMAIL_FOLLOWUP_2=…`
+- [ ] **Be conservative on initial volume**: even with warmed inboxes, ramp from 20/day → 40/day → 80/day per inbox over the first week. Sudden volume on a warm inbox still triggers spam flags
 
 ---
 
