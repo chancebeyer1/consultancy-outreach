@@ -3,15 +3,9 @@
 // not slick. The job: give a CTO 90 seconds of "yes, this person has
 // shipped real agent work" and a one-click way to talk.
 //
-// NDA NOTE: client is under mutual NDA — do not name them, do not
-// describe what their product does, do not reveal architecture details
-// you only learned from them. The defaults below stay on the safe side
-// (Tier 2 from prompts/proof.md). Bump to Tier 3 only with written sign-off.
-//
 // TODO before going live:
 //   - [ ] Replace YOUR_NAME, NAME, FIRST_NAME placeholders
-//   - [ ] Replace the case-study bullets with NDA-compliant specifics
-//         (your own role + generic patterns, never client product details)
+//   - [ ] Replace the case-study bullets with real specifics from your work
 //   - [ ] Replace CAL_USERNAME with your Cal.com handle
 //   - [ ] Update <Metadata> in layout.tsx
 //   - [ ] Verify Lighthouse score ≥ 90 on Vercel preview before pointing DNS
@@ -53,7 +47,7 @@ function CaseStudy() {
     <section className="mb-16 border-t border-neutral-800 pt-12">
       <h2 className="text-xl font-semibold">Most recent engagement</h2>
       <p className="mt-2 text-sm text-neutral-500">
-        Production AI agent · contract · details under NDA
+        Production AI agent · multi-month contract
       </p>
 
       <ul className="mt-6 space-y-4 text-neutral-300">

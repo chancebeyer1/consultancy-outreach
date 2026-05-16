@@ -26,7 +26,7 @@ Point your domain at the production deployment in the Vercel dashboard.
 
 ## Before going live — checklist
 
-- [ ] Pick the disclosure tier from `backend/prompts/proof.md` (Tier 2 = NDA-safe default; Tier 3 only with written client sign-off — see LAUNCH.md)
+- [ ] Customize the case-study bullets in `app/page.tsx` with real specifics
 - [ ] Replace every `TODO:` and `Replace me.` in `app/page.tsx`
 - [ ] Update title + description in `app/layout.tsx`
 - [ ] Replace `CAL_USERNAME` with your Cal.com handle

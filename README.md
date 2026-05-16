@@ -90,7 +90,7 @@ cd ..\dashboard
 
 ## Open items before going live
 
-- [ ] Decide disclosure tier in `backend/prompts/proof.md` (Tier 2 is the NDA-safe default; Tier 3 requires written sign-off from the client)
+- [ ] Customize `backend/prompts/proof.md` with the specifics of your recent work
 - [ ] Domain pointed at Vercel
 - [ ] Cal.com handle
 - [ ] Bootstrap your voice corpus:

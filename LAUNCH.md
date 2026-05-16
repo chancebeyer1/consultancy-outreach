@@ -8,16 +8,6 @@ Each section roughly maps to a focused half-day or full-day work session. Items 
 
 ---
 
-## Pre-flight — NDA decisions (30 min)
-
-The recent client engagement is under mutual NDA. Public-facing copy needs to stay generic.
-
-- [ ] **Decide disclosure tier** in `backend/prompts/proof.md`. Default is **Tier 2** (anonymized) — that's the NDA-safe baseline and is what the rest of this checklist assumes
-- [ ] (Optional) If you want **Tier 3** (naming the client or describing the product), email the client's signer for written sign-off on the specific copy *before* publishing. Don't assume verbal okay covers it
-- [ ] Save the executed NDA PDF somewhere out of this repo (Notion / Drive / encrypted disk). The repo is **public**
-
----
-
 ## Day 1 — Accounts (3 hrs)
 
 > **Sender warmup is already done** — the user has warmed inboxes ready to plug in. That removes the usual 14-day blocker and collapses this whole checklist to a ~3-5 day push.
@@ -95,7 +85,7 @@ The biggest quality lever in the whole system. Don't skip.
 - [ ] Edit `backend/prompts/proof.md` if Tier 2 default needs tweaking for your work
 - [ ] Edit `landing/app/page.tsx`:
   - Replace `YOUR_NAME`, `NAME`, `FIRST_NAME`, `CAL_USERNAME`, `you@your-domain.com`
-  - Tweak the case-study bullets (NDA-compliant — describe your role + generic patterns, not their product)
+  - Tweak the case-study bullets with real specifics from your work
   - Update `<title>` and `<description>` in `app/layout.tsx`
 - [ ] Edit `backend/prompts/icp.md` if you want to tighten your ICP definition
 
@@ -206,7 +196,6 @@ Make these habits, not heroics.
 
 - [ ] Re-evaluate ICP based on which segment actually converted (analytics)
 - [ ] Revisit `proof.md` — by now you may have a second case study to add
-- [ ] Check the NDA expiry on your calendar (~2031-01-19 if you signed January 2026)
 
 ---
 
