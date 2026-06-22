@@ -79,7 +79,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid payload" }, { status: 400 });
   }
 
-  const jsonlPath = await appendToJsonl(payload);
+  // file mode appends to runs/decisions.jsonl for send_approvals.py; supabase mode
+  // skips the local write — Vercel's serverless filesystem is read-only and the DB
+  // (drafts.status, read by the send_approved cron) is the source of truth.
+  let jsonlPath: string | null = null;
+  if (dataSource === "file") {
+    jsonlPath = await appendToJsonl(payload);
+  }
 
   let supabaseUpdated = false;
   if (dataSource === "supabase") {
