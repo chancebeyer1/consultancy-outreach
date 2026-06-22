@@ -80,6 +80,11 @@ export interface Campaign {
   calcom_url: string | null;
   is_default: boolean;
   status: "active" | "paused" | "archived";
+  // When true, the first-touch connection note auto-approves on ingest and the
+  // send_approved cron sends it — no manual review. Default false (review each).
+  auto_send: boolean;
+  search_url?: string | null;
+  channels?: string[] | null;
   started_at?: string;
 }
 
@@ -113,6 +118,20 @@ export interface Draft {
   variant: string | null;
   generated_at: string;
   decided_at: string | null;
+}
+
+// Derived lifecycle status for the /leads table, computed from sends + replies
+// (distinct from the raw leads.status column). "connected" is best-effort: we
+// infer it from a DM having been sent or a reply received, since connection
+// acceptance isn't tracked explicitly yet.
+export type LeadDisplayStatus = "new" | "queued" | "sent" | "connected" | "replied";
+
+// One row in the /leads table: the lead plus its fit score and derived status.
+export interface LeadRow {
+  lead: Lead;
+  fit_score: number | null;
+  display_status: LeadDisplayStatus;
+  last_sent_at: string | null;
 }
 
 // Aggregate view used by the /drafts review surface: one row per lead with

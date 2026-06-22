@@ -25,6 +25,7 @@ create table if not exists campaigns (
     status      text not null default 'active',   -- active | paused | archived
     search_url  text,               -- saved LinkedIn/Sales-Nav people search (automated sourcing)
     channels    text[],             -- initial draft channels; null → all (connect/dm/email)
+    auto_send   boolean not null default false,  -- true → first-touch connect note auto-approves on ingest
     started_at  timestamptz not null default now()
 );
 -- at most one default campaign

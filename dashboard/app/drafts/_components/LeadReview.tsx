@@ -17,7 +17,11 @@ interface Props {
 
 export function LeadReview({ row, onDecideOne, onDecideAll }: Props) {
   const { lead, score, drafts, hooks } = row;
-  const pending = drafts.filter((d) => d.status === "draft");
+  // Sort by step so the first-touch message (LinkedIn connection note, step 0)
+  // is the primary choice shown first.
+  const pending = drafts
+    .filter((d) => d.status === "draft")
+    .sort((a, b) => a.step_index - b.step_index);
 
   return (
     <div>
@@ -59,23 +63,21 @@ export function LeadReview({ row, onDecideOne, onDecideAll }: Props) {
 
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs uppercase tracking-wide text-neutral-500">
-              Drafts ({pending.length} pending)
-            </h3>
-            <div className="flex gap-2">
-              <button
-                onClick={() => onDecideAll(lead.id, "approved")}
-                className="rounded-md bg-emerald-900/50 px-3 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-900"
-              >
-                Approve all (a)
-              </button>
-              <button
-                onClick={() => onDecideAll(lead.id, "rejected")}
-                className="rounded-md bg-red-900/40 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-900/70"
-              >
-                Reject all (r)
-              </button>
+            <div>
+              <h3 className="text-xs uppercase tracking-wide text-neutral-500">
+                Drafts ({pending.length} pending)
+              </h3>
+              <p className="mt-0.5 text-[11px] text-neutral-600">
+                Approve one — the rest auto-reject so only one message sends. (a = approve the
+                connection note)
+              </p>
             </div>
+            <button
+              onClick={() => onDecideAll(lead.id, "rejected")}
+              className="rounded-md bg-red-900/40 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-900/70"
+            >
+              Skip lead (r)
+            </button>
           </div>
 
           {pending.map((d) => (

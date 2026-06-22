@@ -173,9 +173,14 @@ def _ingest_records(records: list[dict]) -> dict:
     try:
         with conn:
             with conn.cursor() as cur:
-                # Build campaign slug → id map
-                cur.execute("select id, slug from campaigns")
-                slug_to_id = {row[1]: str(row[0]) for row in cur.fetchall()}
+                # Build campaign slug → id map (+ auto_send flag per campaign)
+                cur.execute("select id, slug, auto_send from campaigns")
+                slug_to_id: dict[str, str] = {}
+                auto_by_id: dict[str, bool] = {}
+                for cid, slug, auto_send in cur.fetchall():
+                    if slug:
+                        slug_to_id[slug] = str(cid)
+                    auto_by_id[str(cid)] = bool(auto_send)
 
                 for rec in records:
                     if rec.get("status") != "ok":
@@ -272,25 +277,30 @@ def _ingest_records(records: list[dict]) -> dict:
                             ),
                         )
 
-                    # 4. INSERT drafts
+                    # 4. INSERT drafts. auto_send campaigns pre-approve the first-touch
+                    # connect note so the send_approved cron sends it without manual review.
                     drafts = rec.get("drafts") or {}
                     chosen_hook = rec.get("chosen_hook")
+                    auto_send = auto_by_id.get(campaign_id or "", False)
                     for step_index, channel in enumerate(["linkedin_connect", "linkedin_dm", "email"]):
                         body = drafts.get(channel)
                         if not body:
                             continue
+                        draft_status = (
+                            "approved" if (auto_send and channel == "linkedin_connect") else "draft"
+                        )
                         cur.execute(
                             """
                             insert into drafts
                                 (lead_id, channel, step_index, hook, body, status, generated_at)
-                            values (%s, %s, %s, %s, %s, 'draft', now())
+                            values (%s, %s, %s, %s, %s, %s, now())
                             on conflict (lead_id, channel, step_index, variant) do update
                               set body = excluded.body,
                                   hook = excluded.hook,
                                   generated_at = now()
                               where drafts.status in ('draft', 'rejected')
                             """,
-                            (lead_id, channel, step_index, Jsonb(chosen_hook), body),
+                            (lead_id, channel, step_index, Jsonb(chosen_hook), body, draft_status),
                         )
                         inserted_drafts += 1
     finally:

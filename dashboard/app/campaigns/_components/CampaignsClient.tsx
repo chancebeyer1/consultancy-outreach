@@ -17,6 +17,7 @@ type FormState = {
   slug: string;
   status: "active" | "paused" | "archived";
   is_default: boolean;
+  auto_send: boolean;
   landing_url: string;
   calcom_url: string;
   icp_md: string;
@@ -31,6 +32,7 @@ const BLANK: FormState = {
   slug: "",
   status: "active",
   is_default: false,
+  auto_send: false,
   landing_url: "",
   calcom_url: "",
   icp_md: "",
@@ -46,6 +48,7 @@ function toForm(c: Campaign): FormState {
     slug: c.slug ?? "",
     status: c.status ?? "active",
     is_default: c.is_default ?? false,
+    auto_send: c.auto_send ?? false,
     landing_url: c.landing_url ?? "",
     calcom_url: c.calcom_url ?? "",
     icp_md: c.icp_md ?? "",
@@ -219,6 +222,29 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
                 className={`${inputCls} font-mono`}
               />
             </Field>
+          </div>
+
+          {/* Auto-send toggle — sends first contact without manual review. */}
+          <div className="mt-4 rounded-md border border-neutral-800 bg-neutral-950 p-3">
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={form.auto_send}
+                onChange={(e) => set("auto_send", e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-emerald-500"
+              />
+              <span className="text-sm text-neutral-300">
+                <span className="font-medium">Auto-send first contact</span>
+                <span className="ml-2 rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-400">
+                  no manual review
+                </span>
+                <span className="mt-1 block text-xs text-neutral-500">
+                  When on, newly sourced leads&apos; connection notes auto-approve and the sender
+                  ships them (still capped at 20/day). Leave off until you trust this campaign&apos;s
+                  messages, then flip it to run hands-off.
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="mt-4 grid gap-4">

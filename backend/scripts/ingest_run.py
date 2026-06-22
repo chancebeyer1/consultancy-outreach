@@ -43,21 +43,23 @@ def _connect():
     return psycopg.connect(require("DATABASE_URL")), Jsonb
 
 
-def _campaign_map(cur) -> tuple[dict[str, str], str | None]:
-    """Return (slug→id, default_campaign_id) from the campaigns table.
+def _campaign_map(cur) -> tuple[dict[str, str], str | None, dict[str, bool]]:
+    """Return (slug→id, default_campaign_id, auto_send_by_id) from campaigns.
 
     Empty / None when campaigns haven't been synced yet — leads then get a NULL
     campaign_id (the column is nullable), which is fine.
     """
     slug_to_id: dict[str, str] = {}
     default_id: str | None = None
-    cur.execute("select id, slug, is_default from campaigns")
-    for cid, slug, is_default in cur.fetchall():
+    auto_by_id: dict[str, bool] = {}
+    cur.execute("select id, slug, is_default, auto_send from campaigns")
+    for cid, slug, is_default, auto_send in cur.fetchall():
         if slug:
             slug_to_id[slug] = str(cid)
         if is_default:
             default_id = str(cid)
-    return slug_to_id, default_id
+        auto_by_id[str(cid)] = bool(auto_send)
+    return slug_to_id, default_id, auto_by_id
 
 
 def _profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
@@ -93,7 +95,7 @@ def main(
 
     with conn:
         with conn.cursor() as cur, jsonl.open("r", encoding="utf-8") as f:
-            slug_to_id, default_campaign_id = _campaign_map(cur)
+            slug_to_id, default_campaign_id, auto_by_id = _campaign_map(cur)
             for line in f:
                 line = line.strip()
                 if not line:
@@ -194,15 +196,21 @@ def main(
                 # 4. INSERT drafts (skip channels that already have sent/rejected entries)
                 drafts = rec.get("drafts") or {}
                 chosen_hook = rec.get("chosen_hook")
+                # auto_send campaigns pre-approve the first-touch connect note so the
+                # send_approved cron sends it without manual review.
+                auto_send = auto_by_id.get(campaign_id or "", False)
                 for step_index, channel in enumerate(CHANNELS):
                     body = drafts.get(channel)
                     if not body:
                         continue
+                    draft_status = (
+                        "approved" if (auto_send and channel == "linkedin_connect") else "draft"
+                    )
                     cur.execute(
                         """
                         insert into drafts
                             (lead_id, channel, step_index, hook, body, status, generated_at)
-                        values (%s, %s, %s, %s, %s, 'draft', now())
+                        values (%s, %s, %s, %s, %s, %s, now())
                         on conflict (lead_id, channel, step_index, variant) do update
                           set body = excluded.body,
                               hook = excluded.hook,
@@ -215,6 +223,7 @@ def main(
                             step_index,
                             Jsonb(chosen_hook),
                             body,
+                            draft_status,
                         ),
                     )
                     inserted_drafts += 1

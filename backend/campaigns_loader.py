@@ -49,6 +49,7 @@ class Campaign:
     id: str | None = None  # DB uuid; None in file-seed mode
     search_url: str | None = None  # saved LinkedIn/Sales-Nav people search for sourcing
     channels: tuple[str, ...] | None = None  # initial draft channels; None → all (connect/dm/email)
+    auto_send: bool = False  # true → first-touch connect note auto-approves on ingest
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +109,7 @@ def _load_from_files(slug: str | None) -> Campaign:
         id=None,
         search_url=meta.get("search_url"),
         channels=tuple(meta["channels"]) if meta.get("channels") else None,
+        auto_send=bool(meta.get("auto_send", False)),
     )
 
 
@@ -117,13 +119,13 @@ def _load_from_files(slug: str | None) -> Campaign:
 
 _COLUMNS = (
     "id, slug, name, icp_md, offer_md, style_md, voice_md, "
-    "landing_url, calcom_url, is_default, status, search_url, channels"
+    "landing_url, calcom_url, is_default, status, search_url, channels, auto_send"
 )
 
 
 def _row_to_campaign(row: tuple) -> Campaign:
     (cid, slug, name, icp_md, offer_md, style_md, voice_md,
-     landing_url, calcom_url, is_default, status, search_url, channels) = row
+     landing_url, calcom_url, is_default, status, search_url, channels, auto_send) = row
     return Campaign(
         slug=slug,
         name=name,
@@ -138,6 +140,7 @@ def _row_to_campaign(row: tuple) -> Campaign:
         id=str(cid),
         search_url=search_url,
         channels=tuple(channels) if channels else None,
+        auto_send=bool(auto_send),
     )
 
 

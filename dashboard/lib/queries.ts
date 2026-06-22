@@ -16,6 +16,8 @@ import type {
   Hook,
   Intent,
   Lead,
+  LeadDisplayStatus,
+  LeadRow,
   LeadStatus,
   Reply,
   ReplyReviewRow,
@@ -65,6 +67,124 @@ export async function getCampaigns(): Promise<Campaign[]> {
     .order("name", { ascending: true });
   if (error) throw error;
   return (data ?? []) as unknown as Campaign[];
+}
+
+// ---------------------------------------------------------------------------
+// Leads — /leads table (every lead, filterable by campaign + derived status)
+// ---------------------------------------------------------------------------
+
+export async function getLeadRows(campaignId?: string): Promise<LeadRow[]> {
+  if (dataSource === "mock") {
+    const byId = new Map<string, LeadRow>();
+    for (const r of MOCK_DRAFT_ROWS) {
+      byId.set(r.lead.id, {
+        lead: r.lead,
+        fit_score: r.score?.fit_score ?? null,
+        display_status: "queued",
+        last_sent_at: null,
+      });
+    }
+    for (const r of MOCK_REPLY_ROWS) {
+      byId.set(r.lead.id, {
+        lead: r.lead,
+        fit_score: byId.get(r.lead.id)?.fit_score ?? null,
+        display_status: "replied",
+        last_sent_at: null,
+      });
+    }
+    return filterByCampaign([...byId.values()], campaignId, (r) => r.lead.campaign_id);
+  }
+  if (dataSource === "file") {
+    return [];
+  }
+  return loadLeadRowsFromSupabase(campaignId);
+}
+
+async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]> {
+  const supabase = await serverClient();
+
+  let leadQuery = supabase
+    .from("leads")
+    .select("*")
+    .order("updated_at", { ascending: false })
+    .limit(2000);
+  if (campaignId) leadQuery = leadQuery.eq("campaign_id", campaignId);
+  const { data: leadsData, error: leadsErr } = await leadQuery;
+  if (leadsErr) throw leadsErr;
+  const leads = (leadsData ?? []) as unknown as Lead[];
+  if (leads.length === 0) return [];
+
+  const leadIds = leads.map((l) => l.id);
+
+  // Scores, drafts (for status + channel), replies. Sends are looked up by
+  // draft_id in a second pass (drafts carry the lead_id).
+  const [scoresRes, draftsRes, repliesRes] = await Promise.all([
+    supabase.from("scores").select("lead_id, fit_score").in("lead_id", leadIds),
+    supabase.from("drafts").select("id, lead_id, channel, status").in("lead_id", leadIds),
+    supabase.from("replies").select("lead_id").in("lead_id", leadIds),
+  ]);
+  if (scoresRes.error) throw scoresRes.error;
+  if (draftsRes.error) throw draftsRes.error;
+  if (repliesRes.error) throw repliesRes.error;
+
+  const draftRows = (draftsRes.data ?? []) as Array<{
+    id: string;
+    lead_id: string;
+    channel: Channel;
+    status: DraftStatus;
+  }>;
+  const draftIds = draftRows.map((d) => d.id);
+
+  const sendsRes =
+    draftIds.length > 0
+      ? await supabase.from("sends").select("draft_id, sent_at").in("draft_id", draftIds)
+      : { data: [], error: null };
+  if (sendsRes.error) throw sendsRes.error;
+  const sendRows = (sendsRes.data ?? []) as Array<{ draft_id: string; sent_at: string }>;
+
+  const fitByLead = new Map<string, number>(
+    ((scoresRes.data ?? []) as Array<{ lead_id: string; fit_score: number }>).map((s) => [
+      s.lead_id,
+      s.fit_score,
+    ]),
+  );
+  const repliedLeads = new Set<string>(
+    ((repliesRes.data ?? []) as Array<{ lead_id: string | null }>)
+      .map((r) => r.lead_id)
+      .filter((id): id is string => !!id),
+  );
+  const draftById = new Map(draftRows.map((d) => [d.id, d]));
+  const sentByLead = new Map<string, { channels: Set<string>; lastSentAt: string }>();
+  for (const s of sendRows) {
+    const d = draftById.get(s.draft_id);
+    if (!d) continue;
+    const entry = sentByLead.get(d.lead_id) ?? { channels: new Set<string>(), lastSentAt: s.sent_at };
+    entry.channels.add(d.channel);
+    if (s.sent_at > entry.lastSentAt) entry.lastSentAt = s.sent_at;
+    sentByLead.set(d.lead_id, entry);
+  }
+  const hasPendingDraft = new Set<string>(
+    draftRows.filter((d) => d.status === "draft" || d.status === "approved").map((d) => d.lead_id),
+  );
+
+  function statusFor(leadId: string): LeadDisplayStatus {
+    if (repliedLeads.has(leadId)) return "replied";
+    const sent = sentByLead.get(leadId);
+    if (sent) {
+      // A DM going out implies the connection was accepted → "connected".
+      const connected = [...sent.channels].some((c) => c.startsWith("linkedin_dm") || c.startsWith("linkedin_followup"));
+      return connected ? "connected" : "sent";
+    }
+    if (hasPendingDraft.has(leadId)) return "queued";
+    return "new";
+  }
+
+  return leads.map((lead) => ({
+    lead,
+    fit_score: fitByLead.get(lead.id) ?? null,
+    display_status: statusFor(lead.id),
+    last_sent_at: sentByLead.get(lead.id)?.lastSentAt ?? null,
+  }));
 }
 
 export type DraftDecision = { draftId: string; action: "approve" | "reject"; editedBody?: string };

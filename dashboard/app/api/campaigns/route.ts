@@ -38,6 +38,7 @@ interface CampaignPayload {
   landing_url?: string | null;
   calcom_url?: string | null;
   is_default?: boolean;
+  auto_send?: boolean;
   status?: "active" | "paused" | "archived";
 }
 
@@ -51,6 +52,7 @@ function normalize(p: CampaignPayload): Record<string, unknown> {
   const row: Record<string, unknown> = {
     name: p.name.trim(),
     is_default: Boolean(p.is_default),
+    auto_send: Boolean(p.auto_send),
     status: p.status ?? "active",
   };
   for (const key of NULLABLE_TEXT) {

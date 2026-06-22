@@ -18,6 +18,7 @@ export const MOCK_CAMPAIGNS: Campaign[] = [
     landing_url: "https://your-domain.com",
     calcom_url: "https://cal.com/your-handle/intro",
     is_default: true,
+    auto_send: false,
     status: "active",
   },
   {
@@ -31,6 +32,7 @@ export const MOCK_CAMPAIGNS: Campaign[] = [
     landing_url: "https://your-domain.com/real-estate",
     calcom_url: "https://cal.com/your-handle/intro",
     is_default: false,
+    auto_send: false,
     status: "active",
   },
 ];

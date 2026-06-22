@@ -51,6 +51,7 @@ _WRITE_COLS = [
     "calcom_url",
     "search_url",
     "channels",
+    "auto_send",
     "status",
 ]
 
@@ -85,6 +86,7 @@ def _read_campaign_dir(folder: Path) -> dict | None:
         "calcom_url": meta.get("calcom_url"),
         "search_url": meta.get("search_url"),
         "channels": meta.get("channels"),  # list[str] | None → Postgres text[]
+        "auto_send": bool(meta.get("auto_send", False)),
         "is_default": bool(meta.get("is_default", False)),
         "status": meta.get("status") or "active",
     }
