@@ -21,6 +21,7 @@ from typing import Annotated, Any
 import typer
 from rich.console import Console
 
+from clients import unipile
 from config import require
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -112,23 +113,26 @@ def main(
                 if not url:
                     continue
 
-                summary = _profile_summary((rec.get("enrichment") or {}).get("profile"))
+                profile = (rec.get("enrichment") or {}).get("profile")
+                summary = _profile_summary(profile)
+                provider_id = unipile.provider_id_from_profile(profile)
                 score = rec.get("score") or {}
                 campaign_id = slug_to_id.get(rec.get("campaign_slug")) or default_campaign_id
 
-                # 1. UPSERT lead
+                # 1. UPSERT lead (provider_id is the member-id we match inbound replies on)
                 cur.execute(
                     """
                     insert into leads
                         (linkedin_url, name, headline, company, role, location,
-                         campaign_id, segment, source, trigger, status, updated_at)
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'drafted', now())
+                         provider_id, campaign_id, segment, source, trigger, status, updated_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'drafted', now())
                     on conflict (linkedin_url) do update
                       set name = excluded.name,
                           headline = excluded.headline,
                           company = excluded.company,
                           role = excluded.role,
                           location = excluded.location,
+                          provider_id = coalesce(excluded.provider_id, leads.provider_id),
                           campaign_id = coalesce(excluded.campaign_id, leads.campaign_id),
                           segment = coalesce(excluded.segment, leads.segment),
                           updated_at = now()
@@ -141,6 +145,7 @@ def main(
                         summary.get("company"),
                         summary.get("role"),
                         summary.get("location"),
+                        provider_id,
                         campaign_id,
                         score.get("segment"),
                         source,

@@ -133,6 +133,20 @@ def fetch_recent_posts(linkedin_url: str, count: int = 10) -> list[dict[str, Any
         return data.get("items", data) if isinstance(data, dict) else data
 
 
+def provider_id_from_profile(profile: dict[str, Any] | None) -> str | None:
+    """Extract the LinkedIn member id (ACoAA… urn) from a stored profile — no network
+    call. Returns None if absent. Excludes public_identifier (the /in/ slug), which is
+    NOT the member id that inbound replies are keyed by.
+    """
+    if not isinstance(profile, dict):
+        return None
+    for key in ("provider_id", "id", "member_id", "entity_urn"):
+        val = profile.get(key)
+        if val:
+            return str(val)
+    return None
+
+
 def resolve_provider_id(linkedin_url: str, *, profile: dict[str, Any] | None = None) -> str:
     """The provider-internal id required to invite / message a user.
 

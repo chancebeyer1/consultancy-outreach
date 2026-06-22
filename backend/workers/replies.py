@@ -79,6 +79,7 @@ def classify_message(
     external_id: str,
     text: str,
     linkedin_url: str | None = None,
+    provider_id: str | None = None,
     lead_name: str | None = None,
     lead_company: str | None = None,
     lead_role: str | None = None,
@@ -104,6 +105,7 @@ def classify_message(
     return {
         "message_id": external_id,
         "linkedin_url": linkedin_url,
+        "provider_id": provider_id,
         "lead_name": lead_name,
         "lead_company": lead_company,
         "channel": channel,
@@ -129,6 +131,9 @@ def _linkedin_replies(seen: set[str], limit: int, unread_only: bool) -> list[dic
             continue
         lead_name = chat.get("name")
         linkedin_url = _linkedin_url_from_chat(chat)
+        # The chat's provider_id is the other attendee's LinkedIn member id (ACoAA…) —
+        # the reliable key for matching a reply back to a lead we contacted.
+        provider_id = chat.get("provider_id") or chat.get("attendee_provider_id")
         messages = unipile.list_chat_messages(chat_id)
         messages.sort(key=lambda m: str(m.get("timestamp") or ""))
         for idx, msg in enumerate(messages):
@@ -142,6 +147,7 @@ def _linkedin_replies(seen: set[str], limit: int, unread_only: bool) -> list[dic
                 external_id=mid,
                 text=msg.get("text") or "",
                 linkedin_url=linkedin_url,
+                provider_id=provider_id,
                 lead_name=lead_name,
                 original_message=_find_last_outbound(messages, idx),
                 received_at=msg.get("timestamp"),

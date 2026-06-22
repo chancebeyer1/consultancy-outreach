@@ -338,6 +338,7 @@ def unipile_webhook(request_body: dict, x_unipile_secret: str | None = None) -> 
                 request_body.get("message_id") or request_body.get("id") or ""
             ),
             text=text,
+            provider_id=sender.get("attendee_provider_id") or sender.get("provider_id"),
             lead_name=sender.get("attendee_name") or sender.get("name"),
             received_at=request_body.get("timestamp"),
         )

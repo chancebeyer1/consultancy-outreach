@@ -193,19 +193,21 @@ def _ingest_records(records: list[dict]) -> dict:
                     score_data = rec.get("score") or {}
                     campaign_id = slug_to_id.get(rec.get("campaign_slug"))
 
-                    # 1. UPSERT lead
+                    # 1. UPSERT lead (provider_id = member-id we match inbound replies on)
+                    provider_id = unipile.provider_id_from_profile(profile)
                     cur.execute(
                         """
                         insert into leads
                             (linkedin_url, name, headline, company, role, location,
-                             campaign_id, segment, source, trigger, status, updated_at)
-                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'drafted', now())
+                             provider_id, campaign_id, segment, source, trigger, status, updated_at)
+                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'drafted', now())
                         on conflict (linkedin_url) do update
                           set name = excluded.name,
                               headline = excluded.headline,
                               company = excluded.company,
                               role = excluded.role,
                               location = excluded.location,
+                              provider_id = coalesce(excluded.provider_id, leads.provider_id),
                               campaign_id = coalesce(excluded.campaign_id, leads.campaign_id),
                               segment = coalesce(excluded.segment, leads.segment),
                               updated_at = now()
@@ -223,6 +225,7 @@ def _ingest_records(records: list[dict]) -> dict:
                                 if profile.get("country_full_name")
                                 else ""
                             ),
+                            provider_id,
                             campaign_id,
                             score_data.get("segment"),
                             "replenish",

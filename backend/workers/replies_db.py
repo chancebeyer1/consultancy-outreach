@@ -51,38 +51,25 @@ def existing_external_ids(limit: int = 5000) -> set[str]:
         conn.close()
 
 
-def _ensure_lead(cur, *, linkedin_url: str | None, name: str | None, company: str | None) -> str | None:
-    """Resolve lead_id for a reply.
+def _match_lead(cur, *, provider_id: str | None, linkedin_url: str | None) -> str | None:
+    """Resolve lead_id for a reply by matching someone we actually contacted.
 
-    If we already have the lead, return its id. Otherwise insert a stub
-    so the foreign key references something real. Returns None only when
-    the reply has no linkedin_url to anchor on (rare — orphan reply).
+    Match by LinkedIn provider_id first (the reliable member-id key, stored when we
+    contact a lead), then by linkedin_url. We do NOT create stub leads: a message
+    from someone not in our pipeline returns None, and insert_replies drops it — so
+    the operator's normal inbox never leaks into /replies.
     """
-    if not linkedin_url:
-        return None
-    cur.execute("select id from leads where linkedin_url = %s", (linkedin_url,))
-    row = cur.fetchone()
-    if row:
-        return row[0]
-
-    # Stub: minimal lead so the FK resolves. Marked as 'replied' status
-    # since we only get here if a reply just landed.
-    cur.execute(
-        """
-        insert into leads (linkedin_url, name, company, status, source, trigger)
-        values (%s, %s, %s, 'replied', 'reply_orphan', 'list')
-        on conflict (linkedin_url) do nothing
-        returning id
-        """,
-        (linkedin_url, name, company),
-    )
-    row = cur.fetchone()
-    if row:
-        return row[0]
-    # Race: another writer inserted between SELECT and INSERT. Re-read.
-    cur.execute("select id from leads where linkedin_url = %s", (linkedin_url,))
-    row = cur.fetchone()
-    return row[0] if row else None
+    if provider_id:
+        cur.execute("select id from leads where provider_id = %s", (provider_id,))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+    if linkedin_url:
+        cur.execute("select id from leads where linkedin_url = %s", (linkedin_url,))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+    return None
 
 
 def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
@@ -93,25 +80,25 @@ def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
     classification fields. Skips dupes via ON CONFLICT (external_id).
     """
     if not records:
-        return {"inserted": 0, "skipped": 0, "orphan": 0}
+        return {"inserted": 0, "skipped": 0, "dropped": 0}
 
     conn = _connect()
     inserted = 0
     skipped = 0
-    orphan = 0
+    dropped = 0
     try:
         with conn:
             with conn.cursor() as cur:
                 for rec in records:
-                    lead_id = _ensure_lead(
+                    lead_id = _match_lead(
                         cur,
+                        provider_id=rec.get("provider_id"),
                         linkedin_url=rec.get("linkedin_url"),
-                        name=rec.get("lead_name"),
-                        company=rec.get("lead_company"),
                     )
                     if lead_id is None:
-                        orphan += 1
-                        # Persist anyway — lead_id is nullable.
+                        # Not a lead we've contacted — inbox noise, don't persist.
+                        dropped += 1
+                        continue
                     cur.execute(
                         """
                         insert into replies
@@ -140,4 +127,4 @@ def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
                         skipped += 1
     finally:
         conn.close()
-    return {"inserted": inserted, "skipped": skipped, "orphan": orphan}
+    return {"inserted": inserted, "skipped": skipped, "dropped": dropped}

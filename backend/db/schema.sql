@@ -44,6 +44,7 @@ create table if not exists leads (
     company_domain  text,
     role            text,
     location        text,
+    provider_id     text,           -- LinkedIn member id (ACoAA… urn) — keys inbound replies back to the lead
     campaign_id     uuid references campaigns(id),
     segment         text,           -- free-text label produced by the campaign's ICP scorer
     source          text,           -- e.g. 'sales_nav:cto-aiconsultancy-na'
@@ -56,6 +57,7 @@ create table if not exists leads (
 );
 create index if not exists leads_status_idx     on leads(status);
 create index if not exists leads_segment_idx    on leads(segment);
+create index if not exists leads_provider_id_idx on leads(provider_id) where provider_id is not null;
 create index if not exists leads_trigger_idx    on leads(trigger);
 create index if not exists leads_campaign_idx   on leads(campaign_id);
 
