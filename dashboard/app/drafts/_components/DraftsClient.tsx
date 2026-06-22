@@ -47,14 +47,6 @@ export function DraftsClient({ initialRows }: Props) {
     [rows],
   );
 
-  // The lead's primary (first-touch) draft — lowest step_index among pending.
-  // For LinkedIn that's the connection note; 'a' approves it.
-  const primaryDraftOf = useCallback((row: DraftReviewRow): Draft | undefined => {
-    return [...row.drafts]
-      .filter((d) => d.status === "draft")
-      .sort((a, b) => a.step_index - b.step_index)[0];
-  }, []);
-
   const decideAll = useCallback(
     (leadId: string, status: "approved" | "rejected") => {
       // Capture which drafts we just decided on for persistence (post-state-update).
@@ -96,32 +88,24 @@ export function DraftsClient({ initialRows }: Props) {
   const decideOne = useCallback(
     (leadId: string, draftId: string, status: "approved" | "rejected", editedBody?: string) => {
       const ctx = findRowAndDraft(leadId, draftId);
-      // Mutual exclusivity: approving one draft auto-rejects the lead's other
-      // pending drafts, so exactly one message goes out per lead.
-      const siblings =
-        status === "approved" && ctx
-          ? ctx.row.drafts.filter((d) => d.id !== draftId && d.status === "draft")
-          : [];
-
+      // Per-draft decision. Drafts for a lead form a SEQUENCE (connection note
+      // first, then the DM after they accept) — approving one doesn't touch the
+      // others, so the whole sequence can be approved.
       setRows((prev) =>
         prev.map((r) =>
           r.lead.id === leadId
             ? {
                 ...r,
-                drafts: r.drafts.map((d) => {
-                  if (d.id === draftId) {
-                    return {
-                      ...d,
-                      status,
-                      edited_body: editedBody ?? d.edited_body,
-                      decided_at: new Date().toISOString(),
-                    };
-                  }
-                  if (status === "approved" && d.status === "draft") {
-                    return { ...d, status: "rejected" as const, decided_at: new Date().toISOString() };
-                  }
-                  return d;
-                }),
+                drafts: r.drafts.map((d) =>
+                  d.id === draftId
+                    ? {
+                        ...d,
+                        status,
+                        edited_body: editedBody ?? d.edited_body,
+                        decided_at: new Date().toISOString(),
+                      }
+                    : d,
+                ),
               }
             : r,
         ),
@@ -134,9 +118,6 @@ export function DraftsClient({ initialRows }: Props) {
           action: status === "approved" ? "approve" : "reject",
           editedBody,
         });
-        for (const sib of siblings) {
-          void persistDecision({ row: ctx.row, draft: sib, action: "reject" });
-        }
       }
     },
     [findRowAndDraft],
@@ -158,8 +139,7 @@ export function DraftsClient({ initialRows }: Props) {
         move(-1);
       } else if (e.key === "a" && active) {
         e.preventDefault();
-        const primary = primaryDraftOf(active);
-        if (primary) decideOne(active.lead.id, primary.id, "approved");
+        decideAll(active.lead.id, "approved");
       } else if (e.key === "r" && active) {
         e.preventDefault();
         decideAll(active.lead.id, "rejected");
@@ -172,7 +152,7 @@ export function DraftsClient({ initialRows }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [active, move, decideAll, decideOne, primaryDraftOf]);
+  }, [active, move, decideAll]);
 
   if (pendingRows.length === 0) {
     return (

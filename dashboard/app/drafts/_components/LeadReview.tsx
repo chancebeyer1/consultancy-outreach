@@ -65,19 +65,26 @@ export function LeadReview({ row, onDecideOne, onDecideAll }: Props) {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-xs uppercase tracking-wide text-neutral-500">
-                Drafts ({pending.length} pending)
+                Sequence ({pending.length} pending)
               </h3>
               <p className="mt-0.5 text-[11px] text-neutral-600">
-                Approve one — the rest auto-reject so only one message sends. (a = approve the
-                connection note)
+                Connection note sends first; the DM auto-sends only after they accept.
               </p>
             </div>
-            <button
-              onClick={() => onDecideAll(lead.id, "rejected")}
-              className="rounded-md bg-red-900/40 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-900/70"
-            >
-              Skip lead (r)
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onDecideAll(lead.id, "approved")}
+                className="rounded-md bg-emerald-900/50 px-3 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-900"
+              >
+                Approve sequence (a)
+              </button>
+              <button
+                onClick={() => onDecideAll(lead.id, "rejected")}
+                className="rounded-md bg-red-900/40 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-900/70"
+              >
+                Skip lead (r)
+              </button>
+            </div>
           </div>
 
           {pending.map((d) => (
