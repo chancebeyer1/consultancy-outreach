@@ -187,6 +187,119 @@ def _record_send(draft_id: str, response: dict[str, Any]) -> None:
         conn.close()
 
 
+def send_approved_first_touch(
+    *,
+    dry_run: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Send approved FIRST-TOUCH drafts straight from the DB.
+
+    The dashboard's approve action sets drafts.status='approved' in Postgres. This
+    sends those approved cold-opener drafts (linkedin_connect / email) for leads with
+    no prior send, via Unipile — the DB-driven equivalent of scripts/send_approvals.py,
+    so first contact works on Modal without the operator's laptop. Follow-ups (the DM
+    after a connection is accepted, etc.) stay with progress_sequences().
+
+    First touch is cold-sendable channels only: linkedin_dm is excluded here because
+    you can't DM a non-connection — it's sent post-accept by the sequence engine.
+
+    Idempotent: a draft with a sends row is skipped; rolling-window quota enforced.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select d.id, d.lead_id, d.channel, d.body, d.edited_body,
+                       l.linkedin_url, l.name, l.company
+                from drafts d
+                join leads l on l.id = d.lead_id
+                where d.status = 'approved'
+                  and d.channel in ('linkedin_connect', 'email')
+                  and not exists (select 1 from sends s where s.draft_id = d.id)
+                  and not exists (
+                      select 1 from sends s2
+                      join drafts d2 on d2.id = s2.draft_id
+                      where d2.lead_id = d.lead_id
+                  )
+                order by d.generated_at asc
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if limit is not None:
+        rows = rows[:limit]
+
+    pushed: list[dict[str, Any]] = []
+    blocked_quota: list[str] = []
+    blocked_no_recipient: list[str] = []
+    failed: list[dict[str, Any]] = []
+    remaining: dict[str, int] = {}
+
+    def _has_quota(channel: str) -> bool:
+        if channel not in remaining:
+            remaining[channel] = quota(channel).allowed
+        return remaining[channel] > 0
+
+    for draft_id, lead_id, channel, body, edited_body, url, name, company in rows:
+        first, _, last = (name or "").partition(" ")
+        lead = {
+            "linkedin_url": url,
+            "first_name": first or None,
+            "last_name": last or None,
+            "company": company,
+        }
+        if channel in LINKEDIN_CHANNELS and not url:
+            blocked_no_recipient.append(str(lead_id))
+            continue
+        if channel in EMAIL_CHANNELS and not lead.get("email"):
+            blocked_no_recipient.append(str(lead_id))
+            continue
+
+        draft = {"id": str(draft_id), "body": edited_body or body}
+
+        if dry_run:
+            pushed.append(
+                {"lead_id": str(lead_id), "channel": channel, "draft_id": str(draft_id), "name": name}
+            )
+            continue
+
+        if not _has_quota(channel):
+            blocked_quota.append(str(lead_id))
+            continue
+
+        try:
+            response = _send_via_unipile(lead, draft, channel)
+            _record_send(draft["id"], response)
+            remaining[channel] -= 1
+            pushed.append(
+                {"lead_id": str(lead_id), "channel": channel, "draft_id": str(draft_id), "name": name}
+            )
+        except Exception as e:  # noqa: BLE001
+            if is_invite_limit_error(e):
+                remaining[channel] = 0
+                blocked_quota.append(str(lead_id))
+                continue
+            failed.append({"lead_id": str(lead_id), "error": str(e)})
+
+    return {
+        "candidates": len(rows),
+        "pushed": len(pushed),
+        "blocked_quota": len(blocked_quota),
+        "blocked_no_recipient": len(blocked_no_recipient),
+        "failed": len(failed),
+        "details": {
+            "pushed": pushed,
+            "blocked_quota": blocked_quota,
+            "blocked_no_recipient": blocked_no_recipient,
+            "failed": failed,
+        },
+        "dry_run": dry_run,
+    }
+
+
 def progress_sequences(
     *,
     dry_run: bool = False,

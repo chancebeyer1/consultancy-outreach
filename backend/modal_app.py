@@ -160,6 +160,33 @@ def progress_sequences_now(dry_run: bool = False, limit: int | None = None) -> d
     return progress_sequences(dry_run=dry_run, limit=limit)
 
 
+@app.function(
+    schedule=modal.Cron("47 * * * *"),  # every hour at :47 (offset from the others)
+    secrets=secrets,
+    timeout=900,
+    retries=1,
+)
+def send_approved_cron() -> dict:
+    """Send first-touch drafts the operator approved in the dashboard.
+
+    Dashboard approve → drafts.status='approved' in Postgres → this cron sends the
+    cold opener (linkedin_connect / email) via Unipile, respecting the rolling-window
+    cap. The DB-driven counterpart to scripts/send_approvals.py, so first contact runs
+    on Modal without the operator's machine. Follow-ups stay with progress_sequences.
+    """
+    from workers.sequence_send import send_approved_first_touch
+
+    return send_approved_first_touch(limit=20)
+
+
+@app.function(secrets=secrets, timeout=600)
+def send_approved_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand first-touch send. `modal run modal_app.py::send_approved_now --dry-run`."""
+    from workers.sequence_send import send_approved_first_touch
+
+    return send_approved_first_touch(dry_run=dry_run, limit=limit)
+
+
 @app.function(secrets=secrets, timeout=600)
 def pull_replies_now(limit: int = 100, include_read: bool = False) -> dict:
     """On-demand trigger of the same logic — for ad-hoc runs from CLI.
