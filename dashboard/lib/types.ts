@@ -134,6 +134,21 @@ export interface LeadRow {
   last_sent_at: string | null;
 }
 
+// One outbound step in a lead's sequence (what we sent, when).
+export interface SequenceStep {
+  channel: Channel;
+  sent_at: string;
+}
+
+// One row in the /sequences view: a contacted lead's outbound timeline, whether
+// they replied, and a human description of what happens next.
+export interface SequenceRow {
+  lead: Lead;
+  steps: SequenceStep[];
+  has_reply: boolean;
+  awaiting: string;
+}
+
 // Aggregate view used by the /drafts review surface: one row per lead with
 // its score, all pending drafts, and the enrichment summary needed to judge.
 export interface DraftReviewRow {

@@ -70,6 +70,27 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
     setOk(false);
   }
 
+  // One-click pause/resume from the list — posts the full campaign with status
+  // flipped so no other fields are touched. Paused campaigns stop sourcing + sending.
+  async function toggleStatus(c: Campaign) {
+    const next = c.status === "active" ? "paused" : "active";
+    setError(null);
+    try {
+      const res = await fetch("/api/campaigns", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...toForm(c), status: next }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.persisted === false) {
+        throw new Error(json.error ?? json.reason ?? `HTTP ${res.status}`);
+      }
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function save() {
     setSaving(true);
     setError(null);
@@ -137,7 +158,7 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
               <li className="text-xs italic text-neutral-600">none yet</li>
             )}
             {initialCampaigns.map((c) => (
-              <li key={c.id}>
+              <li key={c.id} className="relative">
                 <button
                   type="button"
                   onClick={() => {
@@ -151,7 +172,7 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
                       : "border-neutral-800 bg-neutral-950 hover:border-neutral-700"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center justify-between gap-2 pr-16">
                     <span className="truncate">{c.name}</span>
                     {c.is_default && <span className="text-amber-400">★</span>}
                   </div>
@@ -160,6 +181,20 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
                     <StatusBadge status={c.status} />
                   </div>
                 </button>
+                {writable && c.status !== "archived" && (
+                  <button
+                    type="button"
+                    onClick={() => void toggleStatus(c)}
+                    title={c.status === "active" ? "Pause — stops sourcing + sending" : "Resume"}
+                    className={`absolute right-2 top-2 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+                      c.status === "active"
+                        ? "border-amber-800/60 text-amber-400 hover:bg-amber-950/40"
+                        : "border-emerald-800/60 text-emerald-400 hover:bg-emerald-950/40"
+                    }`}
+                  >
+                    {c.status === "active" ? "Pause" : "Resume"}
+                  </button>
+                )}
               </li>
             ))}
           </ul>

@@ -23,6 +23,7 @@ import type {
   ReplyReviewRow,
   Score,
   Segment,
+  SequenceRow,
   Trigger,
 } from "./types";
 
@@ -185,6 +186,102 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
     display_status: statusFor(lead.id),
     last_sent_at: sentByLead.get(lead.id)?.lastSentAt ?? null,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Sequences — /sequences view (contacted leads + their outbound timeline)
+// ---------------------------------------------------------------------------
+
+export async function getSequenceRows(campaignId?: string): Promise<SequenceRow[]> {
+  if (dataSource === "mock") {
+    return MOCK_REPLY_ROWS.filter((r) => !campaignId || r.lead.campaign_id === campaignId).map(
+      (r) => ({
+        lead: r.lead,
+        steps: [{ channel: "linkedin_connect" as Channel, sent_at: r.reply.received_at }],
+        has_reply: true,
+        awaiting: "Replied — handle in /replies",
+      }),
+    );
+  }
+  if (dataSource === "file") {
+    return [];
+  }
+  return loadSequenceRowsFromSupabase(campaignId);
+}
+
+function describeNext(steps: { channel: Channel }[], hasReply: boolean): string {
+  if (hasReply) return "Replied — handle in /replies";
+  const channels = steps.map((s) => s.channel);
+  const last = channels[channels.length - 1];
+  if (last === "linkedin_connect") {
+    return channels.includes("linkedin_dm")
+      ? "DM sent — awaiting reply"
+      : "Connection request sent — DM follows once accepted";
+  }
+  if (last?.startsWith("linkedin_dm")) return "DM sent — awaiting reply";
+  if (last?.startsWith("linkedin_followup")) return "Follow-up sent — awaiting reply";
+  if (last?.startsWith("email")) return "Email sent — awaiting reply";
+  return "In sequence";
+}
+
+async function loadSequenceRowsFromSupabase(campaignId?: string): Promise<SequenceRow[]> {
+  const supabase = await serverClient();
+
+  // Sent drafts identify which leads are in a sequence + the channel of each step.
+  const { data: sentDrafts, error: sdErr } = await supabase
+    .from("drafts")
+    .select("id, lead_id, channel")
+    .eq("status", "sent");
+  if (sdErr) throw sdErr;
+  const sd = (sentDrafts ?? []) as Array<{ id: string; lead_id: string; channel: Channel }>;
+  if (sd.length === 0) return [];
+
+  const leadIds = Array.from(new Set(sd.map((d) => d.lead_id)));
+  const draftIds = sd.map((d) => d.id);
+
+  const [leadsRes, sendsRes, repliesRes] = await Promise.all([
+    supabase.from("leads").select("*").in("id", leadIds),
+    supabase.from("sends").select("draft_id, sent_at").in("draft_id", draftIds),
+    supabase.from("replies").select("lead_id").in("lead_id", leadIds),
+  ]);
+  if (leadsRes.error) throw leadsRes.error;
+  if (sendsRes.error) throw sendsRes.error;
+  if (repliesRes.error) throw repliesRes.error;
+
+  const leads = (leadsRes.data ?? []) as unknown as Lead[];
+  const leadById = new Map(leads.map((l) => [l.id, l]));
+  const sentAtByDraft = new Map(
+    ((sendsRes.data ?? []) as Array<{ draft_id: string; sent_at: string }>).map((s) => [
+      s.draft_id,
+      s.sent_at,
+    ]),
+  );
+  const repliedLeads = new Set(
+    ((repliesRes.data ?? []) as Array<{ lead_id: string | null }>)
+      .map((r) => r.lead_id)
+      .filter((id): id is string => !!id),
+  );
+
+  const stepsByLead = new Map<string, Array<{ channel: Channel; sent_at: string }>>();
+  for (const d of sd) {
+    const sent_at = sentAtByDraft.get(d.id);
+    if (!sent_at) continue;
+    const list = stepsByLead.get(d.lead_id) ?? [];
+    list.push({ channel: d.channel, sent_at });
+    stepsByLead.set(d.lead_id, list);
+  }
+
+  return [...stepsByLead.entries()]
+    .map(([leadId, steps]) => {
+      const lead = leadById.get(leadId);
+      if (!lead) return null;
+      steps.sort((a, b) => a.sent_at.localeCompare(b.sent_at));
+      const has_reply = repliedLeads.has(leadId);
+      return { lead, steps, has_reply, awaiting: describeNext(steps, has_reply) } satisfies SequenceRow;
+    })
+    .filter((r): r is SequenceRow => r !== null)
+    .filter((r) => !campaignId || r.lead.campaign_id === campaignId)
+    .sort((a, b) => (b.steps.at(-1)?.sent_at ?? "").localeCompare(a.steps.at(-1)?.sent_at ?? ""));
 }
 
 export type DraftDecision = { draftId: string; action: "approve" | "reject"; editedBody?: string };

@@ -97,16 +97,22 @@ def _load_state() -> tuple[dict, dict, dict]:
             ids = list(sends_by_lead.keys())
             if ids:
                 cur.execute(
-                    "select id, linkedin_url, name, company from leads where id = any(%s::uuid[])",
+                    """
+                    select l.id, l.linkedin_url, l.name, l.company, coalesce(c.status, 'active')
+                    from leads l
+                    left join campaigns c on c.id = l.campaign_id
+                    where l.id = any(%s::uuid[])
+                    """,
                     (ids,),
                 )
-                for lid, url, name, company in cur.fetchall():
+                for lid, url, name, company, camp_status in cur.fetchall():
                     first, _, last = (name or "").partition(" ")
                     leads_by_id[str(lid)] = {
                         "linkedin_url": url,
                         "first_name": first or None,
                         "last_name": last or None,
                         "company": company,
+                        "campaign_status": camp_status,
                     }
     finally:
         conn.close()
@@ -214,8 +220,10 @@ def send_approved_first_touch(
                        l.linkedin_url, l.name, l.company
                 from drafts d
                 join leads l on l.id = d.lead_id
+                left join campaigns c on c.id = l.campaign_id
                 where d.status = 'approved'
                   and d.channel in ('linkedin_connect', 'email')
+                  and (c.status is null or c.status = 'active')  -- paused/archived campaigns don't send
                   and not exists (select 1 from sends s where s.draft_id = d.id)
                   and not exists (
                       select 1 from sends s2
@@ -353,6 +361,9 @@ def progress_sequences(
             lead = leads_by_id.get(a.lead_id)
             if not lead:
                 blocked_no_recipient.append(a.lead_id)
+                continue
+            # Paused/archived campaigns don't progress — pausing stops all sending.
+            if lead.get("campaign_status") not in (None, "active"):
                 continue
             with conn.cursor() as cur:
                 draft = _next_draft_for(cur, lead_id=a.lead_id, channel=a.next_channel)
