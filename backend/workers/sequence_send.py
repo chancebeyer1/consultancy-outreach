@@ -178,8 +178,34 @@ def _send_via_unipile(lead: dict, draft: dict, channel: str) -> dict[str, Any]:
     return unipile.send_linkedin_message(provider_id, body)
 
 
-def _record_send(draft_id: str, response: dict[str, Any]) -> None:
-    """Mark a draft as sent and add the corresponding sends row."""
+def _to_connect_note(body: str, limit: int = 280) -> str:
+    """Trim an InMail body to a connection-note-length opener for the no-credits
+    fallback: <= limit chars, cut at the last sentence boundary so it reads clean."""
+    body = (body or "").strip()
+    if len(body) <= limit:
+        return body
+    head = body[:limit]
+    for sep in (". ", "? ", "! "):
+        idx = head.rfind(sep)
+        if idx > 60:
+            return head[: idx + 1].strip()
+    idx = head.rfind(" ")
+    return (head[:idx] if idx > 60 else head).strip()
+
+
+def _record_send(
+    draft_id: str,
+    response: dict[str, Any],
+    *,
+    sent_channel: str | None = None,
+    sent_body: str | None = None,
+) -> None:
+    """Mark a draft as sent and add the sends row.
+
+    When a send fell back to a different channel (InMail → connection request,
+    out of credits), pass sent_channel/sent_body to rewrite the draft so the
+    stored channel + body match what actually went out.
+    """
     external_id = _external_id(response)
     now = datetime.now(UTC)
     conn = _connect()
@@ -193,10 +219,16 @@ def _record_send(draft_id: str, response: dict[str, Any]) -> None:
                     """,
                     (draft_id, external_id, now),
                 )
-                cur.execute(
-                    "update drafts set status = 'sent', decided_at = %s where id = %s",
-                    (now, draft_id),
-                )
+                if sent_channel is not None:
+                    cur.execute(
+                        "update drafts set status='sent', channel=%s, body=%s, decided_at=%s where id=%s",
+                        (sent_channel, sent_body, now, draft_id),
+                    )
+                else:
+                    cur.execute(
+                        "update drafts set status = 'sent', decided_at = %s where id = %s",
+                        (now, draft_id),
+                    )
     finally:
         conn.close()
 
@@ -252,12 +284,25 @@ def send_approved_first_touch(
     blocked_quota: list[str] = []
     blocked_no_recipient: list[str] = []
     failed: list[dict[str, Any]] = []
+    fell_back: list[str] = []
     remaining: dict[str, int] = {}
 
     def _has_quota(channel: str) -> bool:
         if channel not in remaining:
             remaining[channel] = quota(channel).allowed
         return remaining[channel] > 0
+
+    # InMail credit budget for this run — fetched lazily once, decremented as spent.
+    # When it hits 0, InMail drafts fall back to a connection request.
+    inmail_left: dict[str, int | None] = {"n": None}
+
+    def _inmail_credits() -> int:
+        if inmail_left["n"] is None:
+            try:
+                inmail_left["n"] = int(unipile.inmail_balance().get("sales_navigator") or 0)
+            except Exception:  # noqa: BLE001 — treat an unreadable balance as empty
+                inmail_left["n"] = 0
+        return inmail_left["n"] or 0
 
     for draft_id, lead_id, channel, body, edited_body, url, name, company in rows:
         first, _, last = (name or "").partition(" ")
@@ -274,7 +319,16 @@ def send_approved_first_touch(
             blocked_no_recipient.append(str(lead_id))
             continue
 
-        draft = {"id": str(draft_id), "body": edited_body or body}
+        send_channel = channel
+        send_body = edited_body or body
+        fell = False
+        # Credit-exhaustion fallback: out of InMail credits → send a connection
+        # request instead (trim the InMail to a connect-note length) so the lead
+        # still gets contacted rather than the send failing.
+        if channel == "linkedin_inmail" and not dry_run and _inmail_credits() <= 0:
+            send_channel = "linkedin_connect"
+            send_body = _to_connect_note(send_body)
+            fell = True
 
         if dry_run:
             pushed.append(
@@ -282,20 +336,36 @@ def send_approved_first_touch(
             )
             continue
 
-        if not _has_quota(channel):
+        if not _has_quota(send_channel):
             blocked_quota.append(str(lead_id))
             continue
 
         try:
-            response = _send_via_unipile(lead, draft, channel)
-            _record_send(draft["id"], response)
-            remaining[channel] -= 1
-            pushed.append(
-                {"lead_id": str(lead_id), "channel": channel, "draft_id": str(draft_id), "name": name}
+            response = _send_via_unipile(
+                lead, {"id": str(draft_id), "body": send_body}, send_channel
             )
+            _record_send(
+                str(draft_id),
+                response,
+                sent_channel=send_channel if fell else None,
+                sent_body=send_body if fell else None,
+            )
+            remaining[send_channel] -= 1
+            if send_channel == "linkedin_inmail" and inmail_left["n"] is not None:
+                inmail_left["n"] -= 1
+            rec = {
+                "lead_id": str(lead_id),
+                "channel": send_channel,
+                "draft_id": str(draft_id),
+                "name": name,
+            }
+            if fell:
+                rec["fell_back_from"] = "linkedin_inmail"
+                fell_back.append(str(lead_id))
+            pushed.append(rec)
         except Exception as e:  # noqa: BLE001
             if is_invite_limit_error(e):
-                remaining[channel] = 0
+                remaining[send_channel] = 0
                 blocked_quota.append(str(lead_id))
                 continue
             failed.append({"lead_id": str(lead_id), "error": str(e)})
@@ -303,11 +373,13 @@ def send_approved_first_touch(
     return {
         "candidates": len(rows),
         "pushed": len(pushed),
+        "fell_back_to_connect": len(fell_back),
         "blocked_quota": len(blocked_quota),
         "blocked_no_recipient": len(blocked_no_recipient),
         "failed": len(failed),
         "details": {
             "pushed": pushed,
+            "fell_back": fell_back,
             "blocked_quota": blocked_quota,
             "blocked_no_recipient": blocked_no_recipient,
             "failed": failed,
