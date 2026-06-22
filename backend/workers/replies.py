@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from typing import Any, Iterable
 
 from clients import unipile
+from config import Config
 from workers import reply_triage
 
 
@@ -202,5 +203,8 @@ def fetch_and_classify_new_replies(
     seen = set(seen_message_ids)
     records: list[dict[str, Any]] = []
     records.extend(_linkedin_replies(seen, limit, only_with_unread))
-    records.extend(_email_replies(seen, limit, only_with_unread))
+    # Email is optional — only poll the inbox when a mailbox is connected in Unipile.
+    # (LinkedIn-only setups leave UNIPILE_EMAIL_ACCOUNT_ID unset.)
+    if Config.unipile_email_account_id:
+        records.extend(_email_replies(seen, limit, only_with_unread))
     return records

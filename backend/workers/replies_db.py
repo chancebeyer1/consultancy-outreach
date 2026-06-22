@@ -119,7 +119,7 @@ def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
                              sentiment, intent, summary, suggested_reply,
                              next_action, received_at)
                         values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        on conflict (external_id) do nothing
+                        on conflict (external_id) where external_id is not null do nothing
                         """,
                         (
                             lead_id,
