@@ -1,14 +1,22 @@
-"""Drafting pipeline: insight extraction → hook selection → channel drafts."""
+"""Drafting pipeline: insight extraction → hook selection → channel drafts.
+
+The persona (offer/voice) the drafts pitch comes from the active campaign's
+cached system prefix; the concrete sales link comes from `campaign.landing_url`.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from clients import claude
 from config import Config
-from prompts_loader import load_prompt
+from prompts_loader import load_prompt, system_prefix
+
+if TYPE_CHECKING:
+    from campaigns_loader import Campaign
 
 
 # Channel budget — max characters for each kind of draft.
@@ -17,6 +25,21 @@ CHANNEL_BUDGETS = {
     "linkedin_dm": 500,
     "email": 1000,  # ~120 words incl subject
 }
+
+
+def _humanize(text: str) -> str:
+    """Scrub the AI tells from a draft so it reads as something a person typed.
+
+    Hard rule: NO em/en dashes (—, –) — the #1 "this was AI-written" giveaway. We
+    swap them for the natural human appositive (a comma) and tidy the spacing. This
+    runs on every draft, so even if the model slips one in, it never ships.
+    """
+    text = text.replace(" — ", ", ").replace(" – ", ", ")
+    text = text.replace("—", ", ").replace("–", ", ")
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)  # no space before punctuation
+    text = re.sub(r",\s*,+", ",", text)            # collapse doubled commas
+    text = re.sub(r"[ \t]{2,}", " ", text)         # collapse runs of spaces
+    return text.strip()
 
 
 @dataclass
@@ -36,13 +59,18 @@ class Hook:
         )
 
 
-def extract_hooks(enrichment: dict[str, Any]) -> list[Hook]:
+def extract_hooks(
+    enrichment: dict[str, Any],
+    *,
+    campaign: Campaign | None = None,
+) -> list[Hook]:
     """Run the insight_extraction prompt. Returns a list of Hook objects."""
     instruction = load_prompt("insight_extraction")
     payload = json.dumps(_compact_for_hooks(enrichment), default=str, indent=2)
     raw = claude.call_json(
         instruction=instruction,
         user_payload=payload,
+        system_prefix=system_prefix(campaign) if campaign else None,
         model=Config.claude_model_draft,
         temperature=0.4,
         max_tokens=2048,
@@ -91,7 +119,6 @@ def _compact_for_hooks(enrichment: dict[str, Any]) -> dict[str, Any]:
             for p in (enrichment.get("recent_posts") or [])[:10]
         ],
         "company_signals": enrichment.get("company_signals") or {},
-        "github": enrichment.get("github") or {},
     }
 
 
@@ -99,6 +126,8 @@ def draft_for_channel(
     channel: str,
     enrichment: dict[str, Any],
     hook: Hook | None,
+    *,
+    campaign: Campaign | None = None,
 ) -> str:
     """Generate a single draft for the given channel."""
     if channel not in CHANNEL_BUDGETS:
@@ -113,12 +142,13 @@ def draft_for_channel(
 
     profile = enrichment.get("profile") or {}
     first_name = (profile.get("first_name") or "").strip()
+    landing_url = campaign.landing_url if campaign else Config.landing_url
     payload = {
         "prospect_first_name": first_name,
         "prospect_full_name": profile.get("full_name"),
         "prospect_headline": profile.get("headline"),
         "prospect_company": enrichment.get("company"),
-        "landing_url": Config.landing_url,
+        "landing_url": landing_url,
         "chosen_hook": {
             "type": hook.type if hook else None,
             "reference": hook.reference if hook else None,
@@ -129,24 +159,36 @@ def draft_for_channel(
         "channel": channel,
         "char_budget": CHANNEL_BUDGETS[channel],
     }
-    return claude.call(
+    raw = claude.call(
         instruction=instruction,
         user_payload=json.dumps(payload, default=str, indent=2),
+        system_prefix=system_prefix(campaign) if campaign else None,
         model=Config.claude_model_draft,
-        temperature=0.8,
         max_tokens=600,
     )
+    return _humanize(raw)
 
 
-def draft_all_channels(enrichment: dict[str, Any]) -> dict[str, Any]:
+def draft_all_channels(
+    enrichment: dict[str, Any],
+    *,
+    campaign: Campaign | None = None,
+) -> dict[str, Any]:
     """Convenience: produce hooks + drafts for all 3 channels in one go."""
-    hooks = extract_hooks(enrichment)
+    hooks = extract_hooks(enrichment, campaign=campaign)
     chosen = pick_hook(hooks, "linkedin_dm")  # share one hook across channels for consistency
+    # A campaign can restrict its initial channels (e.g. a LinkedIn-only research
+    # sprint skips email); None → draft all of them.
+    channels = (
+        [c for c in campaign.channels if c in CHANNEL_BUDGETS]
+        if campaign and campaign.channels
+        else list(CHANNEL_BUDGETS)
+    )
     return {
         "hooks": [h.__dict__ for h in hooks],
         "chosen_hook": chosen.__dict__ if chosen else None,
         "drafts": {
-            channel: draft_for_channel(channel, enrichment, chosen)
-            for channel in CHANNEL_BUDGETS
+            channel: draft_for_channel(channel, enrichment, chosen, campaign=campaign)
+            for channel in channels
         },
     }

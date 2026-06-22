@@ -4,10 +4,11 @@
 //   - supabase: live DB (Phase 2)
 
 import { loadDraftReviewRowsFromFile } from "./jsonl-source";
-import { MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
+import { MOCK_CAMPAIGNS, MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
 import { loadReplyRowsFromFile } from "./replies-source";
 import { dataSource, serverClient } from "./supabase";
 import type {
+  Campaign,
   Channel,
   Draft,
   DraftReviewRow,
@@ -23,14 +24,47 @@ import type {
   Trigger,
 } from "./types";
 
-export async function getDraftReviewRows(): Promise<DraftReviewRow[]> {
+// `campaignId` scopes the result to one campaign. `undefined`/empty = all
+// campaigns. File mode has no campaign metadata, so the filter is a no-op there.
+export async function getDraftReviewRows(campaignId?: string): Promise<DraftReviewRow[]> {
   if (dataSource === "mock") {
-    return MOCK_DRAFT_ROWS;
+    return filterByCampaign(MOCK_DRAFT_ROWS, campaignId, (r) => r.lead.campaign_id);
   }
   if (dataSource === "file") {
     return loadDraftReviewRowsFromFile();
   }
-  return loadDraftReviewRowsFromSupabase();
+  return loadDraftReviewRowsFromSupabase(campaignId);
+}
+
+function filterByCampaign<T>(
+  rows: T[],
+  campaignId: string | undefined,
+  getId: (row: T) => string | null,
+): T[] {
+  if (!campaignId) return rows;
+  return rows.filter((r) => getId(r) === campaignId);
+}
+
+// ---------------------------------------------------------------------------
+// Campaigns — list for the selector + /campaigns management surface
+// ---------------------------------------------------------------------------
+
+export async function getCampaigns(): Promise<Campaign[]> {
+  if (dataSource === "mock") {
+    return MOCK_CAMPAIGNS;
+  }
+  if (dataSource === "file") {
+    // No campaign registry offline; the selector falls back to "all".
+    return [];
+  }
+  const supabase = await serverClient();
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select("*")
+    .order("is_default", { ascending: false })
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as unknown as Campaign[];
 }
 
 export type DraftDecision = { draftId: string; action: "approve" | "reject"; editedBody?: string };
@@ -54,7 +88,6 @@ type SupabaseEnrichmentRow = {
   hooks_json: Hook[] | null;
   recent_posts_json: Array<{ text?: string | null }> | null;
   company_signals_json: Record<string, Array<{ title?: string | null }>> | null;
-  github_json: { top_repos?: Array<{ topics?: string[] }> } | null;
 };
 
 type SupabaseLeadRow = {
@@ -66,6 +99,7 @@ type SupabaseLeadRow = {
   company_domain: string | null;
   role: string | null;
   location: string | null;
+  campaign_id: string | null;
   segment: Segment | null;
   source: string | null;
   trigger: Trigger | null;
@@ -99,7 +133,7 @@ type SupabaseDraftRow = {
   decided_at: string | null;
 };
 
-async function loadDraftReviewRowsFromSupabase(): Promise<DraftReviewRow[]> {
+async function loadDraftReviewRowsFromSupabase(campaignId?: string): Promise<DraftReviewRow[]> {
   const supabase = await serverClient();
 
   // 1. All pending drafts (single source of which leads to display).
@@ -120,7 +154,7 @@ async function loadDraftReviewRowsFromSupabase(): Promise<DraftReviewRow[]> {
     supabase.from("scores").select("*").in("lead_id", leadIds),
     supabase
       .from("enrichments")
-      .select("lead_id, hooks_json, recent_posts_json, company_signals_json, github_json")
+      .select("lead_id, hooks_json, recent_posts_json, company_signals_json")
       .in("lead_id", leadIds),
   ]);
   if (leadsRes.error) throw leadsRes.error;
@@ -167,7 +201,6 @@ async function loadDraftReviewRowsFromSupabase(): Promise<DraftReviewRow[]> {
 
       const recentPosts = enrich?.recent_posts_json ?? [];
       const companySignals = enrich?.company_signals_json ?? {};
-      const topRepos = enrich?.github_json?.top_repos ?? [];
 
       return {
         lead: lead as unknown as Lead,
@@ -183,27 +216,25 @@ async function loadDraftReviewRowsFromSupabase(): Promise<DraftReviewRow[]> {
             .flatMap((arr) => arr.map((r) => r.title ?? ""))
             .filter((t) => t.length > 0)
             .slice(0, 6),
-          github_topics: Array.from(
-            new Set(topRepos.flatMap((r) => r.topics ?? [])),
-          ).slice(0, 10),
         },
       } satisfies DraftReviewRow;
     })
-    .filter((r): r is DraftReviewRow => r !== null);
+    .filter((r): r is DraftReviewRow => r !== null)
+    .filter((r) => !campaignId || r.lead.campaign_id === campaignId);
 }
 
 // ---------------------------------------------------------------------------
 // Replies — /replies page
 // ---------------------------------------------------------------------------
 
-export async function getReplyRows(): Promise<ReplyReviewRow[]> {
+export async function getReplyRows(campaignId?: string): Promise<ReplyReviewRow[]> {
   if (dataSource === "mock") {
-    return MOCK_REPLY_ROWS;
+    return filterByCampaign(MOCK_REPLY_ROWS, campaignId, (r) => r.lead.campaign_id);
   }
   if (dataSource === "file") {
     return loadReplyRowsFromFile();
   }
-  return loadReplyRowsFromSupabase();
+  return loadReplyRowsFromSupabase(campaignId);
 }
 
 type SupabaseReplyRow = {
@@ -220,7 +251,7 @@ type SupabaseReplyRow = {
   received_at: string;
 };
 
-async function loadReplyRowsFromSupabase(): Promise<ReplyReviewRow[]> {
+async function loadReplyRowsFromSupabase(campaignId?: string): Promise<ReplyReviewRow[]> {
   const supabase = await serverClient();
 
   // Unhandled replies first, ordered by recency.
@@ -278,5 +309,6 @@ async function loadReplyRowsFromSupabase(): Promise<ReplyReviewRow[]> {
         original_message: lastOutboundByLead.get(r.lead_id) ?? null,
       } satisfies ReplyReviewRow;
     })
-    .filter((r): r is ReplyReviewRow => r !== null);
+    .filter((r): r is ReplyReviewRow => r !== null)
+    .filter((r) => !campaignId || r.lead.campaign_id === campaignId);
 }

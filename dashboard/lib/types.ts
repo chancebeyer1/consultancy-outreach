@@ -1,11 +1,10 @@
 // DB types — mirrors backend/db/schema.sql. Regenerate from Supabase with
 // `supabase gen types typescript` once the project is provisioned.
 
-export type Segment =
-  | "ai_native_consultancy"
-  | "traditional_consultancy_pivot"
-  | "product_company"
-  | "out_of_icp";
+// Free-text now: each campaign's ICP names its own segments (the scorer emits
+// whatever labels the active ICP defines, e.g. "ai_native_consultancy" or
+// "luxury_listing_agent"). Kept as a named alias for readability at call sites.
+export type Segment = string;
 
 export type Trigger =
   | "list"
@@ -55,6 +54,7 @@ export interface Lead {
   company_domain: string | null;
   role: string | null;
   location: string | null;
+  campaign_id: string | null;
   segment: Segment | null;
   source: string | null;
   trigger: Trigger | null;
@@ -62,6 +62,25 @@ export interface Lead {
   notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// A campaign is a persona bundle: audience (ICP) + offer, with optional
+// per-campaign voice/style overrides and sales-asset links. Mirrors the
+// `campaigns` table in backend/db/schema.sql. The runtime source of truth
+// for dynamic targeting; seeded from backend/campaigns/<slug>/.
+export interface Campaign {
+  id: string;
+  slug: string | null;
+  name: string;
+  icp_md: string | null;
+  offer_md: string | null;
+  style_md: string | null;
+  voice_md: string | null;
+  landing_url: string | null;
+  calcom_url: string | null;
+  is_default: boolean;
+  status: "active" | "paused" | "archived";
+  started_at?: string;
 }
 
 export interface Hook {
@@ -106,7 +125,6 @@ export interface DraftReviewRow {
   enrichment_summary: {
     recent_post_excerpts: string[];
     company_signal_headlines: string[];
-    github_topics: string[];
   };
 }
 

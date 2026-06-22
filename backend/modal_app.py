@@ -3,11 +3,15 @@ without operator intervention.
 
 Functions
 ---------
-- `pull_replies_cron`           every 15 min   poll Heyreach inbox, classify
-                                               new replies, persist to Postgres.
-- `pull_replies_now`            on-demand      same logic, one-shot. Trigger
-                                               from CLI: `modal run modal_app.py::pull_replies_now`.
-- `health`                      on-demand      sanity check that env + deps load.
+- `unipile_webhook`             on event       primary reply path — Unipile POSTs
+                                               new messages/emails; we classify +
+                                               persist within seconds.
+- `pull_replies_cron`           hourly         fallback poll of Unipile (LinkedIn
+                                               chats + email) in case a webhook is
+                                               missed; classify, persist to Postgres.
+- `progress_sequences_cron`     hourly         advance any lead whose next step is due.
+- `pull_replies_now`            on-demand      same poll logic, one-shot.
+- `health`                      on-demand      env + deps + DB + Unipile ping.
 
 Deploy
 ------
@@ -31,8 +35,10 @@ once with all the keys from .env:
         --from-dotenv .env
 
 Reads:
-  ANTHROPIC_API_KEY, HEYREACH_API_KEY, DATABASE_URL, plus the optional
-  CLAUDE_MODEL_* and LANDING_URL/CALCOM_URL strings used by the prompts.
+  ANTHROPIC_API_KEY, UNIPILE_API_KEY, UNIPILE_DSN, UNIPILE_LINKEDIN_ACCOUNT_ID,
+  UNIPILE_EMAIL_ACCOUNT_ID, DATABASE_URL, plus the optional CLAUDE_MODEL_* and
+  LANDING_URL/CALCOM_URL strings used by the prompts. Set UNIPILE_WEBHOOK_SECRET
+  to enable webhook auth (sent back as a custom header you configure in Unipile).
 """
 
 from __future__ import annotations
@@ -63,15 +69,20 @@ image = (
     # Drop the backend/ tree into /root/backend so imports work the same as
     # local: `from workers.replies import ...`. The local source path is the
     # parent dir of this file (modal_app.py is at backend/modal_app.py).
+    # `campaigns_loader` is needed because the reply-classify path resolves the
+    # active campaign's system prefix.
     .add_local_python_source(
         "clients",
         "workers",
         "config",
         "prompts_loader",
+        "campaigns_loader",
     )
     # Prompts are referenced from prompts_loader → backend/prompts/*.md.
-    # add_local_dir mirrors the directory at runtime.
+    # Campaign persona files back the file-seed fallback in campaigns_loader when
+    # a campaign row is missing from the DB. add_local_dir mirrors them at runtime.
     .add_local_dir("prompts", remote_path="/root/prompts")
+    .add_local_dir("campaigns", remote_path="/root/campaigns")
 )
 
 app = modal.App("consultancy-outreach", image=image)
@@ -86,16 +97,17 @@ secrets = [modal.Secret.from_name("outreach")]
 
 
 @app.function(
-    schedule=modal.Cron("*/15 * * * *"),  # every 15 minutes
+    schedule=modal.Cron("0 * * * *"),  # hourly — fallback; webhooks are primary
     secrets=secrets,
     timeout=600,
     retries=2,
 )
 def pull_replies_cron() -> dict:
-    """Poll Heyreach for new inbound replies, classify them, persist.
+    """Fallback poll of Unipile for inbound replies the webhook may have missed.
 
-    Conservatively scoped per run (limit=100 conversations) so a single tick
-    finishes well inside the 10-minute timeout even with classifier latency.
+    Unipile's `unipile_webhook` is the primary, near-real-time path; this hourly
+    sweep is a safety net. Conservatively scoped per run (limit=100) so a single
+    tick finishes well inside the timeout even with classifier latency.
     """
     return _pull_replies_impl(limit=100, only_with_unread=True)
 
@@ -110,12 +122,34 @@ def progress_sequences_cron() -> dict:
     """Advance every lead whose next sequence step is due.
 
     Reads sends + replies + drafts from Postgres, finds leads with an
-    approved-but-unsent next-step draft past its wait window, pushes to
-    Heyreach. Idempotent — re-running is safe.
+    approved-but-unsent next-step draft past its wait window, sends via
+    Unipile. Idempotent — re-running is safe.
     """
     from workers.sequence_send import progress_sequences
 
     return progress_sequences(limit=50)
+
+
+@app.function(
+    schedule=modal.Cron("33 * * * *"),  # every hour at :33 (offset from others)
+    secrets=secrets,
+    timeout=1200,
+    retries=1,
+)
+def replenish_queue_cron() -> dict:
+    """Smart sourcing: auto-pull fresh leads when a campaign queue runs low.
+
+    For each active campaign with a search_url configured:
+    1. Count messageable leads (drafted but not sent/rejected) in the last 7 days
+    2. If count < threshold (20), pull fresh leads from search_url
+    3. Enrich + score + draft them
+    4. Ingest directly to Postgres
+
+    Deduplication via runs/sourced-<campaign_slug>.jsonl ledger prevents re-messaging.
+    """
+    from workers.replenish import replenish_all_campaigns
+
+    return replenish_all_campaigns(dry_run=False)
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -162,17 +196,31 @@ def _pull_replies_impl(*, limit: int, only_with_unread: bool) -> dict:
 
 @app.function(secrets=secrets, timeout=60)
 def health() -> dict:
-    """Verify env, deps, and DB connectivity. No external API calls."""
+    """Verify env, deps, DB connectivity, and Unipile reachability."""
     import os
 
     from config import Config
 
     checks = {
         "anthropic_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "heyreach_api_key": bool(Config.heyreach_api_key),
+        "unipile_api_key": bool(Config.unipile_api_key),
+        "unipile_dsn": bool(Config.unipile_dsn),
+        "unipile_linkedin_account_id": bool(Config.unipile_linkedin_account_id),
+        "unipile_email_account_id": bool(Config.unipile_email_account_id),
         "database_url": bool(Config.database_url),
         "claude_model_draft": Config.claude_model_draft,
     }
+
+    # Unipile ping — lists connected accounts.
+    if Config.unipile_api_key and Config.unipile_dsn:
+        try:
+            from clients import unipile
+
+            accounts = unipile.health()
+            items = accounts.get("items", accounts) if isinstance(accounts, dict) else accounts
+            checks["unipile_accounts"] = len(items) if isinstance(items, list) else None
+        except Exception as e:  # noqa: BLE001
+            checks["unipile_error"] = str(e)
 
     # Quick DB ping
     if Config.database_url:
@@ -190,126 +238,86 @@ def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Webhook receivers — sub-15-min reply latency
+# Webhook receiver — near-real-time reply latency (replaces the hourly poll)
 # ---------------------------------------------------------------------------
 #
-# Configure Heyreach to POST to the URL printed by `modal deploy`:
-#   https://<workspace>--consultancy-outreach-heyreach-webhook.modal.run
+# Configure Unipile (Webhooks in the dashboard, or POST /webhooks) to send
+# `message_received` (messaging) and `mail_received` (email) events to the URL
+# printed by `modal deploy`:
+#   https://<workspace>--consultancy-outreach-unipile-webhook.modal.run
 #
-# Auth: Heyreach signs the payload with a shared secret in the
-# `X-HeyReach-Signature` header (HMAC-SHA256 over the raw body). Set
-# HEYREACH_WEBHOOK_SECRET in your `outreach` Modal secret, then the
-# receiver verifies before processing.
+# Auth: Unipile lets you attach custom headers to a webhook. Set a shared secret
+# as a header (e.g. X-Unipile-Secret) and put the same value in
+# UNIPILE_WEBHOOK_SECRET; the receiver rejects mismatches. If the secret is
+# unset, the check is skipped (rotate the URL on any leak).
 
 
 @app.function(secrets=secrets, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def heyreach_webhook(request_body: dict) -> dict:
-    """Receive Heyreach inbound-reply webhooks. Verifies signature, classifies
-    the message, persists to Postgres.
+def unipile_webhook(request_body: dict, x_unipile_secret: str | None = None) -> dict:
+    """Receive Unipile inbound-message + inbound-email webhooks.
 
-    Expected payload (Heyreach v1):
-      {
-        "event": "reply.received" | "lead.replied",
-        "data": {
-          "conversationId": "...",
-          "leadLinkedinUrl": "...",
-          "firstName": "...",
-          "lastName": "...",
-          "companyName": "...",
-          "campaignId": "...",
-          "message": { "id": "...", "body": "...", "sentAt": "..." }
-        }
-      }
+    Classifies the message and persists to Postgres. One endpoint handles both
+    channels — we branch on the event type.
+
+    Messaging payload (LinkedIn DM):
+      { "event": "message_received", "account_id", "chat_id", "message_id",
+        "message": "<text>", "sender": {"attendee_name": "...",
+        "attendee_provider_id": "..."}, "timestamp": "..." }
+
+    Email payload:
+      { "event": "mail_received", "email_id" | "id",
+        "from_attendee": {"identifier": "...", "display_name": "..."},
+        "subject": "...", "body_plain" | "body": "...", "date": "..." }
     """
-    import hashlib
-    import hmac
-    import json
     import os
 
-    from fastapi import HTTPException, Header, Request
+    from fastapi import HTTPException
 
-    from workers.replies import _classify_one, _find_last_outbound
+    from workers.replies import classify_message
     from workers.replies_db import insert_replies
 
-    # Signature verification is currently a soft check until the request
-    # object is wired through. If you expose this publicly with no auth,
-    # rotate the URL on any leak.
-    secret = os.environ.get("HEYREACH_WEBHOOK_SECRET")
-    if secret:
-        # Modal's @fastapi_endpoint can wrap a FastAPI Request via type hint,
-        # but the simple dict form above gives us the parsed body directly.
-        # For full HMAC verification, switch the signature to take a Request
-        # parameter and compute hmac over `await request.body()`.
-        pass
+    secret = os.environ.get("UNIPILE_WEBHOOK_SECRET")
+    if secret and x_unipile_secret != secret:
+        raise HTTPException(status_code=401, detail="bad webhook secret")
 
-    event = request_body.get("event", "")
-    if event not in {"reply.received", "lead.replied"}:
+    event = (request_body.get("event") or request_body.get("event_type") or "").lower()
+    email_events = {"mail_received", "email_received", "mail.received", "email.received"}
+    message_events = {"message_received", "message.received", "message"}
+
+    if event in email_events:
+        from_attendee = request_body.get("from_attendee") or {}
+        body = request_body.get("body_plain") or request_body.get("body") or ""
+        if not body:
+            return {"ok": True, "skipped": "empty body"}
+        record = classify_message(
+            channel="email",
+            external_id=str(
+                request_body.get("email_id") or request_body.get("id") or ""
+            ),
+            text=body,
+            lead_name=from_attendee.get("display_name"),
+            received_at=request_body.get("date"),
+        )
+    elif event in message_events:
+        text = request_body.get("message") or request_body.get("text") or ""
+        if not text:
+            return {"ok": True, "skipped": "empty body"}
+        sender = request_body.get("sender") or {}
+        record = classify_message(
+            channel="linkedin_dm",
+            external_id=str(
+                request_body.get("message_id") or request_body.get("id") or ""
+            ),
+            text=text,
+            lead_name=sender.get("attendee_name") or sender.get("name"),
+            received_at=request_body.get("timestamp"),
+        )
+    else:
         return {"ok": True, "skipped": f"event={event}"}
 
-    data = request_body.get("data") or {}
-    message = data.get("message") or {}
-    if not message.get("body"):
-        return {"ok": True, "skipped": "empty body"}
-
-    convo = {
-        "id": data.get("conversationId"),
-        "leadLinkedinUrl": data.get("leadLinkedinUrl"),
-        "firstName": data.get("firstName"),
-        "lastName": data.get("lastName"),
-        "companyName": data.get("companyName"),
-        "campaignId": data.get("campaignId"),
-    }
-    # Webhook payload doesn't carry the prior outbound; classifier still
-    # works without it (the classifier prompt tolerates None original_message).
-    record = _classify_one(convo, message, original_message=None)
     if record is None:
         raise HTTPException(status_code=500, detail="classifier failed")
 
-    counts = insert_replies([record])
-    return {"ok": True, "record_id": record["message_id"], **counts}
-
-
-@app.function(secrets=secrets, timeout=60)
-@modal.fastapi_endpoint(method="POST")
-def smartlead_webhook(request_body: dict) -> dict:
-    """Receive Smartlead reply / unsubscribe / bounce webhooks.
-
-    Smartlead's v1 webhook payload:
-      {
-        "event_type": "lead_replied" | "lead_unsubscribed" | "email_bounced",
-        "lead": { "email": "...", "first_name": "...", ... },
-        "campaign_id": "...",
-        "reply_message": { "body": "...", "received_at": "..." }
-      }
-    """
-    from workers.replies import _classify_one
-    from workers.replies_db import insert_replies
-
-    event = request_body.get("event_type") or request_body.get("event")
-    if event not in {"lead_replied", "reply.received"}:
-        return {"ok": True, "skipped": f"event={event}"}
-
-    lead = request_body.get("lead") or {}
-    reply = request_body.get("reply_message") or request_body.get("message") or {}
-    body = reply.get("body") or reply.get("text") or ""
-    if not body:
-        return {"ok": True, "skipped": "empty body"}
-
-    convo = {
-        "id": request_body.get("campaign_id"),  # no notion of conversation in Smartlead
-        "leadLinkedinUrl": None,                 # email-only
-        "firstName": lead.get("first_name"),
-        "lastName": lead.get("last_name"),
-        "companyName": lead.get("company_name"),
-        "campaignId": request_body.get("campaign_id"),
-    }
-    msg = {"id": reply.get("id"), "body": body, "sentAt": reply.get("received_at")}
-    record = _classify_one(convo, msg, original_message=None)
-    if record is None:
-        return {"ok": False, "error": "classifier failed"}
-
-    # Mark channel as email so the dashboard renders correctly.
-    record["channel"] = "email"
     counts = insert_replies([record])
     return {"ok": True, "record_id": record["message_id"], **counts}

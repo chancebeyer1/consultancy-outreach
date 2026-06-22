@@ -10,7 +10,9 @@ Classify an inbound reply and (when appropriate) draft a one-line response for h
   "lead_role": "...",
   "lead_company": "...",
   "original_message": "...",
-  "reply_body": "..."
+  "reply_body": "...",
+  "landing_url": "...",
+  "calcom_url": "..."
 }
 ```
 
@@ -38,10 +40,11 @@ Classify an inbound reply and (when appropriate) draft a one-line response for h
 
 ## Reply-drafting rules
 
-- For `interested`: propose Cal.com link with 2 specific time options (use {{calcom_url}}). Don't ask "what works for you" — give times.
+- For `interested`: propose the booking link with 2 specific time options (use the `calcom_url` from the input). Don't ask "what works for you" — give times.
 - For `objection`: acknowledge the objection in one sentence, then either address it (if easy) or graciously drop. Never argue.
 - For `not_now`: agree, ask permission to follow up by a specific month, no pressure.
 - For `referral`: thank them, ask for an intro or for permission to use their name.
+- For `send_one_pager` next-actions: point them at the `landing_url` from the input.
 - For `unsubscribe`: empty `suggested_reply` (null). Set `next_action: "drop"`. Mark `lead.status` for removal downstream.
 - For `oof`: null reply, action `wait_per_their_request`.
 

@@ -28,6 +28,11 @@ One or two short sentences. Pattern:
 ## Rules
 
 - Lead with the specific hook. The first 6 words are everything.
+- The examples above are AI-consultancy flavored; they illustrate *structure and
+  voice*, not the domain — match the active ICP/Offer in the system prompt.
+- For *research / discovery* offers, the intent signal is curiosity — you're
+  researching how they do something and would value learning from them — not a pitch
+  and not "let's network." Still no call ask at the connect stage.
 - Don't say "I noticed" — show that you noticed by being specific.
 - Don't say "I'd love to connect" — that's the default of a request; don't waste chars.
 - Match the prospect's register from their recent posts.

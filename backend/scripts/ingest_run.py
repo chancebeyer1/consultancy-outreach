@@ -43,6 +43,23 @@ def _connect():
     return psycopg.connect(require("DATABASE_URL")), Jsonb
 
 
+def _campaign_map(cur) -> tuple[dict[str, str], str | None]:
+    """Return (slug→id, default_campaign_id) from the campaigns table.
+
+    Empty / None when campaigns haven't been synced yet — leads then get a NULL
+    campaign_id (the column is nullable), which is fine.
+    """
+    slug_to_id: dict[str, str] = {}
+    default_id: str | None = None
+    cur.execute("select id, slug, is_default from campaigns")
+    for cid, slug, is_default in cur.fetchall():
+        if slug:
+            slug_to_id[slug] = str(cid)
+        if is_default:
+            default_id = str(cid)
+    return slug_to_id, default_id
+
+
 def _profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
     if not profile:
         return {}
@@ -76,6 +93,7 @@ def main(
 
     with conn:
         with conn.cursor() as cur, jsonl.open("r", encoding="utf-8") as f:
+            slug_to_id, default_campaign_id = _campaign_map(cur)
             for line in f:
                 line = line.strip()
                 if not line:
@@ -94,20 +112,22 @@ def main(
 
                 summary = _profile_summary((rec.get("enrichment") or {}).get("profile"))
                 score = rec.get("score") or {}
+                campaign_id = slug_to_id.get(rec.get("campaign_slug")) or default_campaign_id
 
                 # 1. UPSERT lead
                 cur.execute(
                     """
                     insert into leads
                         (linkedin_url, name, headline, company, role, location,
-                         segment, source, trigger, status, updated_at)
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'drafted', now())
+                         campaign_id, segment, source, trigger, status, updated_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'drafted', now())
                     on conflict (linkedin_url) do update
                       set name = excluded.name,
                           headline = excluded.headline,
                           company = excluded.company,
                           role = excluded.role,
                           location = excluded.location,
+                          campaign_id = coalesce(excluded.campaign_id, leads.campaign_id),
                           segment = coalesce(excluded.segment, leads.segment),
                           updated_at = now()
                     returning id
@@ -119,6 +139,7 @@ def main(
                         summary.get("company"),
                         summary.get("role"),
                         summary.get("location"),
+                        campaign_id,
                         score.get("segment"),
                         source,
                         rec.get("trigger") or "list",
@@ -132,13 +153,12 @@ def main(
                 cur.execute(
                     """
                     insert into enrichments
-                        (lead_id, proxycurl_json, company_signals_json, github_json,
+                        (lead_id, profile_json, company_signals_json,
                          recent_posts_json, hooks_json, enriched_at)
-                    values (%s, %s, %s, %s, %s, %s, now())
+                    values (%s, %s, %s, %s, %s, now())
                     on conflict (lead_id) do update
-                      set proxycurl_json = excluded.proxycurl_json,
+                      set profile_json = excluded.profile_json,
                           company_signals_json = excluded.company_signals_json,
-                          github_json = excluded.github_json,
                           recent_posts_json = excluded.recent_posts_json,
                           hooks_json = excluded.hooks_json,
                           enriched_at = now()
@@ -147,7 +167,6 @@ def main(
                         lead_id,
                         Jsonb(enrichment.get("profile")),
                         Jsonb(enrichment.get("company_signals") or {}),
-                        Jsonb(enrichment.get("github") or {}),
                         Jsonb(enrichment.get("recent_posts") or []),
                         Jsonb(rec.get("hooks") or []),
                     ),

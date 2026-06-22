@@ -1,10 +1,12 @@
 import clsx from "clsx";
 
 import { getAnalytics, type AnalyticsRow } from "@/lib/analytics";
+import { getSelectedCampaignId } from "@/lib/campaign-filter";
 import { dataSource } from "@/lib/supabase";
 
 export default async function AnalyticsPage() {
-  const a = await getAnalytics();
+  const campaignId = await getSelectedCampaignId();
+  const a = await getAnalytics(campaignId);
 
   if (a.empty && dataSource === "file") {
     return (
@@ -40,6 +42,11 @@ export default async function AnalyticsPage() {
       <KpiStrip totals={a.totals} />
 
       <div className="mt-10 grid gap-10 lg:grid-cols-2">
+        <Breakdown
+          title="By campaign"
+          subtitle="Which audience + offer is landing"
+          rows={a.byCampaign}
+        />
         <Breakdown title="By segment" subtitle="Which ICP is converting" rows={a.bySegment} />
         <Breakdown title="By trigger" subtitle="Cold list vs warm signal" rows={a.byTrigger} />
         <Breakdown

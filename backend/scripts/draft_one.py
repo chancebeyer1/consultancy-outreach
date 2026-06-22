@@ -29,6 +29,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
+from campaigns_loader import load_campaign
 from workers import draft, enrich, score
 
 app = typer.Typer(add_completion=False, help=__doc__)
@@ -53,7 +54,22 @@ def main(
         bool,
         typer.Option("--skip-score", help="Skip the LLM ICP-fit scoring step."),
     ] = False,
+    campaign: Annotated[
+        str | None,
+        typer.Option(
+            help="Campaign slug (or id) — selects the ICP + offer. Omitted → default campaign."
+        ),
+    ] = None,
 ) -> None:
+    try:
+        active_campaign = load_campaign(campaign)
+    except (FileNotFoundError, RuntimeError) as e:
+        console.print(f"[red]Couldn't load campaign '{campaign or 'default'}':[/red] {e}")
+        raise typer.Exit(2) from e
+    console.print(
+        f"[dim]Campaign: [bold]{active_campaign.name}[/bold] ({active_campaign.slug})[/dim]"
+    )
+
     if from_enrichment:
         console.print(f"[dim]Loading enrichment from {from_enrichment}[/dim]")
         enrichment = json.loads(from_enrichment.read_text(encoding="utf-8"))
@@ -62,7 +78,7 @@ def main(
             console.print("[red]Provide a LinkedIn URL or --from-enrichment[/red]")
             raise typer.Exit(2)
         console.rule("[bold cyan]1. Enrich")
-        with console.status("Calling ProxyCurl, Tavily, GitHub..."):
+        with console.status("Calling Unipile + Tavily..."):
             enrichment = enrich.enrich(linkedin_url)
         _summarize_enrichment(enrichment)
 
@@ -71,7 +87,7 @@ def main(
     if not skip_score:
         console.rule("[bold cyan]2. Score")
         with console.status("Asking Claude to score ICP fit..."):
-            score_obj = score.score(enrichment)
+            score_obj = score.score(enrichment, campaign=active_campaign)
         _print_score(score_obj)
         if isinstance(score_obj.get("fit_score"), int) and score_obj["fit_score"] < 60:
             console.print("[yellow]Fit score < 60. Proceeding anyway since this is Phase 1.[/yellow]")
@@ -79,7 +95,7 @@ def main(
     # 3. Hooks
     console.rule("[bold cyan]3. Extract hooks")
     with console.status("Extracting hooks..."):
-        hooks = draft.extract_hooks(enrichment)
+        hooks = draft.extract_hooks(enrichment, campaign=active_campaign)
     _print_hooks(hooks)
     chosen = draft.pick_hook(hooks, "linkedin_dm")
     if not chosen:
@@ -90,7 +106,7 @@ def main(
     drafts_out: dict[str, str] = {}
     for channel in ["linkedin_connect", "linkedin_dm", "email"]:
         with console.status(f"Drafting {channel}..."):
-            body = draft.draft_for_channel(channel, enrichment, chosen)
+            body = draft.draft_for_channel(channel, enrichment, chosen, campaign=active_campaign)
         drafts_out[channel] = body
         console.print(
             Panel(
@@ -125,10 +141,12 @@ def _summarize_enrichment(enrichment: dict) -> None:
     table.add_row("Name", profile.get("full_name") or "?")
     table.add_row("Headline", profile.get("headline") or "?")
     table.add_row("Company", enrichment.get("company") or "?")
-    table.add_row("Location", (profile.get("city") or "") + ", " + (profile.get("country") or ""))
+    table.add_row(
+        "Location",
+        (profile.get("city") or "") + ", " + (profile.get("country_full_name") or ""),
+    )
     table.add_row("Recent posts", str(len(enrichment.get("recent_posts") or [])))
     table.add_row("Company signals", str(sum(len(v) for v in (enrichment.get("company_signals") or {}).values())))
-    table.add_row("GitHub", (enrichment.get("github") or {}).get("username") or "—")
     console.print(table)
 
 

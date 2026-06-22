@@ -1,11 +1,11 @@
-"""Phase 2 reply puller.
+"""Local reply puller (fallback to the Modal webhook/cron).
 
-Polls Heyreach's inbox, finds new inbound messages, classifies each via
-prompts/reply_classify.md, and appends a structured record to
+Polls Unipile (LinkedIn chats + email), finds new inbound messages, classifies
+each via prompts/reply_classify.md, and appends a structured record to
 `runs/replies.jsonl` for the dashboard's /replies page to read.
 
-Idempotent: every classified reply is keyed by its Heyreach message id
-(or a hash if Heyreach omits one). A ledger at `runs/replies-seen.jsonl`
+Idempotent: every classified reply is keyed by its Unipile message id
+(or a content hash if Unipile omits one). A ledger at `runs/replies-seen.jsonl`
 records what we've already processed so re-runs are cheap.
 
 Usage:
@@ -21,11 +21,8 @@ Usage:
     # cap how many conversations to scan in one pass
     uv run python -m scripts.pull_replies --limit 50
 
-    # restrict to one campaign
-    uv run python -m scripts.pull_replies --campaign-id 12345
-
-You probably want to run this on a cron (every 15 min). For now, run it
-manually from your laptop after each batch of sends.
+In production the Modal `unipile_webhook` (near-real-time) + hourly
+`pull_replies_cron` cover this; run it here manually for ad-hoc local checks.
 """
 
 from __future__ import annotations
@@ -85,10 +82,6 @@ def main(
         int,
         typer.Option(help="Max conversations to scan per run."),
     ] = 100,
-    campaign_id: Annotated[
-        str | None,
-        typer.Option(help="Restrict to one Heyreach campaign."),
-    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Fetch + classify but don't write to disk."),
@@ -106,7 +99,6 @@ def main(
         seen_message_ids=seen_ids,
         limit=limit,
         only_with_unread=not include_read,
-        campaign_id=campaign_id,
     )
 
     if not all_new:

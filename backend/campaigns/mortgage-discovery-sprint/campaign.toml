@@ -1,0 +1,32 @@
+# The Mortgage Discovery Sprint — research-led outreach to independent mortgage
+# originators. NOT the default campaign; target it explicitly:
+#   uv run python -m scripts.run_pipeline leads.csv --campaign mortgage-discovery-sprint
+#
+# The persona files alongside this one (icp.md / offer.md / style.md / voice.md)
+# are assembled into the system prompt, and seeded into the campaigns DB table by
+# scripts.sync_campaigns.
+
+name = "Mortgage Discovery Sprint"
+slug = "mortgage-discovery-sprint"
+is_default = false
+
+# LinkedIn-only research sprint — skip email drafting (the cold approach is a soft
+# DM with no link, and email isn't part of this play). Omit `channels` to draft all.
+channels = ["linkedin_connect", "linkedin_dm"]
+
+# Automated sourcing (scripts.source_leads). Build a People search ONCE in Sales
+# Navigator with your targeting — titles: Mortgage Broker / Loan Officer / MLO /
+# Branch Manager / Owner; Geography: United States; Company headcount: 1-50; exclude
+# the megabanks — then copy the browser URL and paste it here. Then:
+#   uv run python -m scripts.source_leads --campaign mortgage-discovery-sprint --limit 150
+# Leave it unset to source manually with --search-url instead.
+# search_url = "https://www.linkedin.com/sales/search/people?query=..."
+
+# The 15-minute discovery-call booking link — used in reply suggestions once
+# someone says yes. Set this to your Cal.com link for the sprint; falls back to
+# CALCOM_URL in .env when omitted.
+# calcom_url = "https://cal.com/your-handle/mortgage-discovery"
+#
+# No landing page is used in the cold research DM (it's a soft ask, no link), so
+# landing_url is intentionally left to the .env fallback.
+# landing_url = "https://your-domain.com"

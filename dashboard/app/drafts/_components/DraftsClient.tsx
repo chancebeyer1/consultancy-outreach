@@ -35,7 +35,7 @@ export function DraftsClient({ initialRows }: Props) {
   );
 
   // Helper: find the row + a specific draft on it so persistDecision has the
-  // full lead metadata Heyreach/Smartlead need (first_name, company, …).
+  // full lead metadata the sender needs (name, company, linkedin_url, …).
   const findRowAndDraft = useCallback(
     (leadId: string, draftId: string): { row: DraftReviewRow; draft: Draft } | null => {
       const row = rows.find((r) => r.lead.id === leadId);

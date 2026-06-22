@@ -1,7 +1,7 @@
 // Analytics: roll up sent / replied / interested counts so the operator can
 // see which segments, triggers, and hook types are actually working.
 
-import { MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
+import { MOCK_CAMPAIGNS, MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
 import { dataSource, serverClient } from "./supabase";
 
 export interface AnalyticsRow {
@@ -15,6 +15,7 @@ export interface AnalyticsRow {
 
 export interface Analytics {
   totals: AnalyticsRow;
+  byCampaign: AnalyticsRow[];
   bySegment: AnalyticsRow[];
   byTrigger: AnalyticsRow[];
   byHookType: AnalyticsRow[];
@@ -48,6 +49,9 @@ function mockAnalytics(): Analytics {
 
   return {
     totals: rateRow("all", totalSent, replied, interested),
+    byCampaign: MOCK_CAMPAIGNS.map((c, i) =>
+      i === 0 ? rateRow(c.name, 24, 5, 2) : rateRow(c.name, 12, 3, 1),
+    ),
     bySegment: [
       rateRow("ai_native_consultancy", 18, 4, 2),
       rateRow("traditional_consultancy_pivot", 12, 2, 1),
@@ -63,7 +67,7 @@ function mockAnalytics(): Analytics {
       rateRow("recent_post", 18, 7, 3),
       rateRow("company_news", 9, 3, 1),
       rateRow("funding_event", 5, 3, 1),
-      rateRow("github_stack", 4, 1, 0),
+      rateRow("tech_choice", 4, 1, 0),
       rateRow("content_theme", 6, 1, 0),
     ],
     empty: false,
@@ -76,38 +80,51 @@ function mockAnalytics(): Analytics {
 
 type CountRow = { bucket: string | null; count: number };
 
-async function supabaseAnalytics(): Promise<Analytics> {
+async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
   const supabase = await serverClient();
 
   // Pull the joined rows we need. For modest volumes (<100k sends) doing the
   // group-by client-side is fine and avoids a postgres function.
-  const [sendsRes, repliesRes] = await Promise.all([
+  const [sendsRes, repliesRes, campaignsRes] = await Promise.all([
     supabase
       .from("sends")
-      .select("draft_id, drafts!inner(lead_id, hook, leads!inner(segment, trigger))"),
+      .select("draft_id, drafts!inner(lead_id, hook, leads!inner(segment, trigger, campaign_id))"),
     supabase
       .from("replies")
-      .select("lead_id, intent, leads!inner(segment, trigger)"),
+      .select("lead_id, intent, leads!inner(segment, trigger, campaign_id)"),
+    supabase.from("campaigns").select("id, name"),
   ]);
 
   if (sendsRes.error) throw sendsRes.error;
   if (repliesRes.error) throw repliesRes.error;
+  if (campaignsRes.error) throw campaignsRes.error;
 
   type SendRow = {
     draft_id: string;
     drafts: {
       lead_id: string;
       hook: { type?: string } | null;
-      leads: { segment: string | null; trigger: string | null };
+      leads: { segment: string | null; trigger: string | null; campaign_id: string | null };
     };
   };
   type ReplyRow = {
     lead_id: string;
     intent: string | null;
-    leads: { segment: string | null; trigger: string | null };
+    leads: { segment: string | null; trigger: string | null; campaign_id: string | null };
   };
-  const sends = (sendsRes.data ?? []) as unknown as SendRow[];
-  const replies = (repliesRes.data ?? []) as unknown as ReplyRow[];
+  let sends = (sendsRes.data ?? []) as unknown as SendRow[];
+  let replies = (repliesRes.data ?? []) as unknown as ReplyRow[];
+
+  // Scope to a single campaign when the selector is set.
+  if (campaignId) {
+    sends = sends.filter((s) => s.drafts.leads.campaign_id === campaignId);
+    replies = replies.filter((r) => r.leads.campaign_id === campaignId);
+  }
+
+  // id → friendly name, so the by-campaign breakdown reads as labels not UUIDs.
+  const campaignNameById = new Map<string, string>(
+    ((campaignsRes.data ?? []) as Array<{ id: string; name: string }>).map((c) => [c.id, c.name]),
+  );
 
   // Per-lead reply state (only the "best" reply per lead matters for rate-counting).
   const repliedLeadIds = new Set(replies.map((r) => r.lead_id));
@@ -142,6 +159,10 @@ async function supabaseAnalytics(): Promise<Analytics> {
   const bySegment = rowsFor((s) => s.drafts.leads.segment);
   const byTrigger = rowsFor((s) => s.drafts.leads.trigger);
   const byHookType = rowsFor((s) => s.drafts.hook?.type ?? null);
+  const byCampaign = rowsFor((s) => s.drafts.leads.campaign_id).map((r) => ({
+    ...r,
+    bucket: campaignNameById.get(r.bucket) ?? r.bucket,
+  }));
 
   const sentLeadIds = new Set(sends.map((s) => s.drafts.lead_id));
   const totals = rateRow(
@@ -153,6 +174,7 @@ async function supabaseAnalytics(): Promise<Analytics> {
 
   return {
     totals,
+    byCampaign,
     bySegment,
     byTrigger,
     byHookType,
@@ -164,12 +186,13 @@ async function supabaseAnalytics(): Promise<Analytics> {
 // Entry point
 // ---------------------------------------------------------------------------
 
-export async function getAnalytics(): Promise<Analytics> {
+export async function getAnalytics(campaignId?: string): Promise<Analytics> {
   if (dataSource === "mock") return mockAnalytics();
-  if (dataSource === "supabase") return supabaseAnalytics();
+  if (dataSource === "supabase") return supabaseAnalytics(campaignId);
   // File mode doesn't have the joined send/reply data we need; return empty.
   return {
     totals: emptyRow("all"),
+    byCampaign: [],
     bySegment: [],
     byTrigger: [],
     byHookType: [],

@@ -33,9 +33,11 @@ In `file` mode, run `uv run python -m scripts.run_pipeline leads.csv` from `back
 
 | Route | Status | Purpose |
 |---|---|---|
-| `/drafts` | ✅ live (mock data) | Daily review surface — approve/reject/edit drafts per lead |
+| `/drafts` | ✅ live | Daily review surface — approve/reject/edit drafts per lead |
+| `/replies` | ✅ live | Reply triage — inbound LinkedIn DMs + email from Unipile, classified by intent |
+| `/campaigns` | ✅ live | Create/edit campaigns (audience + offer); the nav selector scopes the other pages |
+| `/analytics` | ✅ live | Funnel + breakdowns by segment / trigger / hook / campaign |
 | `/leads` | stub | Filterable list, CSV import (Phase 2) |
-| `/replies` | stub | Reply triage from Heyreach/Smartlead webhooks (Phase 2) |
 | `/sequences` | stub | Per-lead step state machine (Phase 3) |
 
 ## Keyboard shortcuts (on /drafts)
@@ -58,7 +60,8 @@ In `file` mode, run `uv run python -m scripts.run_pipeline leads.csv` from `back
    NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
    SUPABASE_SERVICE_ROLE_KEY=eyJ...
-   NEXT_PUBLIC_USE_MOCK_DATA=0
+   NEXT_PUBLIC_DATA_SOURCE=supabase
    ```
-4. Replace the `TODO` blocks in `lib/queries.ts` with real Supabase calls
-5. Optionally: `npx supabase gen types typescript --project-id <ref> > lib/db.types.ts` to regenerate types
+4. Seed campaigns into the DB: from `backend/`, run `uv run python -m scripts.sync_campaigns`
+5. The fetchers in `lib/queries.ts` already read from Supabase — no code changes needed
+6. Optionally: `npx supabase gen types typescript --project-id <ref> > lib/db.types.ts` to regenerate types

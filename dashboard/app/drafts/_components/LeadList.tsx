@@ -9,12 +9,22 @@ interface Props {
   onSelect: (i: number) => void;
 }
 
-const segmentColor = {
-  ai_native_consultancy: "bg-emerald-900/40 text-emerald-300",
-  traditional_consultancy_pivot: "bg-sky-900/40 text-sky-300",
-  product_company: "bg-amber-900/40 text-amber-300",
-  out_of_icp: "bg-neutral-800 text-neutral-500",
-} as const;
+// Segments are free-text now (each campaign's ICP names its own), so pick a
+// stable color per label from a palette instead of a fixed map.
+const SEGMENT_PALETTE = [
+  "bg-emerald-900/40 text-emerald-300",
+  "bg-sky-900/40 text-sky-300",
+  "bg-amber-900/40 text-amber-300",
+  "bg-violet-900/40 text-violet-300",
+  "bg-rose-900/40 text-rose-300",
+];
+
+function segmentColor(seg: string): string {
+  if (seg === "out_of_icp") return "bg-neutral-800 text-neutral-500";
+  let h = 0;
+  for (let i = 0; i < seg.length; i++) h = (h * 31 + seg.charCodeAt(i)) >>> 0;
+  return SEGMENT_PALETTE[h % SEGMENT_PALETTE.length];
+}
 
 const triggerLabel = {
   list: "list",
@@ -52,7 +62,7 @@ export function LeadList({ rows, activeIdx, onSelect }: Props) {
                 <span
                   className={clsx(
                     "rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
-                    segmentColor[r.lead.segment],
+                    segmentColor(r.lead.segment),
                   )}
                 >
                   {r.lead.segment.split("_")[0]}

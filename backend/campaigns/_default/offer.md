@@ -1,4 +1,4 @@
-# Proof / sales artifact
+# Offer / sales artifact
 
 What the drafter can credibly claim about my recent work, and where to point readers. The drafter should pull from here when it's natural — never force it.
 
@@ -10,7 +10,7 @@ What the drafter can credibly claim about my recent work, and where to point rea
 
 ## The link
 
-`LANDING_URL` is in `.env`. Drop it (raw, not bracketed markdown) when the message naturally invites it. Never pitch the link — let it be a low-pressure offer.
+The campaign's `landing_url` (falls back to `LANDING_URL` in `.env`). Drop it (raw, not bracketed markdown) when the message naturally invites it. Never pitch the link — let it be a low-pressure offer.
 
 ## What I can claim
 

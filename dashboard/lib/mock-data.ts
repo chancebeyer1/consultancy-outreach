@@ -1,7 +1,39 @@
-import type { DraftReviewRow, Hook, Lead, Reply, ReplyReviewRow, Score } from "./types";
+import type { Campaign, DraftReviewRow, Hook, Lead, Reply, ReplyReviewRow, Score } from "./types";
 
 // In-memory fixtures so the dashboard renders without Supabase wired up.
 // Replace with real Supabase queries in lib/queries.ts once the DB is live.
+
+// Two campaigns so the campaign selector + filter + by-campaign analytics have
+// something to toggle between. The leads below are tagged with these ids; the
+// tags are illustrative (the mock copy is all consultancy-flavored).
+export const MOCK_CAMPAIGNS: Campaign[] = [
+  {
+    id: "c_default",
+    slug: "_default",
+    name: "AI-Agent Consultancy (default)",
+    icp_md: "# ICP\n\nCTOs and founding engineers at AI-native consultancies…",
+    offer_md: "# Offer\n\nContract agent engineer — production AI builds…",
+    style_md: null,
+    voice_md: null,
+    landing_url: "https://your-domain.com",
+    calcom_url: "https://cal.com/your-handle/intro",
+    is_default: true,
+    status: "active",
+  },
+  {
+    id: "c_realestate",
+    slug: "real-estate-agents",
+    name: "Real-estate listing agents",
+    icp_md: "# ICP\n\nIndependent listing agents doing 20+ deals/yr…",
+    offer_md: "# Offer\n\nAI assistant that drafts listing copy + follow-ups…",
+    style_md: null,
+    voice_md: null,
+    landing_url: "https://your-domain.com/real-estate",
+    calcom_url: "https://cal.com/your-handle/intro",
+    is_default: false,
+    status: "active",
+  },
+];
 
 const ll = (slug: string) => `https://linkedin.com/in/${slug}`;
 const ts = (offset: number) =>
@@ -21,6 +53,7 @@ const lead = (overrides: Partial<Lead> & { id: string; linkedin_url: string }): 
   company_domain: null,
   role: null,
   location: null,
+  campaign_id: "c_default",
   segment: null,
   source: null,
   trigger: null,
@@ -137,13 +170,13 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
         "Bracket Labs raises $7M seed to bring AI agents to legal ops",
         "Bracket Labs hiring: Senior Agent Engineer",
       ],
-      github_topics: ["agents", "anthropic", "modal", "evals"],
     },
   },
 
   {
     lead: lead({
       id: "2",
+      campaign_id: "c_realestate",
       linkedin_url: ll("marcus-vp-eng-pivotworks"),
       name: "Marcus Lin",
       headline: "VP Engineering at Pivotworks Studio · digital → AI consultancy",
@@ -229,7 +262,6 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
         "Pivotworks launches AI Studio practice — Q1 press release",
         "Pivotworks hiring: AI Practice Engineer",
       ],
-      github_topics: [],
     },
   },
 
@@ -268,7 +300,7 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
       ),
       hook(
         "tech_choice",
-        "Treble's github shows Anthropic + LangGraph + Postgres",
+        "Treble's recent posts mention Anthropic + LangGraph + Postgres",
         "Same stack I shipped — reduce friction in eval claims",
         3,
       ),
@@ -326,7 +358,6 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
         "Treble case study: how we shipped a calendaring agent in 8 weeks",
         "Treble featured in TechCrunch agent-startup roundup",
       ],
-      github_topics: ["anthropic", "langgraph", "agents", "postgres"],
     },
   },
 ];
@@ -390,6 +421,7 @@ export const MOCK_REPLY_ROWS: ReplyReviewRow[] = [
     "r2",
     {
       id: "l_r2",
+      campaign_id: "c_realestate",
       linkedin_url: "https://linkedin.com/in/marcus-vp-eng-pivotworks",
       name: "Marcus Lin",
       headline: "VP Engineering at Pivotworks Studio",
@@ -439,6 +471,7 @@ export const MOCK_REPLY_ROWS: ReplyReviewRow[] = [
     "r4",
     {
       id: "l_r4",
+      campaign_id: "c_realestate",
       linkedin_url: "https://linkedin.com/in/jeff-cto-stackpoint",
       name: "Jeff Yamamoto",
       headline: "CTO at Stackpoint",

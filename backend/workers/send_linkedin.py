@@ -1,13 +1,12 @@
-"""LinkedIn sender — pushes approved drafts to Heyreach. Phase 2 stub."""
+"""LinkedIn sender — superseded by the Unipile integration.
+
+Approved LinkedIn drafts are now sent by backend/scripts/send_approvals.py,
+which resolves the lead's provider_id from its linkedin_url and routes by
+channel to clients.unipile.send_linkedin_invitation (connection request + note)
+or send_linkedin_message (DM / follow-up). The daily safety caps (DAILY_CAPS),
+the `sends` ledger insert, and the draft.status transition all live there.
+"""
 
 from __future__ import annotations
 
-# TODO Phase 2:
-#   - poll `drafts` where status='approved' and channel like 'linkedin_%'
-#   - group by Heyreach campaign (one per ICP segment)
-#   - apply daily safety cap (20 connects/day, 30 DMs/day, 80 total)
-#   - call heyreach.add_leads_to_campaign with the personalized body
-#   - on success: insert row in `sends`, update draft.status='sent'
-#   - on failure: update draft.status='failed', record error
-
-raise NotImplementedError("Phase 2 — wire up after Phase 1 message quality is validated")
+raise NotImplementedError("Superseded by scripts.send_approvals (clients.unipile.send_linkedin_*)")

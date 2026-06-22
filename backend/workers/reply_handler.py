@@ -1,20 +1,16 @@
-"""Reply handler — webhook endpoint + LLM triage. Phase 2 stub.
+"""Reply handler — superseded by the Unipile integration.
 
-Modal `@web_endpoint` POST receivers for:
-  - Heyreach reply webhook   (LinkedIn DM replies)
-  - Smartlead reply webhook  (email replies)
+The live implementation now lives in:
+  - backend/modal_app.py            `unipile_webhook` — one signed POST receiver
+                                    for Unipile `message_received` (LinkedIn DMs)
+                                    and `mail_received` (email replies).
+  - backend/workers/replies.py      fetch_and_classify_new_replies +
+                                    classify_message (shared by webhook + cron).
+  - backend/workers/reply_triage.py per-campaign suggested_reply generation.
 
-Pipeline:
-  1. Verify webhook signature
-  2. Look up lead by external_id or linkedin_url / email
-  3. Run reply_classify prompt → JSON
-  4. Insert into `replies` with suggested_reply
-  5. Update sequence_state (pause if intent=interested/objection/not_now)
-  6. Notify operator (email / dashboard counter bump)
+Kept as a placeholder so any older imports don't break; do not add logic here.
 """
 
 from __future__ import annotations
 
-# TODO Phase 2
-
-raise NotImplementedError("Phase 2")
+raise NotImplementedError("Superseded by modal_app.unipile_webhook + workers.replies")

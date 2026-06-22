@@ -1,4 +1,4 @@
-"""Phase 1.5 sender: read approved decisions, push to Heyreach.
+"""Phase 1.5 sender: read approved decisions, send directly via Unipile.
 
 Closes the loop the dashboard opens:
 
@@ -8,38 +8,35 @@ Closes the loop the dashboard opens:
                                                   send_approvals.py
                                                           │
                                                           ▼
-                                                    Heyreach API
+                                                     Unipile API
 
-For each approved LinkedIn decision, this script pushes the lead into the
-campaign configured by env var (or --campaign-id flag) with the personalized
-body delivered as a Heyreach custom field. Your Heyreach campaign template
-should reference that field, e.g. `{{custom_body}}` in the message editor.
+Unipile is a direct-messaging API (not a campaign queue), so we send the final
+personalized `body` straight to the prospect — no template interpolation:
 
-Idempotency: every successful push is appended to runs/sent.jsonl. On every
-run we skip draft_ids already present there. Safe to re-run.
+  * linkedin_connect              → users/invite  (connection request + note)
+  * linkedin_dm / *_followup_*    → chats         (DM, starting/reusing the chat)
+  * email / email_followup_*      → emails        (subject parsed from the draft)
+
+Idempotency: every successful send is appended to runs/sent.jsonl. On every run
+we skip draft_ids already present there. Safe to re-run.
 
 Usage:
 
     cd backend
 
-    # one-time dry run — show what would be sent, no API calls
+    # dry run — show what would be sent, no API calls
     uv run python -m scripts.send_approvals --dry-run
 
-    # push linkedin_connect decisions to the default Heyreach campaign
+    # send approved linkedin_connect decisions
     uv run python -m scripts.send_approvals --channel linkedin_connect
 
-    # override campaign per channel
-    uv run python -m scripts.send_approvals --channel linkedin_connect \\
-        --campaign-id 12345
-
-    # cap how many to push in one run (respect daily caps)
+    # cap how many to send in one run (still bounded by the rolling-window quota)
     uv run python -m scripts.send_approvals --channel linkedin_connect --limit 15
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sys
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -50,7 +47,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from clients import heyreach, smartlead
+import sender_limits
+from clients import unipile
 from config import BACKEND_DIR
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -64,23 +62,14 @@ RUNS_DIR = BACKEND_DIR / "runs"
 DECISIONS_PATH = RUNS_DIR / "decisions.jsonl"
 SENT_PATH = RUNS_DIR / "sent.jsonl"
 
-# Channels grouped by the provider that sends them.
+# Channels grouped by the Unipile call that delivers them.
 LINKEDIN_CHANNELS = {"linkedin_connect", "linkedin_dm", "linkedin_followup_1", "linkedin_followup_2"}
 EMAIL_CHANNELS = {"email", "email_followup_1", "email_followup_2"}
 ALL_CHANNELS = LINKEDIN_CHANNELS | EMAIL_CHANNELS
 
-# Daily safety caps (calibrated against Valley's published per-seat numbers).
-# These are upper bounds for a single account on a single day; the script
-# refuses to push more than this without --force.
-DAILY_CAPS = {
-    "linkedin_connect": 20,
-    "linkedin_dm": 30,
-    "linkedin_followup_1": 30,
-    "linkedin_followup_2": 30,
-    "email": 80,
-    "email_followup_1": 80,
-    "email_followup_2": 80,
-}
+# Send-rate caps + rolling-window enforcement live in sender_limits, shared with
+# workers/sequence_send.py so both send paths honor one combined budget. Unipile
+# does NOT enforce LinkedIn's limits — pacing is entirely on us.
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -106,34 +95,6 @@ def _append_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
             f.write(json.dumps(r, default=str) + "\n")
 
 
-def _campaign_id_for(channel: str, override: str | None) -> str:
-    if override:
-        return override
-    # Channel-specific env var wins, else the per-provider default.
-    env_key = f"HEYREACH_CAMPAIGN_{channel.upper()}"
-    if channel in EMAIL_CHANNELS:
-        env_key = f"SMARTLEAD_CAMPAIGN_{channel.upper()}"
-        return os.environ.get(env_key) or os.environ.get("SMARTLEAD_CAMPAIGN_DEFAULT") or ""
-    return os.environ.get(env_key) or os.environ.get("HEYREACH_CAMPAIGN_DEFAULT") or ""
-
-
-def _to_heyreach_lead(decision: dict[str, Any]) -> dict[str, Any]:
-    """Map a decision record → Heyreach lead payload."""
-    return {
-        "linkedin_url": decision["linkedin_url"],
-        "first_name": decision.get("first_name") or "",
-        "last_name": decision.get("last_name") or "",
-        "company_name": decision.get("company") or "",
-        "custom_fields": {
-            # Reference these in your Heyreach campaign message template:
-            #   `{{custom_body}}` for the personalized message
-            #   `{{custom_hook}}` for the anchor reference (optional)
-            "custom_body": decision["body"],
-            "custom_hook": decision.get("hook_reference") or "",
-        },
-    }
-
-
 def _parse_email_body(body: str) -> tuple[str, str]:
     """Split the email draft (which is `Subject: ...\\n\\n<body>`) into
     (subject, body). Falls back to ("", body) if no subject line is present."""
@@ -143,24 +104,43 @@ def _parse_email_body(body: str) -> tuple[str, str]:
     return "", body
 
 
-def _to_smartlead_lead(decision: dict[str, Any]) -> dict[str, Any] | None:
-    """Map a decision record → Smartlead lead payload. Returns None if no
-    email is present (run enrich_emails.py first)."""
-    email = decision.get("email")
-    if not email:
+def _external_id(resp: Any) -> str | None:
+    """Best-effort extraction of Unipile's message/invite id for sends.external_id."""
+    if not isinstance(resp, dict):
         return None
-    subject, body = _parse_email_body(decision["body"])
-    return {
-        "first_name": decision.get("first_name") or "",
-        "last_name": decision.get("last_name") or "",
-        "email": email,
-        "company_name": decision.get("company") or "",
-        "custom_fields": {
-            "custom_subject": subject,
-            "custom_body": body,
-            "custom_hook": decision.get("hook_reference") or "",
-        },
-    }
+    for key in ("message_id", "invitation_id", "id", "chat_id", "tracking_id", "provider_id"):
+        val = resp.get(key)
+        if val:
+            return str(val)
+    return None
+
+
+def _send_one(decision: dict[str, Any]) -> dict[str, Any]:
+    """Deliver one approved decision via the right Unipile call.
+
+    Returns the raw Unipile response dict. Raises on transport/API failure
+    (caught by the caller, which records the decision as failed).
+    """
+    channel = decision["channel"]
+    body = decision.get("body") or ""
+
+    if channel in EMAIL_CHANNELS:
+        subject, email_body = _parse_email_body(body)
+        return unipile.send_email(
+            decision["email"],
+            subject or "Quick question",
+            email_body,
+            display_name=decision.get("full_name") or None,
+        )
+
+    # LinkedIn: resolve the provider-internal id from the profile URL, then either
+    # invite (with a note) or DM (starting/reusing the chat).
+    provider_id = unipile.resolve_provider_id(decision["linkedin_url"])
+    if channel == "linkedin_connect":
+        return unipile.send_linkedin_invitation(
+            provider_id, body, user_email=decision.get("email") or None
+        )
+    return unipile.send_linkedin_message(provider_id, body)
 
 
 @app.command()
@@ -169,16 +149,12 @@ def main(
         str,
         typer.Option(
             "--channel",
-            help="Which channel to send. e.g. linkedin_connect, linkedin_dm.",
+            help="Which channel to send. e.g. linkedin_connect, linkedin_dm, email.",
         ),
     ] = "linkedin_connect",
-    campaign_id: Annotated[
-        str | None,
-        typer.Option("--campaign-id", help="Heyreach campaign id override (else from env)."),
-    ] = None,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Max leads to push this run (caps default to daily safety limit)."),
+        typer.Option("--limit", help="Max leads to send this run (defaults to remaining rolling-window quota)."),
     ] = None,
     dry_run: Annotated[
         bool,
@@ -186,7 +162,7 @@ def main(
     ] = False,
     force: Annotated[
         bool,
-        typer.Option("--force", help="Allow exceeding the daily safety cap."),
+        typer.Option("--force", help="Bypass the rolling-window safety cap."),
     ] = False,
     decisions_path: Annotated[
         Path,
@@ -223,16 +199,45 @@ def main(
         console.print(f"[green]Nothing new to send for channel={channel}.[/green]")
         return
 
-    # Apply safety cap unless --force.
-    cap = DAILY_CAPS.get(channel, 50)
-    effective_limit = limit if limit is not None else cap
-    if not force and effective_limit > cap:
+    # Apply the rolling-window safety cap (trailing 24h + 7d, counted across both
+    # send paths and de-duplicated by draft_id) unless --force. See sender_limits.
+    q = sender_limits.quota(channel)
+    console.print(
+        f"[dim]quota {channel}: {q.describe()} → {q.allowed} left ({q.binding} cap)[/dim]"
+    )
+    if force:
+        effective_limit = limit if limit is not None else len(queue)
+    elif q.allowed <= 0:
         console.print(
-            f"[red]Limit {effective_limit} exceeds daily cap of {cap} for {channel}. "
-            "Use --force to override.[/red]"
+            f"[yellow]{channel}: quota exhausted — wait for the rolling window to "
+            "free up, or use --force.[/yellow]"
+        )
+        return
+    elif limit is not None and limit > q.allowed:
+        console.print(
+            f"[red]{channel}: requested {limit} but only {q.allowed} left "
+            f"({q.binding} cap). Use --force to override.[/red]"
         )
         raise typer.Exit(2)
-    queue = queue[:effective_limit]
+    else:
+        effective_limit = min(limit, q.allowed) if limit is not None else q.allowed
+    queue = queue[: max(0, effective_limit)]
+
+    is_email = channel in EMAIL_CHANNELS
+
+    # For email, every queued decision needs an email field. Drop those that
+    # don't and warn the operator to run enrich_emails first.
+    if is_email:
+        missing_emails = [d for d in queue if not d.get("email")]
+        queue = [d for d in queue if d.get("email")]
+        if missing_emails:
+            console.print(
+                f"[yellow]Skipping {len(missing_emails)} email decisions without an `email` field. "
+                "Run: uv run python -m scripts.enrich_emails[/yellow]"
+            )
+        if not queue:
+            console.print("[yellow]Nothing left to send after email check.[/yellow]")
+            return
 
     # Preview table
     table = Table(title=f"send_approvals · channel={channel} · {len(queue)} leads")
@@ -254,69 +259,37 @@ def main(
         console.print("[bold yellow]Dry run — nothing sent.[/bold yellow]")
         return
 
-    cid = _campaign_id_for(channel, campaign_id)
-    if not cid:
-        provider = "Smartlead" if channel in EMAIL_CHANNELS else "Heyreach"
-        env = "SMARTLEAD" if channel in EMAIL_CHANNELS else "HEYREACH"
-        console.print(
-            f"[red]No {provider} campaign id configured. Set {env}_CAMPAIGN_{channel.upper()} "
-            f"or {env}_CAMPAIGN_DEFAULT, or pass --campaign-id.[/red]"
-        )
-        raise typer.Exit(2)
-
-    is_email = channel in EMAIL_CHANNELS
-
-    # For email, every queued decision needs an email field. Drop those that
-    # don't and warn the operator to run enrich_emails first.
-    missing_emails: list[dict[str, Any]] = []
-    if is_email:
-        missing_emails = [d for d in queue if not d.get("email")]
-        queue = [d for d in queue if d.get("email")]
-        if missing_emails:
-            console.print(
-                f"[yellow]Skipping {len(missing_emails)} email decisions without an `email` field. "
-                "Run: uv run python -m scripts.enrich_emails[/yellow]"
-            )
-        if not queue:
-            console.print("[yellow]Nothing left to send after email check.[/yellow]")
-            return
-
-    # Push in batches of 50 (good for both providers).
-    BATCH = 50
+    # Send one at a time — Unipile is per-message, not a batch campaign push.
     pushed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
-    for start in range(0, len(queue), BATCH):
-        batch = queue[start : start + BATCH]
+    paused = False
+    for d in queue:
         try:
-            if is_email:
-                payload = [p for p in (_to_smartlead_lead(d) for d in batch) if p]
-                response = smartlead.add_leads_to_campaign(cid, payload)
-                provider_name = "Smartlead"
-            else:
-                payload = [_to_heyreach_lead(d) for d in batch]
-                response = heyreach.add_leads_to_campaign(cid, payload)
-                provider_name = "Heyreach"
-            console.print(
-                f"[green]✓[/green] pushed {len(batch)} {channel} leads "
-                f"({provider_name} response: {response})"
-            )
+            resp = _send_one(d)
             now = datetime.now(UTC).isoformat()
-            pushed.extend(
+            pushed.append(
                 {
                     "draft_id": d["draft_id"],
                     "lead_id": d.get("lead_id"),
                     "linkedin_url": d.get("linkedin_url"),
                     "email": d.get("email"),
                     "channel": channel,
-                    "provider": provider_name.lower(),
-                    "campaign_id": cid,
+                    "provider": "unipile",
+                    "external_id": _external_id(resp),
                     "sent_at": now,
                 }
-                for d in batch
             )
+            console.print(f"[green]✓[/green] sent {channel} → {d.get('full_name') or d.get('linkedin_url')}")
         except Exception as e:  # noqa: BLE001 — script-level catch
-            console.print(f"[red]✗ batch {start // BATCH + 1} failed: {e}[/red]")
-            failed.extend(batch)
+            if sender_limits.is_invite_limit_error(e):
+                console.print(
+                    "[bold red]LinkedIn invite limit hit (422 cannot_resend_yet). "
+                    "Pausing — unsent leads stay queued for the next run.[/bold red]"
+                )
+                paused = True
+                break
+            console.print(f"[red]✗ {d.get('full_name') or d.get('linkedin_url')}: {e}[/red]")
+            failed.append(d)
 
     if pushed:
         _append_jsonl(sent_path, pushed)
@@ -325,6 +298,8 @@ def main(
     console.print(f"  queued:  {len(queue)}")
     console.print(f"  sent:    [green]{len(pushed)}[/green]")
     console.print(f"  failed:  [red]{len(failed)}[/red]")
+    if paused:
+        console.print("  status:  [bold yellow]paused (LinkedIn invite limit)[/bold yellow]")
     console.print(f"  ledger:  {sent_path}")
 
 

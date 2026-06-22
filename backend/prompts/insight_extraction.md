@@ -2,15 +2,14 @@
 
 You are reading a prospect's enrichment data and extracting the **specific, concrete hooks** that make them feel like a real person — not a row in a CRM.
 
-This is the most important step. Drafting on top of bad hooks produces generic messages. Bad hooks: "works at Acme", "is a CTO". Good hooks: "wrote a post last week about why their team gave up on LangGraph", "their company just raised a Series A with AI agents called out in the announcement", "their GitHub shows they're shipping Modal-deployed agents."
+This is the most important step. Drafting on top of bad hooks produces generic messages. Bad hooks: "works at Acme", "is a CTO". Good hooks: "wrote a post last week about a specific problem their team hit", "their company just announced something the ICP cares about in the press", "their profile shows a concrete, on-topic project or tooling choice." Anchor hooks to what the active ICP and Offer in the system prompt care about.
 
 ## Input
 
 A JSON payload containing:
-- `profile`: ProxyCurl profile data (name, headline, experience, education, location)
+- `profile`: normalized LinkedIn profile data (name, headline, experience, summary, location)
 - `recent_posts`: their last ~10 LinkedIn posts (text + engagement counts)
 - `company_signals`: web search results about their company (funding, hiring, news)
-- `github`: optional — their public repos + bios if found
 - `extras`: anything else (podcast appearances, blog posts, conference talks)
 
 ## Output
@@ -20,7 +19,7 @@ A JSON array of 5–8 hook objects. Schema per hook:
 ```json
 {
   "type": "recent_post" | "company_news" | "funding_event" | "hiring_signal"
-        | "github_stack" | "role_transition" | "shared_connection"
+        | "role_transition" | "shared_connection"
         | "podcast_appearance" | "content_theme" | "tech_choice",
   "reference": "<the exact thing — one sentence, factual, quoted/paraphrased>",
   "why_it_matters": "<one sentence — why this is a good opening for a pitch>",

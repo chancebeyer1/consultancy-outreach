@@ -16,7 +16,9 @@ BACKEND_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BACKEND_DIR.parent
 PROMPTS_DIR = BACKEND_DIR / "prompts"
 
-load_dotenv(PROJECT_ROOT / ".env")
+# override=True so the project's .env is authoritative. Without it, a stray var
+# already in the shell (e.g. an empty ANTHROPIC_API_KEY) silently shadows .env.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 
 def _env(key: str, default: str = "") -> str:
@@ -44,14 +46,16 @@ class Config:
     claude_model_reason: str = _env("CLAUDE_MODEL_REASON", "claude-opus-4-7")
 
     # Enrichment
-    proxycurl_api_key: str = _env("PROXYCURL_API_KEY")
     tavily_api_key: str = _env("TAVILY_API_KEY")
     serper_api_key: str = _env("SERPER_API_KEY")
-    github_token: str = _env("GITHUB_TOKEN")
 
-    # Senders (Phase 2+)
-    heyreach_api_key: str = _env("HEYREACH_API_KEY")
-    smartlead_api_key: str = _env("SMARTLEAD_API_KEY")
+    # Unipile — one unified API for LinkedIn send/DM/invite + email + enrichment.
+    # Connect a LinkedIn account and a mailbox once in the Unipile dashboard;
+    # each gets an account_id we pass on every call. v1 = single LinkedIn + single mailbox.
+    unipile_api_key: str = _env("UNIPILE_API_KEY")
+    unipile_dsn: str = _env("UNIPILE_DSN")  # e.g. api1.unipile.com:13111
+    unipile_linkedin_account_id: str = _env("UNIPILE_LINKEDIN_ACCOUNT_ID")
+    unipile_email_account_id: str = _env("UNIPILE_EMAIL_ACCOUNT_ID")
 
     # DB
     database_url: str = _env("DATABASE_URL")
