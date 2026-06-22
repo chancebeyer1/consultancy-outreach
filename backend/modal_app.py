@@ -77,6 +77,7 @@ image = (
         "config",
         "prompts_loader",
         "campaigns_loader",
+        "sender_limits",  # rolling-window send caps, imported by workers.sequence_send
     )
     # Prompts are referenced from prompts_loader → backend/prompts/*.md.
     # Campaign persona files back the file-seed fallback in campaigns_loader when
