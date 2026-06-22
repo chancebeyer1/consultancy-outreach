@@ -29,7 +29,13 @@ from config import require
 from sender_limits import is_invite_limit_error, quota
 from workers.sequence import determine_next_action
 
-LINKEDIN_CHANNELS = {"linkedin_connect", "linkedin_dm", "linkedin_followup_1", "linkedin_followup_2"}
+LINKEDIN_CHANNELS = {
+    "linkedin_connect",
+    "linkedin_inmail",
+    "linkedin_dm",
+    "linkedin_followup_1",
+    "linkedin_followup_2",
+}
 EMAIL_CHANNELS = {"email", "email_followup_1", "email_followup_2"}
 
 
@@ -167,6 +173,8 @@ def _send_via_unipile(lead: dict, draft: dict, channel: str) -> dict[str, Any]:
     provider_id = unipile.resolve_provider_id(lead["linkedin_url"])
     if channel == "linkedin_connect":
         return unipile.send_linkedin_invitation(provider_id, body)
+    if channel == "linkedin_inmail":
+        return unipile.send_linkedin_inmail(provider_id, body)
     return unipile.send_linkedin_message(provider_id, body)
 
 
@@ -222,7 +230,7 @@ def send_approved_first_touch(
                 join leads l on l.id = d.lead_id
                 left join campaigns c on c.id = l.campaign_id
                 where d.status = 'approved'
-                  and d.channel in ('linkedin_connect', 'email')
+                  and d.channel in ('linkedin_connect', 'linkedin_inmail', 'email')
                   and (c.status is null or c.status = 'active')  -- paused/archived campaigns don't send
                   and not exists (select 1 from sends s where s.draft_id = d.id)
                   and not exists (

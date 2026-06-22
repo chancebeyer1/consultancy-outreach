@@ -23,8 +23,28 @@ if TYPE_CHECKING:
 CHANNEL_BUDGETS = {
     "linkedin_connect": 280,
     "linkedin_dm": 500,
+    "linkedin_inmail": 700,  # cold direct message to a non-connection (Sales Nav credit)
     "email": 1000,  # ~120 words incl subject
 }
+
+
+def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:
+    """Channels to draft for one lead, applying InMail routing.
+
+    Base channels come from campaign.channels (or all three). If the campaign sets
+    inmail_min_fit and this lead scores >= it, the LinkedIn connect→DM sequence is
+    replaced by a single cold InMail (a standalone direct touch); any non-LinkedIn
+    channel (e.g. email) is preserved.
+    """
+    base = (
+        [c for c in campaign.channels if c in CHANNEL_BUDGETS]
+        if campaign and campaign.channels
+        else ["linkedin_connect", "linkedin_dm", "email"]
+    )
+    if campaign and campaign.inmail_min_fit and fit_score >= campaign.inmail_min_fit:
+        non_linkedin = [c for c in base if not c.startswith("linkedin_")]
+        return ["linkedin_inmail", *non_linkedin]
+    return base
 
 
 def _humanize(text: str) -> str:
@@ -136,6 +156,7 @@ def draft_for_channel(
     prompt_name = {
         "linkedin_connect": "draft_connection",
         "linkedin_dm": "draft_dm",
+        "linkedin_inmail": "draft_inmail",
         "email": "draft_email",
     }[channel]
     instruction = load_prompt(prompt_name)

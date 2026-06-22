@@ -14,6 +14,11 @@ is_default = false
 # DM with no link, and email isn't part of this play). Omit `channels` to draft all.
 channels = ["linkedin_connect", "linkedin_dm"]
 
+# Top-ICP leads (fit >= this) get a cold LinkedIn InMail (Sales Navigator credit)
+# instead of a connection request — reach the best prospects without the accept-wait.
+# Below the threshold, leads get the connect -> DM sequence. Tune in the dashboard.
+inmail_min_fit = 85
+
 # Automated sourcing (scripts.source_leads). Build a People search ONCE in Sales
 # Navigator with your targeting — titles: Mortgage Broker / Loan Officer / MLO /
 # Branch Manager / Owner; Geography: United States; Company headcount: 1-50; exclude

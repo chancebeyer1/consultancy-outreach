@@ -83,6 +83,9 @@ export interface Campaign {
   // When true, the first-touch connection note auto-approves on ingest and the
   // send_approved cron sends it — no manual review. Default false (review each).
   auto_send: boolean;
+  // Leads scoring >= this get a LinkedIn InMail instead of a connection request
+  // (needs Sales Navigator credits). null = off — everyone gets connect→DM.
+  inmail_min_fit?: number | null;
   search_url?: string | null;
   channels?: string[] | null;
   started_at?: string;

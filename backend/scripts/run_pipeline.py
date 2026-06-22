@@ -142,11 +142,8 @@ def _process_one(
         chosen = draft.pick_hook(hooks, "linkedin_dm")
         record["chosen_hook"] = chosen.__dict__ if chosen else None
 
-        channels = (
-            [c for c in campaign.channels if c in draft.CHANNEL_BUDGETS]
-            if campaign and campaign.channels
-            else ["linkedin_connect", "linkedin_dm", "email"]
-        )
+        fit = int((record.get("score") or {}).get("fit_score") or 0)
+        channels = draft.resolve_channels(campaign, fit)
         record["drafts"] = {
             channel: draft.draft_for_channel(channel, enrichment, chosen, campaign=campaign)
             for channel in channels

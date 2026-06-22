@@ -50,6 +50,7 @@ class Campaign:
     search_url: str | None = None  # saved LinkedIn/Sales-Nav people search for sourcing
     channels: tuple[str, ...] | None = None  # initial draft channels; None → all (connect/dm/email)
     auto_send: bool = False  # true → first-touch connect note auto-approves on ingest
+    inmail_min_fit: int | None = None  # fit >= this → InMail instead of connect; None → off
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +111,7 @@ def _load_from_files(slug: str | None) -> Campaign:
         search_url=meta.get("search_url"),
         channels=tuple(meta["channels"]) if meta.get("channels") else None,
         auto_send=bool(meta.get("auto_send", False)),
+        inmail_min_fit=meta.get("inmail_min_fit"),
     )
 
 
@@ -119,13 +121,14 @@ def _load_from_files(slug: str | None) -> Campaign:
 
 _COLUMNS = (
     "id, slug, name, icp_md, offer_md, style_md, voice_md, "
-    "landing_url, calcom_url, is_default, status, search_url, channels, auto_send"
+    "landing_url, calcom_url, is_default, status, search_url, channels, auto_send, inmail_min_fit"
 )
 
 
 def _row_to_campaign(row: tuple) -> Campaign:
     (cid, slug, name, icp_md, offer_md, style_md, voice_md,
-     landing_url, calcom_url, is_default, status, search_url, channels, auto_send) = row
+     landing_url, calcom_url, is_default, status, search_url, channels, auto_send,
+     inmail_min_fit) = row
     return Campaign(
         slug=slug,
         name=name,
@@ -141,6 +144,7 @@ def _row_to_campaign(row: tuple) -> Campaign:
         search_url=search_url,
         channels=tuple(channels) if channels else None,
         auto_send=bool(auto_send),
+        inmail_min_fit=inmail_min_fit,
     )
 
 

@@ -18,6 +18,7 @@ type FormState = {
   status: "active" | "paused" | "archived";
   is_default: boolean;
   auto_send: boolean;
+  inmail_min_fit: number | null;
   landing_url: string;
   calcom_url: string;
   icp_md: string;
@@ -33,6 +34,7 @@ const BLANK: FormState = {
   status: "active",
   is_default: false,
   auto_send: false,
+  inmail_min_fit: null,
   landing_url: "",
   calcom_url: "",
   icp_md: "",
@@ -49,6 +51,7 @@ function toForm(c: Campaign): FormState {
     status: c.status ?? "active",
     is_default: c.is_default ?? false,
     auto_send: c.auto_send ?? false,
+    inmail_min_fit: c.inmail_min_fit ?? null,
     landing_url: c.landing_url ?? "",
     calcom_url: c.calcom_url ?? "",
     icp_md: c.icp_md ?? "",
@@ -278,6 +281,28 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
                   ships them (still capped at 20/day). Leave off until you trust this campaign&apos;s
                   messages, then flip it to run hands-off.
                 </span>
+              </span>
+            </label>
+          </div>
+
+          {/* InMail routing — top-fit leads get a direct InMail instead of a connect. */}
+          <div className="mt-3 rounded-md border border-neutral-800 bg-neutral-950 p-3">
+            <label className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-neutral-300">
+              <span className="font-medium">InMail for fit ≥</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={form.inmail_min_fit ?? ""}
+                onChange={(e) =>
+                  set("inmail_min_fit", e.target.value === "" ? null : Number(e.target.value))
+                }
+                placeholder="off"
+                className="h-8 w-20 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-sm text-neutral-100 outline-none focus:border-neutral-600"
+              />
+              <span className="text-xs text-neutral-500">
+                top-fit leads get a direct InMail (Sales Nav credits) instead of a connection
+                request. Blank = off.
               </span>
             </label>
           </div>

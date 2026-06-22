@@ -52,6 +52,7 @@ _WRITE_COLS = [
     "search_url",
     "channels",
     "auto_send",
+    "inmail_min_fit",
     "status",
 ]
 
@@ -87,6 +88,7 @@ def _read_campaign_dir(folder: Path) -> dict | None:
         "search_url": meta.get("search_url"),
         "channels": meta.get("channels"),  # list[str] | None → Postgres text[]
         "auto_send": bool(meta.get("auto_send", False)),
+        "inmail_min_fit": meta.get("inmail_min_fit"),
         "is_default": bool(meta.get("is_default", False)),
         "status": meta.get("status") or "active",
     }

@@ -260,6 +260,44 @@ def send_linkedin_message(provider_id: str, text: str) -> dict[str, Any]:
 
 
 @_RETRY
+def send_linkedin_inmail(provider_id: str, text: str) -> dict[str, Any]:
+    """Send a LinkedIn InMail to a NON-connection.  POST /chats (multipart).
+
+    Reaches a prospect directly without a connection request, skipping the
+    accept-wait. Requires Sales Navigator / Recruiter InMail credits on the
+    connected account (`linkedin[inmail]=true`, `linkedin[api]=sales_navigator`).
+    Each send consumes one credit; check inmail_balance() before a batch.
+    """
+    fields = _form(
+        {
+            "account_id": _li_account(),
+            "attendees_ids": provider_id,
+            "text": text,
+            "linkedin[api]": "sales_navigator",
+            "linkedin[inmail]": "true",
+        }
+    )
+    with httpx.Client(timeout=60.0) as c:
+        r = c.post(f"{_base()}/chats", headers=_headers(), files=fields)
+        r.raise_for_status()
+        return r.json()
+
+
+@_RETRY
+def inmail_balance() -> dict[str, Any]:
+    """Remaining InMail credits per tier.  GET /linkedin/inmail_balance
+
+    Returns {premium, recruiter, sales_navigator} — credit counts or null when
+    that tier isn't active on the account.
+    """
+    params = {"account_id": _li_account()}
+    with httpx.Client(timeout=30.0) as c:
+        r = c.get(f"{_base()}/linkedin/inmail_balance", headers=_headers(), params=params)
+        r.raise_for_status()
+        return r.json()
+
+
+@_RETRY
 def send_chat_message(chat_id: str, text: str) -> dict[str, Any]:
     """Reply in an existing chat.  POST /chats/{chat_id}/messages (multipart)."""
     fields = _form({"account_id": _li_account(), "text": text})

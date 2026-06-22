@@ -22,6 +22,7 @@ interface Props {
 
 const channelLabel: Record<string, string> = {
   linkedin_connect: "LinkedIn connect note",
+  linkedin_inmail: "LinkedIn InMail (cold, direct)",
   linkedin_dm: "LinkedIn DM (post-accept)",
   linkedin_followup_1: "LinkedIn follow-up #1",
   linkedin_followup_2: "LinkedIn follow-up #2",
@@ -32,6 +33,7 @@ const channelLabel: Record<string, string> = {
 
 const channelLimit: Record<string, number> = {
   linkedin_connect: 280,
+  linkedin_inmail: 700,
   linkedin_dm: 500,
   email: 1000,
 };

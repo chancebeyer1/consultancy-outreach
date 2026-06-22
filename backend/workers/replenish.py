@@ -147,11 +147,8 @@ def _process_lead(
         chosen = draft.pick_hook(hooks, "linkedin_dm")
         record["chosen_hook"] = chosen.__dict__ if chosen else None
 
-        channels = (
-            [c for c in campaign.channels if c in draft.CHANNEL_BUDGETS]
-            if campaign and campaign.channels
-            else ["linkedin_connect", "linkedin_dm", "email"]
-        )
+        fit = int((record.get("score") or {}).get("fit_score") or 0)
+        channels = draft.resolve_channels(campaign, fit)
         record["drafts"] = {
             channel: draft.draft_for_channel(channel, enrichment, chosen, campaign=campaign)
             for channel in channels
@@ -277,17 +274,17 @@ def _ingest_records(records: list[dict]) -> dict:
                             ),
                         )
 
-                    # 4. INSERT drafts. auto_send campaigns pre-approve the first-touch
-                    # connect note so the send_approved cron sends it without manual review.
+                    # 4. INSERT drafts. step_index follows the lead's own channel order
+                    # (InMail-only leads get step 0). auto_send pre-approves the opener.
                     drafts = rec.get("drafts") or {}
                     chosen_hook = rec.get("chosen_hook")
                     auto_send = auto_by_id.get(campaign_id or "", False)
-                    for step_index, channel in enumerate(["linkedin_connect", "linkedin_dm", "email"]):
-                        body = drafts.get(channel)
+                    first_touch = {"linkedin_connect", "linkedin_inmail"}
+                    for step_index, (channel, body) in enumerate(drafts.items()):
                         if not body:
                             continue
                         draft_status = (
-                            "approved" if (auto_send and channel == "linkedin_connect") else "draft"
+                            "approved" if (auto_send and channel in first_touch) else "draft"
                         )
                         cur.execute(
                             """

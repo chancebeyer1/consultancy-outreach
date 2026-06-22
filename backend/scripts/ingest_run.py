@@ -193,18 +193,19 @@ def main(
                         ),
                     )
 
-                # 4. INSERT drafts (skip channels that already have sent/rejected entries)
+                # 4. INSERT drafts. step_index follows the lead's own channel order
+                # (so an InMail-only lead gets step 0), not a fixed global list.
                 drafts = rec.get("drafts") or {}
                 chosen_hook = rec.get("chosen_hook")
-                # auto_send campaigns pre-approve the first-touch connect note so the
-                # send_approved cron sends it without manual review.
+                # auto_send campaigns pre-approve the first-touch opener (connect note or
+                # InMail) so the send_approved cron sends it without manual review.
                 auto_send = auto_by_id.get(campaign_id or "", False)
-                for step_index, channel in enumerate(CHANNELS):
-                    body = drafts.get(channel)
+                first_touch = {"linkedin_connect", "linkedin_inmail"}
+                for step_index, (channel, body) in enumerate(drafts.items()):
                     if not body:
                         continue
                     draft_status = (
-                        "approved" if (auto_send and channel == "linkedin_connect") else "draft"
+                        "approved" if (auto_send and channel in first_touch) else "draft"
                     )
                     cur.execute(
                         """

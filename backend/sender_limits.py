@@ -36,6 +36,7 @@ from config import BACKEND_DIR, Config
 # is the user's real LinkedIn, driven directly by Unipile's hosted session.
 DAILY_CAPS: dict[str, int] = {
     "linkedin_connect": 20,
+    "linkedin_inmail": 5,  # Sales Nav gives ~50 InMail credits/month — pace, don't burn them
     "linkedin_dm": 30,
     "linkedin_followup_1": 30,
     "linkedin_followup_2": 30,
@@ -49,6 +50,7 @@ DAILY_CAPS: dict[str, int] = {
 # LinkedIn, not per-week, so only the invite channel carries a weekly cap.
 WEEKLY_CAPS: dict[str, int] = {
     "linkedin_connect": 100,
+    "linkedin_inmail": 20,  # ~monthly credit budget spread across weeks
 }
 
 DEFAULT_DAILY_CAP = 50

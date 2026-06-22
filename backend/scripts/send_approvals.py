@@ -63,7 +63,13 @@ DECISIONS_PATH = RUNS_DIR / "decisions.jsonl"
 SENT_PATH = RUNS_DIR / "sent.jsonl"
 
 # Channels grouped by the Unipile call that delivers them.
-LINKEDIN_CHANNELS = {"linkedin_connect", "linkedin_dm", "linkedin_followup_1", "linkedin_followup_2"}
+LINKEDIN_CHANNELS = {
+    "linkedin_connect",
+    "linkedin_inmail",
+    "linkedin_dm",
+    "linkedin_followup_1",
+    "linkedin_followup_2",
+}
 EMAIL_CHANNELS = {"email", "email_followup_1", "email_followup_2"}
 ALL_CHANNELS = LINKEDIN_CHANNELS | EMAIL_CHANNELS
 
@@ -140,6 +146,8 @@ def _send_one(decision: dict[str, Any]) -> dict[str, Any]:
         return unipile.send_linkedin_invitation(
             provider_id, body, user_email=decision.get("email") or None
         )
+    if channel == "linkedin_inmail":
+        return unipile.send_linkedin_inmail(provider_id, body)
     return unipile.send_linkedin_message(provider_id, body)
 
 

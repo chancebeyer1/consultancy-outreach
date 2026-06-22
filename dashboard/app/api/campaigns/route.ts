@@ -39,6 +39,7 @@ interface CampaignPayload {
   calcom_url?: string | null;
   is_default?: boolean;
   auto_send?: boolean;
+  inmail_min_fit?: number | null;
   status?: "active" | "paused" | "archived";
 }
 
@@ -53,6 +54,10 @@ function normalize(p: CampaignPayload): Record<string, unknown> {
     name: p.name.trim(),
     is_default: Boolean(p.is_default),
     auto_send: Boolean(p.auto_send),
+    inmail_min_fit:
+      typeof p.inmail_min_fit === "number" && Number.isFinite(p.inmail_min_fit)
+        ? p.inmail_min_fit
+        : null,
     status: p.status ?? "active",
   };
   for (const key of NULLABLE_TEXT) {
