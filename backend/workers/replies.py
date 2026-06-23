@@ -121,8 +121,18 @@ def classify_message(
     }
 
 
-def _linkedin_replies(seen: set[str], limit: int, unread_only: bool) -> list[dict[str, Any]]:
-    """Scan LinkedIn chats; classify inbound messages we haven't seen."""
+def _linkedin_replies(
+    seen: set[str],
+    limit: int,
+    unread_only: bool,
+    known_provider_ids: set[str] = frozenset(),
+    known_urls: set[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    """Scan LinkedIn chats; classify inbound messages from leads we contacted.
+
+    Chats whose sender isn't a known lead are skipped BEFORE any LLM call or extra
+    API fetch — so the operator's normal inbox costs nothing.
+    """
     records: list[dict[str, Any]] = []
     chats = unipile.list_chats(unread_only=unread_only, limit=limit)
     for chat in chats:
@@ -131,9 +141,15 @@ def _linkedin_replies(seen: set[str], limit: int, unread_only: bool) -> list[dic
             continue
         lead_name = chat.get("name")
         linkedin_url = _linkedin_url_from_chat(chat)
-        # The chat's provider_id is the other attendee's LinkedIn member id (ACoAA…) —
-        # the reliable key for matching a reply back to a lead we contacted.
+        # The chat's provider_id is the other attendee's LinkedIn member id (ACoAA…).
         provider_id = chat.get("provider_id") or chat.get("attendee_provider_id")
+        # Skip non-leads before spending an LLM call (or another fetch) on them.
+        if (
+            (known_provider_ids or known_urls)
+            and provider_id not in known_provider_ids
+            and linkedin_url not in known_urls
+        ):
+            continue
         messages = unipile.list_chat_messages(chat_id)
         messages.sort(key=lambda m: str(m.get("timestamp") or ""))
         for idx, msg in enumerate(messages):
@@ -207,10 +223,15 @@ def fetch_and_classify_new_replies(
     list of reply records (dict). Empty if nothing new.
     """
     seen = set(seen_message_ids)
+    # Load lead keys once so we only classify (spend LLM tokens on) messages from
+    # people we've actually contacted — not the operator's whole inbox.
+    from workers.replies_db import known_lead_keys
+
+    known_provider_ids, known_urls = known_lead_keys()
+
     records: list[dict[str, Any]] = []
-    records.extend(_linkedin_replies(seen, limit, only_with_unread))
+    records.extend(_linkedin_replies(seen, limit, only_with_unread, known_provider_ids, known_urls))
     # Email is optional — only poll the inbox when a mailbox is connected in Unipile.
-    # (LinkedIn-only setups leave UNIPILE_EMAIL_ACCOUNT_ID unset.)
     if Config.unipile_email_account_id:
         records.extend(_email_replies(seen, limit, only_with_unread))
     return records

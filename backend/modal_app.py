@@ -303,7 +303,7 @@ def unipile_webhook(request_body: dict, x_unipile_secret: str | None = None) -> 
     from fastapi import HTTPException
 
     from workers.replies import classify_message
-    from workers.replies_db import insert_replies
+    from workers.replies_db import insert_replies, is_known_lead
 
     secret = os.environ.get("UNIPILE_WEBHOOK_SECRET")
     if secret and x_unipile_secret != secret:
@@ -332,13 +332,17 @@ def unipile_webhook(request_body: dict, x_unipile_secret: str | None = None) -> 
         if not text:
             return {"ok": True, "skipped": "empty body"}
         sender = request_body.get("sender") or {}
+        provider_id = sender.get("attendee_provider_id") or sender.get("provider_id")
+        # Skip messages from people we haven't contacted — no LLM call on inbox noise.
+        if provider_id and not is_known_lead(provider_id=provider_id):
+            return {"ok": True, "skipped": "not a tracked lead"}
         record = classify_message(
             channel="linkedin_dm",
             external_id=str(
                 request_body.get("message_id") or request_body.get("id") or ""
             ),
             text=text,
-            provider_id=sender.get("attendee_provider_id") or sender.get("provider_id"),
+            provider_id=provider_id,
             lead_name=sender.get("attendee_name") or sender.get("name"),
             received_at=request_body.get("timestamp"),
         )

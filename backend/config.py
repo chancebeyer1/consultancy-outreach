@@ -43,7 +43,7 @@ class Config:
     # LLM
     anthropic_api_key: str = _env("ANTHROPIC_API_KEY")
     claude_model_draft: str = _env("CLAUDE_MODEL_DRAFT", "claude-sonnet-4-6")
-    claude_model_reason: str = _env("CLAUDE_MODEL_REASON", "claude-opus-4-7")
+    claude_model_reason: str = _env("CLAUDE_MODEL_REASON", "claude-sonnet-4-6")
 
     # Enrichment
     tavily_api_key: str = _env("TAVILY_API_KEY")

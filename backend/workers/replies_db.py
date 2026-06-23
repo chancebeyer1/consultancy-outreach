@@ -51,6 +51,43 @@ def existing_external_ids(limit: int = 5000) -> set[str]:
         conn.close()
 
 
+def known_lead_keys() -> tuple[set[str], set[str]]:
+    """(provider_ids, linkedin_urls) for every lead — lets the reply poller skip
+    classifying messages from people we never contacted, saving the LLM call."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select provider_id, linkedin_url from leads")
+            pids: set[str] = set()
+            urls: set[str] = set()
+            for pid, url in cur.fetchall():
+                if pid:
+                    pids.add(pid)
+                if url:
+                    urls.add(url)
+            return pids, urls
+    finally:
+        conn.close()
+
+
+def is_known_lead(*, provider_id: str | None = None, linkedin_url: str | None = None) -> bool:
+    """Whether a provider_id / linkedin_url belongs to a lead we contacted."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            if provider_id:
+                cur.execute("select 1 from leads where provider_id = %s limit 1", (provider_id,))
+                if cur.fetchone():
+                    return True
+            if linkedin_url:
+                cur.execute("select 1 from leads where linkedin_url = %s limit 1", (linkedin_url,))
+                if cur.fetchone():
+                    return True
+            return False
+    finally:
+        conn.close()
+
+
 def _match_lead(cur, *, provider_id: str | None, linkedin_url: str | None) -> str | None:
     """Resolve lead_id for a reply by matching someone we actually contacted.
 
