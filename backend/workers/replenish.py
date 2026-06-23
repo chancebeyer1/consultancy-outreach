@@ -77,6 +77,13 @@ def _messageable_count(cursor, campaign_id: str) -> int:
     return cursor.fetchone()[0] or 0
 
 
+def _existing_lead_urls(cur) -> set[str]:
+    """Every linkedin_url already in the DB — so replenish never re-sources / re-scores
+    a lead we already have (the DB-backed equivalent of run_pipeline --skip-existing)."""
+    cur.execute("select linkedin_url from leads where linkedin_url is not null")
+    return {r[0] for r in cur.fetchall()}
+
+
 def _load_sourced_ledger(campaign_slug: str) -> set[str]:
     """Load the deduplication ledger (set of LinkedIn URLs already sourced for this campaign)."""
     ledger_path = Path("runs") / f"sourced-{campaign_slug}.jsonl"
@@ -328,6 +335,8 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
     conn, _ = _connect()
     try:
         with conn.cursor() as cur:
+            # Skip anyone already in the DB so re-runs never re-source / re-score them.
+            existing_urls = _existing_lead_urls(cur)
             for camp_info in campaigns:
                 campaign_id = camp_info["id"]
                 campaign_slug = camp_info["slug"]
@@ -349,8 +358,8 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
                     summary["skipped"].append({"slug": campaign_slug, "reason": f"load failed: {e}"})
                     continue
 
-                # 3. Pull fresh leads
-                seen = _load_sourced_ledger(campaign_slug)
+                # 3. Pull fresh leads (skip the sourced ledger AND everyone in the DB)
+                seen = _load_sourced_ledger(campaign_slug) | existing_urls
                 fresh_leads = _pull_fresh_leads(search_url, PULL_LIMIT, seen)
 
                 if isinstance(fresh_leads, dict) and "error" in fresh_leads:

@@ -28,13 +28,19 @@ CHANNEL_BUDGETS = {
 }
 
 
+# Cold openers that start a thread. Follow-ups (the post-accept linkedin_dm and any
+# *_followup_*) are NOT drafted upfront — they're generated on-demand when their step
+# comes due, so we don't pay to draft DMs for the ~70% who never accept.
+FIRST_TOUCH_CHANNELS = {"linkedin_connect", "linkedin_inmail", "email"}
+
+
 def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:
-    """Channels to draft for one lead, applying InMail routing.
+    """First-touch channels to draft for one lead, applying InMail routing.
 
     Base channels come from campaign.channels (or all three). If the campaign sets
-    inmail_min_fit and this lead scores >= it, the LinkedIn connect→DM sequence is
-    replaced by a single cold InMail (a standalone direct touch); any non-LinkedIn
-    channel (e.g. email) is preserved.
+    inmail_min_fit and this lead scores >= it, the LinkedIn opener becomes a single
+    cold InMail. Only the cold opener is drafted now; the DM/follow-ups are deferred
+    (drafted on-demand by the sequence engine when due).
     """
     base = (
         [c for c in campaign.channels if c in CHANNEL_BUDGETS]
@@ -43,8 +49,9 @@ def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:
     )
     if campaign and campaign.inmail_min_fit and fit_score >= campaign.inmail_min_fit:
         non_linkedin = [c for c in base if not c.startswith("linkedin_")]
-        return ["linkedin_inmail", *non_linkedin]
-    return base
+        base = ["linkedin_inmail", *non_linkedin]
+    first = [c for c in base if c in FIRST_TOUCH_CHANNELS]
+    return first or base[:1]
 
 
 def _humanize(text: str) -> str:

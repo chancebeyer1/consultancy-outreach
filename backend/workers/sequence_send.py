@@ -104,17 +104,19 @@ def _load_state() -> tuple[dict, dict, dict]:
             if ids:
                 cur.execute(
                     """
-                    select l.id, l.linkedin_url, l.name, l.company, coalesce(c.status, 'active')
+                    select l.id, l.linkedin_url, l.name, l.company, l.campaign_id,
+                           coalesce(c.status, 'active')
                     from leads l
                     left join campaigns c on c.id = l.campaign_id
                     where l.id = any(%s::uuid[])
                     """,
                     (ids,),
                 )
-                for lid, url, name, company, camp_status in cur.fetchall():
+                for lid, url, name, company, campaign_id, camp_status in cur.fetchall():
                     first, _, last = (name or "").partition(" ")
                     leads_by_id[str(lid)] = {
                         "linkedin_url": url,
+                        "campaign_id": str(campaign_id) if campaign_id else None,
                         "first_name": first or None,
                         "last_name": last or None,
                         "company": company,
@@ -159,6 +161,67 @@ def _next_draft_for(
         "body": edited_body or body,
         "hook": hook,
     }
+
+
+def _ensure_draft_for_step(*, lead_id: str, channel: str, campaign_id: str | None) -> None:
+    """Draft a follow-up step on-demand if it doesn't exist yet.
+
+    Follow-ups (the post-accept DM, later steps) are deferred from the pipeline to save
+    drafting cost; this generates one only when its step actually comes due. Created
+    'approved' for auto_send campaigns (sends this tick), else 'draft' (queued for review
+    in /drafts). Best-effort and isolated — never raises into the send loop.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select 1 from drafts where lead_id = %s and channel = %s limit 1",
+                (lead_id, channel),
+            )
+            if cur.fetchone():
+                return
+            cur.execute(
+                "select profile_json, recent_posts_json, company_signals_json, hooks_json "
+                "from enrichments where lead_id = %s",
+                (lead_id,),
+            )
+            e = cur.fetchone()
+        if not e:
+            return
+
+        from psycopg.types.json import Jsonb
+
+        from campaigns_loader import load_campaign
+        from workers.draft import CHANNEL_BUDGETS, Hook, draft_for_channel
+
+        if channel not in CHANNEL_BUDGETS:
+            return
+        profile = e[0] or {}
+        enrichment = {
+            "profile": profile,
+            "recent_posts": e[1] or [],
+            "company_signals": e[2] or {},
+            "company": (profile.get("experiences") or [{}])[0].get("company"),
+        }
+        campaign = load_campaign(campaign_id) if campaign_id else None
+        hooks = [Hook.from_json(h) for h in (e[3] or [])]
+        chosen = hooks[0] if hooks else None
+        body = draft_for_channel(channel, enrichment, chosen, campaign=campaign)
+        status = "approved" if (campaign and campaign.auto_send) else "draft"
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into drafts (lead_id, channel, step_index, hook, body, status, generated_at)
+                    values (%s, %s, 1, %s, %s, %s, now())
+                    on conflict (lead_id, channel, step_index, variant) do nothing
+                    """,
+                    (lead_id, channel, Jsonb(chosen.__dict__ if chosen else None), body, status),
+                )
+    except Exception:  # noqa: BLE001 — on-demand drafting is best-effort
+        return
+    finally:
+        conn.close()
 
 
 def _send_via_unipile(lead: dict, draft: dict, channel: str) -> dict[str, Any]:
@@ -445,6 +508,10 @@ def progress_sequences(
             # Paused/archived campaigns don't progress — pausing stops all sending.
             if lead.get("campaign_status") not in (None, "active"):
                 continue
+            # Draft the deferred follow-up on-demand if missing, then look for it.
+            _ensure_draft_for_step(
+                lead_id=a.lead_id, channel=a.next_channel, campaign_id=lead.get("campaign_id")
+            )
             with conn.cursor() as cur:
                 draft = _next_draft_for(cur, lead_id=a.lead_id, channel=a.next_channel)
             if not draft:
