@@ -177,7 +177,9 @@ def send_approved_cron() -> dict:
     """
     from workers.sequence_send import send_approved_first_touch
 
-    return send_approved_first_touch(limit=20)
+    # Pace connects (<=4 per hourly tick) so the daily cap spreads out instead of one
+    # burst; InMail/email aren't paced — they send on their own daily caps + credits.
+    return send_approved_first_touch(connect_per_run=4)
 
 
 @app.function(secrets=secrets, timeout=600)

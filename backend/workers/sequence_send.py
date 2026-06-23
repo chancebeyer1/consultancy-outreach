@@ -301,6 +301,7 @@ def send_approved_first_touch(
     *,
     dry_run: bool = False,
     limit: int | None = None,
+    connect_per_run: int | None = None,
 ) -> dict[str, Any]:
     """Send approved FIRST-TOUCH drafts straight from the DB.
 
@@ -350,6 +351,7 @@ def send_approved_first_touch(
     failed: list[dict[str, Any]] = []
     fell_back: list[str] = []
     remaining: dict[str, int] = {}
+    connects_sent = 0  # per-run pacing for connection requests (avoid one daily burst)
 
     def _has_quota(channel: str) -> bool:
         if channel not in remaining:
@@ -400,6 +402,15 @@ def send_approved_first_touch(
             )
             continue
 
+        # Per-run pacing: hold extra connects for later cron ticks so the daily cap
+        # spreads out instead of bursting. InMail/email aren't paced (own daily caps).
+        if (
+            send_channel == "linkedin_connect"
+            and connect_per_run is not None
+            and connects_sent >= connect_per_run
+        ):
+            continue
+
         if not _has_quota(send_channel):
             blocked_quota.append(str(lead_id))
             continue
@@ -415,6 +426,8 @@ def send_approved_first_touch(
                 sent_body=send_body if fell else None,
             )
             remaining[send_channel] -= 1
+            if send_channel == "linkedin_connect":
+                connects_sent += 1
             if send_channel == "linkedin_inmail" and inmail_left["n"] is not None:
                 inmail_left["n"] -= 1
             rec = {
