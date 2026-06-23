@@ -235,6 +235,35 @@ def search_people(
     return {"items": items, "cursor": next_cursor}
 
 
+@_RETRY
+def list_relations(*, cursor: str | None = None, limit: int = 100) -> dict[str, Any]:
+    """One page of the account's 1st-degree connections.  GET /users/relations
+
+    `member_id` is the LinkedIn member urn (ACoAA…) we match leads on for
+    connection-acceptance detection. Returns {"items": [{provider_id,
+    public_identifier, name}], "cursor": <next or None>} — relations come back
+    most-recent-first, so newly-accepted connections are on the first pages.
+    """
+    params: dict[str, Any] = {"account_id": _li_account(), "limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    with httpx.Client(timeout=60.0) as c:
+        r = c.get(f"{_base()}/users/relations", headers=_headers(), params=params)
+        r.raise_for_status()
+        data = r.json()
+    raw = data.get("items", []) if isinstance(data, dict) else (data or [])
+    items: list[dict[str, Any]] = []
+    for it in raw:
+        pid = it.get("member_id") or it.get("provider_id")
+        if not pid:
+            continue
+        name = " ".join(p for p in (it.get("first_name"), it.get("last_name")) if p) or None
+        items.append(
+            {"provider_id": str(pid), "public_identifier": it.get("public_identifier"), "name": name}
+        )
+    return {"items": items, "cursor": data.get("cursor") if isinstance(data, dict) else None}
+
+
 # ---------------------------------------------------------------------------
 # sending  (replaces heyreach.add_leads_to_campaign + smartlead.add_leads_to_campaign)
 # ---------------------------------------------------------------------------

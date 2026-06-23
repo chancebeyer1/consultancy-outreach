@@ -60,6 +60,7 @@ export interface Lead {
   trigger: Trigger | null;
   status: LeadStatus;
   notes: string | null;
+  accepted_at?: string | null;
   created_at: string;
   updated_at: string;
 }

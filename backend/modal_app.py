@@ -188,6 +188,31 @@ def send_approved_now(dry_run: bool = False, limit: int | None = None) -> dict:
     return send_approved_first_touch(dry_run=dry_run, limit=limit)
 
 
+@app.function(
+    schedule=modal.Cron("7 * * * *"),  # every hour at :07 (offset from the other crons)
+    secrets=secrets,
+    timeout=900,
+    retries=1,
+)
+def detect_connections_cron() -> dict:
+    """Detect LinkedIn connection acceptances → mark accepted, draft + send the DM.
+
+    Pages the account's relations, matches newly-connected people to leads we invited
+    (by provider_id), flips them to accepted, and fires the post-accept DM.
+    """
+    from workers.sequence_send import progress_accepted_connections
+
+    return progress_accepted_connections(limit=30)
+
+
+@app.function(secrets=secrets, timeout=600)
+def detect_connections_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand acceptance detection. `modal run modal_app.py::detect_connections_now --dry-run`."""
+    from workers.sequence_send import progress_accepted_connections
+
+    return progress_accepted_connections(dry_run=dry_run, limit=limit)
+
+
 @app.function(secrets=secrets, timeout=600)
 def pull_replies_now(limit: int = 100, include_read: bool = False) -> dict:
     """On-demand trigger of the same logic — for ad-hoc runs from CLI.

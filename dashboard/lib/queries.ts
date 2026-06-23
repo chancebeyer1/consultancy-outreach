@@ -167,15 +167,12 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
   const hasPendingDraft = new Set<string>(
     draftRows.filter((d) => d.status === "draft" || d.status === "approved").map((d) => d.lead_id),
   );
+  const acceptedLeads = new Set<string>(leads.filter((l) => l.accepted_at).map((l) => l.id));
 
   function statusFor(leadId: string): LeadDisplayStatus {
     if (repliedLeads.has(leadId)) return "replied";
-    const sent = sentByLead.get(leadId);
-    if (sent) {
-      // A DM going out implies the connection was accepted → "connected".
-      const connected = [...sent.channels].some((c) => c.startsWith("linkedin_dm") || c.startsWith("linkedin_followup"));
-      return connected ? "connected" : "sent";
-    }
+    if (acceptedLeads.has(leadId)) return "connected"; // connection accepted (real signal)
+    if (sentByLead.has(leadId)) return "sent";
     if (hasPendingDraft.has(leadId)) return "queued";
     return "new";
   }

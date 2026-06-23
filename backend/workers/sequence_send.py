@@ -105,18 +105,19 @@ def _load_state() -> tuple[dict, dict, dict]:
                 cur.execute(
                     """
                     select l.id, l.linkedin_url, l.name, l.company, l.campaign_id,
-                           coalesce(c.status, 'active')
+                           coalesce(c.status, 'active'), l.accepted_at
                     from leads l
                     left join campaigns c on c.id = l.campaign_id
                     where l.id = any(%s::uuid[])
                     """,
                     (ids,),
                 )
-                for lid, url, name, company, campaign_id, camp_status in cur.fetchall():
+                for lid, url, name, company, campaign_id, camp_status, accepted_at in cur.fetchall():
                     first, _, last = (name or "").partition(" ")
                     leads_by_id[str(lid)] = {
                         "linkedin_url": url,
                         "campaign_id": str(campaign_id) if campaign_id else None,
+                        "accepted": accepted_at is not None,
                         "first_name": first or None,
                         "last_name": last or None,
                         "company": company,
@@ -451,6 +452,130 @@ def send_approved_first_touch(
     }
 
 
+def _send_accepted_dms(*, dry_run: bool = False, limit: int | None = None) -> dict[str, Any]:
+    """Send approved post-accept DMs to leads whose connection was accepted."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select d.id, d.lead_id, d.body, d.edited_body, l.linkedin_url
+                from drafts d
+                join leads l on l.id = d.lead_id
+                left join campaigns c on c.id = l.campaign_id
+                where d.channel = 'linkedin_dm'
+                  and d.status = 'approved'
+                  and l.accepted_at is not null
+                  and (c.status is null or c.status = 'active')
+                  and not exists (select 1 from sends s where s.draft_id = d.id)
+                order by d.generated_at asc
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    if limit is not None:
+        rows = rows[:limit]
+
+    sent: list[str] = []
+    blocked: list[str] = []
+    failed: list[dict[str, Any]] = []
+    remaining: dict[str, int] = {}
+
+    for draft_id, lead_id, body, edited_body, url in rows:
+        if not url:
+            continue
+        if dry_run:
+            sent.append(str(lead_id))
+            continue
+        if "linkedin_dm" not in remaining:
+            remaining["linkedin_dm"] = quota("linkedin_dm").allowed
+        if remaining["linkedin_dm"] <= 0:
+            blocked.append(str(lead_id))
+            continue
+        try:
+            resp = _send_via_unipile(
+                {"linkedin_url": url}, {"id": str(draft_id), "body": edited_body or body}, "linkedin_dm"
+            )
+            _record_send(str(draft_id), resp)
+            remaining["linkedin_dm"] -= 1
+            sent.append(str(lead_id))
+        except Exception as e:  # noqa: BLE001
+            failed.append({"lead_id": str(lead_id), "error": str(e)[:160]})
+    return {"dm_sent": len(sent), "dm_blocked_quota": len(blocked), "dm_failed": len(failed)}
+
+
+def progress_accepted_connections(
+    *,
+    dry_run: bool = False,
+    max_pages: int = 8,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Detect LinkedIn connection acceptances and fire the post-accept DM.
+
+    1. Find leads we sent a connect to but haven't marked accepted.
+    2. Page the account's relations (recent-first); any pending lead now connected is
+       marked accepted (leads.accepted_at) and gets its DM drafted — auto-approved for
+       auto_send campaigns, else queued in /drafts for review.
+    3. Send approved DMs to accepted leads (quota-gated).
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select l.id, l.provider_id, l.campaign_id
+                from leads l
+                where l.provider_id is not null
+                  and l.accepted_at is null
+                  and exists (
+                      select 1 from drafts d join sends s on s.draft_id = d.id
+                      where d.lead_id = l.id and d.channel = 'linkedin_connect'
+                  )
+                """
+            )
+            pending = {r[1]: (str(r[0]), str(r[2]) if r[2] else None) for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+    newly: list[tuple[str, str, str | None]] = []  # (provider_id, lead_id, campaign_id)
+    if pending:
+        remaining_ids = set(pending)
+        cursor: str | None = None
+        pages = 0
+        while remaining_ids and pages < max_pages:
+            page = unipile.list_relations(cursor=cursor, limit=100)
+            for rel in page["items"]:
+                pid = rel["provider_id"]
+                if pid in remaining_ids:
+                    remaining_ids.discard(pid)
+                    newly.append((pid, *pending[pid]))
+            cursor = page["cursor"]
+            pages += 1
+            if not cursor:
+                break
+
+    if newly and not dry_run:
+        now = datetime.now(UTC)
+        conn = _connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for _pid, lead_id, _cid in newly:
+                        cur.execute(
+                            "update leads set accepted_at = %s, updated_at = now() "
+                            "where id = %s and accepted_at is null",
+                            (now, lead_id),
+                        )
+        finally:
+            conn.close()
+        for _pid, lead_id, campaign_id in newly:
+            _ensure_draft_for_step(lead_id=lead_id, channel="linkedin_dm", campaign_id=campaign_id)
+
+    dm = _send_accepted_dms(dry_run=dry_run, limit=limit)
+    return {"newly_accepted": len(newly), **dm, "dry_run": dry_run}
+
+
 def progress_sequences(
     *,
     dry_run: bool = False,
@@ -507,6 +632,12 @@ def progress_sequences(
                 continue
             # Paused/archived campaigns don't progress — pausing stops all sending.
             if lead.get("campaign_status") not in (None, "active"):
+                continue
+            # The post-accept DM is owned by progress_accepted_connections; any LinkedIn
+            # follow-up needs an accepted connection — don't fire on a timer otherwise.
+            if a.next_channel == "linkedin_dm":
+                continue
+            if a.next_channel in LINKEDIN_CHANNELS and not lead.get("accepted"):
                 continue
             # Draft the deferred follow-up on-demand if missing, then look for it.
             _ensure_draft_for_step(
