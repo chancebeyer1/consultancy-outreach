@@ -1,0 +1,15 @@
+# Recruiting Agency Sprint — research-led outreach to boutique recruiting / staffing
+# agency founders. LinkedIn-native, AI-curious, fast buyers (they do outreach themselves).
+#   uv run python -m scripts.run_pipeline leads.csv --campaign recruiting-agency-sprint
+
+name = "Recruiting Agency Sprint"
+slug = "recruiting-agency-sprint"
+is_default = false
+
+channels = ["linkedin_connect", "linkedin_dm"]
+
+# US boutique staffing/recruiting agency owners (classic LinkedIn people search, geoUrn
+# 103644278 = United States). URL-encoded so it's TOML-safe. Tune in the dashboard.
+search_url = 'https://www.linkedin.com/search/results/people/?keywords=staffing%20agency%20owner&geoUrn=%5B%22103644278%22%5D'
+
+inmail_min_fit = 85

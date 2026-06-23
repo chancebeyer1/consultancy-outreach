@@ -1,0 +1,18 @@
+# Insurance Agency Sprint — research-led outreach to independent insurance agency
+# owners/principals. The near-twin of the mortgage campaign: doc-heavy back office,
+# owner-operated, US-only. Target explicitly:
+#   uv run python -m scripts.run_pipeline leads.csv --campaign insurance-agency-sprint
+
+name = "Insurance Agency Sprint"
+slug = "insurance-agency-sprint"
+is_default = false
+
+# LinkedIn-only for now (email turns on once mailboxes are connected).
+channels = ["linkedin_connect", "linkedin_dm"]
+
+# US independent insurance agency owners (classic LinkedIn people search, geoUrn
+# 103644278 = United States). URL-encoded so it's TOML-safe. Tune in the dashboard.
+search_url = 'https://www.linkedin.com/search/results/people/?keywords=independent%20insurance%20agency%20owner&geoUrn=%5B%22103644278%22%5D'
+
+# Top-fit principals get a cold InMail (Sales Nav credit) instead of a connect request.
+inmail_min_fit = 85

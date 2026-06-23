@@ -26,7 +26,7 @@ from workers import draft, enrich, score
 
 # Thresholds
 QUEUE_THRESHOLD = 20  # if < this many messageable leads, pull fresh ones
-PULL_LIMIT = 50  # max leads to source in one replenish run
+PULL_LIMIT = 15  # max leads to source per campaign per replenish run (gradual ramp)
 QUEUE_LOOKBACK_DAYS = 7  # count leads sourced in the last N days
 
 
