@@ -57,6 +57,11 @@ class Config:
     unipile_linkedin_account_id: str = _env("UNIPILE_LINKEDIN_ACCOUNT_ID")
     unipile_email_account_id: str = _env("UNIPILE_EMAIL_ACCOUNT_ID")
 
+    # Email outbound (cold email system)
+    millionverifier_api_key: str = _env("MILLIONVERIFIER_API_KEY")
+    resend_api_key: str = _env("RESEND_API_KEY")
+    notify_email: str = _env("NOTIFY_EMAIL")
+
     # DB
     database_url: str = _env("DATABASE_URL")
 
