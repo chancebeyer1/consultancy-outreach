@@ -68,9 +68,12 @@ def _messageable_count(cursor, campaign_id: str) -> int:
         select count(distinct d.lead_id)
         from drafts d
         join leads l on l.id = d.lead_id
+        left join sends s on s.draft_id = d.id
         where l.campaign_id = %s
           and d.generated_at > %s
           and d.status in ('draft', 'approved')
+          and d.channel in ('linkedin_connect', 'linkedin_inmail', 'email')
+          and s.id is null
         """,
         (campaign_id, cutoff.isoformat()),
     )

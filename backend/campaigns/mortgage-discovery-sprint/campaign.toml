@@ -24,8 +24,9 @@ inmail_min_fit = 85
 # Branch Manager / Owner; Geography: United States; Company headcount: 1-50; exclude
 # the megabanks — then copy the browser URL and paste it here. Then:
 #   uv run python -m scripts.source_leads --campaign mortgage-discovery-sprint --limit 150
-# Leave it unset to source manually with --search-url instead.
-# search_url = "https://www.linkedin.com/sales/search/people?query=..."
+# US mortgage-broker people search (classic LinkedIn search, geoUrn 103644278 = United
+# States). URL-encoded so it's TOML-safe. Replenish + source_leads paginate this.
+search_url = 'https://www.linkedin.com/search/results/people/?keywords=mortgage%20broker&geoUrn=%5B%22103644278%22%5D'
 
 # The 15-minute discovery-call booking link — used in reply suggestions once
 # someone says yes. Set this to your Cal.com link for the sprint; falls back to
