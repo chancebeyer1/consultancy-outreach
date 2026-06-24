@@ -181,6 +181,7 @@ def draft_for_channel(
         "prospect_full_name": profile.get("full_name"),
         "prospect_headline": profile.get("headline"),
         "prospect_company": enrichment.get("company"),
+        "my_first_name": Config.sender_first_name,  # sign-off name; never invent one
         "landing_url": landing_url,
         "chosen_hook": {
             "type": hook.type if hook else None,
@@ -199,6 +200,11 @@ def draft_for_channel(
         model=Config.claude_model_draft,
         max_tokens=600,
     )
+    # Fill name placeholders so no literal {{...}} ever ships (sender name, and prospect
+    # first name as a safety net if the model echoes the template instead of the value).
+    raw = raw.replace("{{my_first_name}}", Config.sender_first_name)
+    if first_name:
+        raw = raw.replace("{{first_name}}", first_name)
     return _humanize(raw)
 
 

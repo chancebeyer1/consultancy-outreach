@@ -69,3 +69,4 @@ class Config:
     # Outreach content
     landing_url: str = _env("LANDING_URL", "https://your-domain.com")
     calcom_url: str = _env("CALCOM_URL", "https://cal.com/your-handle")
+    sender_first_name: str = _env("SENDER_FIRST_NAME", "Chance")  # fills {{my_first_name}} in drafts
