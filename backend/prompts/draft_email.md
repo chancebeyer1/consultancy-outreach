@@ -57,6 +57,18 @@ worth a chat if your team is hiring contractors. either way, no follow-up.
 - Sign-off uses my first name only.
 - The "reply 'no thanks'" line is intentional — feels respectful + handles unsubscribe.
 
+## Deliverability (keep inbox placement high — per our infra guide)
+
+- **Plain text only.** No images, no HTML, no tracking pixels, no fancy formatting.
+- **Signature = first name only.** No phone number, no title, no company line, no links, no logo.
+  A heavy signature is a spam signal on a cold domain.
+- **Zero spam-trigger words.** Avoid: free, guarantee, act now, limited time, $$$, "increase
+  revenue", "best", "offer", "click here", excessive caps or exclamation marks.
+- **Vary the opening line** per prospect — never a reusable template phrase. The hook must be
+  specific to them.
+- **Short and human.** One idea, one soft ask. The more it reads like a real 1:1 note, the
+  better it lands.
+
 ## Output format
 
 Return the email body in EXACTLY the format shown above:

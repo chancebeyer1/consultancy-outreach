@@ -54,6 +54,11 @@ def send(
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = references or in_reply_to
+    else:
+        # Cold first-touch: a List-Unsubscribe header is effectively mandatory for inbox
+        # placement now (Google/Yahoo bulk-sender rules). Mailto-based one-tap unsubscribe.
+        # Threaded replies (in_reply_to set) are 1:1 conversation — no unsubscribe there.
+        msg["List-Unsubscribe"] = f"<mailto:{from_email}?subject=unsubscribe>"
 
     ctx = ssl.create_default_context()
     if int(smtp_port) == 465:

@@ -29,20 +29,23 @@ export async function Nav() {
 
   return (
     <header className="border-b border-neutral-800">
-      <div className="mx-auto flex max-w-7xl items-center gap-8 px-6 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 sm:px-6">
         <Link href="/" className="font-mono text-sm font-bold tracking-wide">
           OUTREACH
         </Link>
-        <nav className="flex gap-5 text-sm text-neutral-400">
+        {/* Mobile: full-width, horizontally scrollable row under the logo. Desktop: inline. */}
+        <nav className="order-3 -mx-4 flex w-full gap-4 overflow-x-auto px-4 text-sm text-neutral-400 [-ms-overflow-style:none] [scrollbar-width:none] sm:order-none sm:mx-0 sm:w-auto sm:flex-1 sm:overflow-visible sm:px-0">
           {links.map((l) => (
-            <Link key={l.href} href={l.href} className="hover:text-white">
+            <Link key={l.href} href={l.href} className="whitespace-nowrap hover:text-white">
               {l.label}
             </Link>
           ))}
         </nav>
-        <div className="ml-auto flex items-center gap-5">
+        <div className="ml-auto flex items-center gap-3">
           <CampaignSelector campaigns={campaigns} selected={selected} />
-          <div className={`font-mono text-[10px] uppercase tracking-wide ${sourceColor[dataSource]}`}>
+          <div
+            className={`hidden font-mono text-[10px] uppercase tracking-wide sm:block ${sourceColor[dataSource]}`}
+          >
             source · {dataSource}
           </div>
         </div>
