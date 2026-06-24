@@ -114,21 +114,29 @@ def _save_to_ledger(campaign_slug: str, urls: list[str]) -> None:
             f.write(json.dumps({"linkedin_url": url, "sourced_at": datetime.datetime.utcnow().isoformat()}) + "\n")
 
 
-def _pull_fresh_leads(
-    search_url: str, limit: int, seen: set[str]
-) -> list[dict]:
-    """Fetch fresh leads from Unipile search API, deduping against seen."""
-    try:
-        results = unipile.search_people(search_url=search_url, limit=limit)
-    except Exception as e:
-        return {"error": f"search failed: {e}", "fetched": 0}
-
-    # Normalize to lead shape (linkedin_url, name, company, role, location)
-    fresh = []
-    for item in results:
-        normalized = unipile._normalize_search_item(item)
-        if normalized and normalized.get("linkedin_url") not in seen:
-            fresh.append(normalized)
+def _pull_fresh_leads(search_url: str, limit: int, seen: set[str], max_pages: int = 10) -> list[dict]:
+    """Page the Unipile people search, deduping against `seen`, until we have `limit`
+    fresh leads. search_people returns {"items": [already-normalized], "cursor"}, so we
+    paginate via the cursor (it does NOT take a limit)."""
+    fresh: list[dict] = []
+    cursor: str | None = None
+    pages = 0
+    while len(fresh) < limit and pages < max_pages:
+        try:
+            page = unipile.search_people(search_url=search_url, cursor=cursor)
+        except Exception as e:  # noqa: BLE001
+            return fresh if fresh else {"error": f"search failed: {e}", "fetched": 0}
+        for item in page.get("items", []):
+            url = item.get("linkedin_url")
+            if url and url not in seen:
+                seen.add(url)
+                fresh.append(item)
+                if len(fresh) >= limit:
+                    break
+        cursor = page.get("cursor")
+        pages += 1
+        if not cursor:
+            break
     return fresh
 
 
