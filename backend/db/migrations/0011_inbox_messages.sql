@@ -18,6 +18,7 @@ create table if not exists inbox_messages (
     lead_id      uuid references leads(id),
     campaign_id  uuid references campaigns(id),
     is_auto      boolean not null default false,
+    direction    text not null default 'in',   -- 'in' = received | 'out' = your reply (sent from the dashboard)
     received_at  timestamptz,
     created_at   timestamptz not null default now()
 );
