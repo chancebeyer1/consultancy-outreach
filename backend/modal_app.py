@@ -208,6 +208,21 @@ def apollo_source_now(dry_run: bool = False, limit: int = 8) -> dict:
     return res
 
 
+@app.function(secrets=secrets, timeout=60)
+def notify_test() -> dict:
+    """Send a test reply-alert to NOTIFY_EMAIL from a Maildoso box.
+    `modal run modal_app.py::notify_test`. Returns {sent, reason?} — proves the alert path."""
+    from workers.email_sender import notify
+
+    res = notify(
+        subject="Test alert — outreach unibox",
+        body="This is a test of the reply-notification path. If this landed in your inbox, "
+        "every-reply alerts are working.",
+    )
+    print("NOTIFY_TEST " + str(res))
+    return res
+
+
 @app.function(secrets=secrets, timeout=120)
 def apollo_test() -> dict:
     """Validate the Apollo key + client live. One enrich call costs ~1 credit.
