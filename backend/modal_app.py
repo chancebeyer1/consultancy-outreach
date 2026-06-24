@@ -109,8 +109,18 @@ def pull_replies_cron() -> dict:
     Unipile's `unipile_webhook` is the primary, near-real-time path; this hourly
     sweep is a safety net. Conservatively scoped per run (limit=100) so a single
     tick finishes well inside the timeout even with classifier latency.
+
+    Same tick also sweeps the Maildoso unibox for email replies and alerts
+    NOTIFY_EMAIL (folded in here to stay within the scheduled-function budget).
     """
-    return _pull_replies_impl(limit=100, only_with_unread=True)
+    unipile = _pull_replies_impl(limit=100, only_with_unread=True)
+    try:
+        from workers.email_inbox import poll_inboxes
+
+        email = poll_inboxes(limit_per_box=25)
+    except Exception as e:  # noqa: BLE001
+        email = {"error": str(e)}
+    return {"unipile": unipile, "email": email}
 
 
 @app.function(
@@ -161,41 +171,6 @@ def progress_sequences_now(dry_run: bool = False, limit: int | None = None) -> d
     return progress_sequences(dry_run=dry_run, limit=limit)
 
 
-@app.function(
-    schedule=modal.Cron("22 * * * *"),  # every hour at :22 (offset from the LinkedIn crons)
-    secrets=secrets,
-    timeout=900,
-    retries=1,
-)
-def send_email_cron() -> dict:
-    """Send approved first-touch email drafts via Maildoso, rotating across mailboxes.
-
-    Only verified-deliverable leads on active campaigns are sent. Per-box warmup ramp,
-    the global email cap, and the per-campaign fair-share all apply. No-ops safely until
-    Apollo-sourced + verified email leads exist.
-    """
-    from workers.email_sender import send_email_first_touch
-
-    return send_email_first_touch()
-
-
-@app.function(
-    schedule=modal.Cron("*/15 * * * *"),  # every 15 min — keep the unibox responsive
-    secrets=secrets,
-    timeout=600,
-    retries=1,
-)
-def email_inbox_cron() -> dict:
-    """Sweep all Maildoso inboxes for real prospect replies; alert NOTIFY_EMAIL.
-
-    Matches inbound to a lead (by address or thread), filters warmup/auto-responders,
-    stores the reply (channel='email'), and notifies on every human reply.
-    """
-    from workers.email_inbox import poll_inboxes
-
-    return poll_inboxes(limit_per_box=25)
-
-
 @app.function(secrets=secrets, timeout=600)
 def send_email_now(dry_run: bool = False, limit: int | None = None) -> dict:
     """On-demand email send. `modal run modal_app.py::send_email_now --dry-run`."""
@@ -226,11 +201,19 @@ def send_approved_cron() -> dict:
     cap. The DB-driven counterpart to scripts/send_approvals.py, so first contact runs
     on Modal without the operator's machine. Follow-ups stay with progress_sequences.
     """
+    from workers.email_sender import send_email_first_touch
     from workers.sequence_send import send_approved_first_touch
 
     # Pace connects (<=4 per hourly tick) so the daily cap spreads out instead of one
     # burst; InMail/email aren't paced — they send on their own daily caps + credits.
-    return send_approved_first_touch(connect_per_run=4)
+    linkedin = send_approved_first_touch(connect_per_run=4)
+    # Same tick also sends approved first-touch EMAIL via Maildoso (rotated + ramped).
+    # Wrapped so an email-side failure never aborts the LinkedIn result.
+    try:
+        email = send_email_first_touch()
+    except Exception as e:  # noqa: BLE001
+        email = {"error": str(e)}
+    return {"linkedin": linkedin, "email": email}
 
 
 @app.function(secrets=secrets, timeout=600)
