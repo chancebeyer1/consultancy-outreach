@@ -187,6 +187,39 @@ def email_inbox_now(dry_run: bool = False) -> dict:
     return poll_inboxes(dry_run=dry_run)
 
 
+@app.function(secrets=secrets, timeout=120)
+def apollo_test() -> dict:
+    """Validate the Apollo key + client live. One enrich call costs ~1 credit.
+    `modal run modal_app.py::apollo_test`."""
+    from clients import apollo
+
+    res = apollo.search_people(
+        titles=["insurance agency owner", "agency principal", "president"],
+        seniorities=["owner", "founder", "c_suite"],
+        locations=["united states"],
+        num_employees_ranges=["1,10", "11,50"],
+        per_page=3,
+    )
+    out: dict = {
+        "search_total": res.get("total"),
+        "got": len(res["people"]),
+        "sample": [
+            {k: p.get(k) for k in ("name", "title", "company", "company_domain", "email", "apollo_email_status")}
+            for p in res["people"]
+        ],
+    }
+    import json as _json
+
+    if res["people"]:
+        p0 = res["people"][0]
+        enr = apollo.enrich_person(apollo_id=p0.get("apollo_id"), reveal_personal_emails=True)
+        out["enriched"] = {
+            k: enr.get(k) for k in ("name", "email", "email_kind", "work_email", "personal_emails", "apollo_email_status")
+        }
+    print("APOLLO_RESULT " + _json.dumps(out, default=str)[:1800])
+    return out
+
+
 @app.function(
     schedule=modal.Cron("47 * * * *"),  # every hour at :47 (offset from the others)
     secrets=secrets,

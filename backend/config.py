@@ -59,6 +59,7 @@ class Config:
 
     # Email outbound (cold email system)
     millionverifier_api_key: str = _env("MILLIONVERIFIER_API_KEY")
+    apollo_api_key: str = _env("APOLLO_API_KEY")  # email lead sourcing + work-email reveal
     resend_api_key: str = _env("RESEND_API_KEY")
     notify_email: str = _env("NOTIFY_EMAIL")
 
