@@ -52,6 +52,7 @@ _WRITE_COLS = [
     "calcom_url",
     "search_url",
     "search_params",
+    "apollo_params",
     "channels",
     "auto_send",
     "inmail_min_fit",
@@ -83,6 +84,10 @@ def _read_campaign_dir(folder: Path) -> dict | None:
     search_params = (
         json.loads(search_json.read_text(encoding="utf-8")) if search_json.exists() else None
     )
+    apollo_json = folder / "apollo.json"  # Apollo email-sourcing filters (title/seniority/size)
+    apollo_params = (
+        json.loads(apollo_json.read_text(encoding="utf-8")) if apollo_json.exists() else None
+    )
     return {
         "slug": slug,
         "name": meta.get("name") or slug,
@@ -95,6 +100,7 @@ def _read_campaign_dir(folder: Path) -> dict | None:
         "calcom_url": meta.get("calcom_url"),
         "search_url": meta.get("search_url"),
         "search_params": search_params,  # dict | None → Postgres jsonb
+        "apollo_params": apollo_params,  # dict | None → Postgres jsonb
         "channels": meta.get("channels"),  # list[str] | None → Postgres text[]
         "auto_send": bool(meta.get("auto_send", False)),
         "inmail_min_fit": meta.get("inmail_min_fit"),
@@ -166,7 +172,7 @@ def main(
     def vals(c: dict) -> list:
         # search_params is jsonb — wrap the dict so psycopg adapts it; everything else passes through.
         return [
-            Jsonb(c[col]) if col == "search_params" and c[col] is not None else c[col]
+            Jsonb(c[col]) if col in ("search_params", "apollo_params") and c[col] is not None else c[col]
             for col in _WRITE_COLS
         ]
 

@@ -1,0 +1,6 @@
+{
+  "titles": ["staffing agency owner", "recruiting agency owner", "managing partner", "executive recruiter", "agency founder", "president"],
+  "seniorities": ["owner", "founder", "c_suite"],
+  "locations": ["united states"],
+  "num_employees_ranges": ["11,50", "51,200"]
+}

@@ -160,7 +160,16 @@ def replenish_queue_cron() -> dict:
     """
     from workers.replenish import replenish_all_campaigns
 
-    return replenish_all_campaigns(dry_run=False)
+    linkedin = replenish_all_campaigns(dry_run=False)
+    # Same tick also sources EMAIL leads from Apollo (search -> score -> reveal -> verify ->
+    # draft) for campaigns with apollo_params. Wrapped so a failure never aborts LinkedIn.
+    try:
+        from workers.apollo_sourcing import source_apollo_all
+
+        email = source_apollo_all(dry_run=False)
+    except Exception as e:  # noqa: BLE001
+        email = {"error": str(e)}
+    return {"linkedin": linkedin, "apollo_email": email}
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -185,6 +194,18 @@ def email_inbox_now(dry_run: bool = False) -> dict:
     from workers.email_inbox import poll_inboxes
 
     return poll_inboxes(dry_run=dry_run)
+
+
+@app.function(secrets=secrets, timeout=900)
+def apollo_source_now(dry_run: bool = False, limit: int = 8) -> dict:
+    """On-demand Apollo email sourcing. `modal run modal_app.py::apollo_source_now --dry-run --limit 2`."""
+    from workers.apollo_sourcing import source_apollo_all
+
+    res = source_apollo_all(dry_run=dry_run, limit=limit)
+    import json as _json
+
+    print("APOLLO_SOURCE " + _json.dumps(res, default=str)[:2500])
+    return res
 
 
 @app.function(secrets=secrets, timeout=120)

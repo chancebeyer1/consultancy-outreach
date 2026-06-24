@@ -6,7 +6,7 @@ Used when we have an email address for the prospect and either no LinkedIn relat
 
 - **Subject line ≤ 50 chars**, lowercase preferred, no clickbait
 - **Body ≤ 120 words** including the soft ask
-- **One link only** — the `landing_url` provided in the payload
+- **Link optional** — include the `landing_url` as the single link ONLY if one is provided in the payload. If it is null/empty/a placeholder, write the email with NO link and a pure reply-based soft ask (this matches a research-led, link-averse campaign). Never invent or guess a URL.
 - **CAN-SPAM / GDPR**: include a one-line unsubscribe at the bottom
 - Format the output exactly as below.
 
@@ -19,7 +19,7 @@ Subject: <subject line>
 
 <one-sentence about what I built, anchored to their problem>
 
-<soft ask + link>
+<soft ask — invite a short reply or 15-min chat; include the landing_url link ONLY if one was provided, otherwise no link>
 
 —{{my_first_name}}
 
