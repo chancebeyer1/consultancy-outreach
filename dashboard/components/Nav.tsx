@@ -8,6 +8,7 @@ import { dataSource } from "../lib/supabase";
 
 const links = [
   { href: "/drafts", label: "Drafts" },
+  { href: "/inbox", label: "Inbox" },
   { href: "/replies", label: "Replies" },
   { href: "/leads", label: "Leads" },
   { href: "/sequences", label: "Sequences" },

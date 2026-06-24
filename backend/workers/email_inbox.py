@@ -97,27 +97,48 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
             continue
         for m in msgs:
             m["_box"] = email
+            m["_box_id"] = _mid
             fetched.append(m)
 
-    # 2. Keep only real prospect replies; store them (one DB connection, fast work).
-    auto = skipped = stored = 0
+    # 2. Store EVERY inbound into the unified inbox (the boxes' INBOX is warmup-free, so this
+    # is real mail only), then raise curated alerts for the human, lead-matched ones.
+    auto = skipped = stored = inbox_stored = 0
     new_replies: list[dict] = []
     with _connect() as conn:
         with conn.cursor() as cur:
             for m in fetched:
-                if _is_auto(m):
+                is_auto = _is_auto(m)
+                lead = _resolve_lead(cur, m.get("from_email", ""), m.get("in_reply_to"))
+                lead_id = lead[0] if lead else None
+                campaign_id = lead[1] if lead else None
+                lead_name = lead[2] if lead else None
+                mid = m.get("message_id") or None
+
+                if not dry_run:
+                    cur.execute(
+                        """
+                        insert into inbox_messages
+                            (mailbox_id, mailbox_email, from_email, from_name, subject, body,
+                             message_id, in_reply_to, lead_id, campaign_id, is_auto, received_at)
+                        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                        on conflict (message_id) do nothing
+                        """,
+                        (m.get("_box_id"), m.get("_box"), m.get("from_email"), m.get("from_name"),
+                         m.get("subject"), (m.get("body") or "")[:8000], mid, m.get("in_reply_to"),
+                         lead_id, campaign_id, is_auto),
+                    )
+                    inbox_stored += 1
+
+                if is_auto:
                     auto += 1
                     continue
-                lead = _resolve_lead(cur, m.get("from_email", ""), m.get("in_reply_to"))
                 if not lead:
-                    skipped += 1  # warmup / unrelated noise
+                    skipped += 1  # in the inbox, but not tied to our outreach → no alert
                     continue
-                lead_id, campaign_id, lead_name = lead
-                mid = m.get("message_id") or None
                 if mid:
                     cur.execute("select 1 from replies where external_id = %s", (mid,))
                     if cur.fetchone():
-                        continue  # already ingested
+                        continue  # already ingested as a curated reply
                 rec = {
                     "lead_id": str(lead_id), "campaign_id": str(campaign_id) if campaign_id else None,
                     "lead_name": lead_name, "from_email": m.get("from_email"),
@@ -154,6 +175,7 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
     return {
         "boxes_polled": len(boxes),
         "fetched": len(fetched),
+        "inbox_stored": inbox_stored,
         "auto_filtered": auto,
         "noise_skipped": skipped,
         "replies_stored": stored,

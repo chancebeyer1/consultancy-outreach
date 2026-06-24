@@ -106,6 +106,43 @@ export async function getMailboxes(): Promise<MailboxRow[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Unified inbox — every inbound message across all boxes, for /inbox
+// (read server-side via service role; inbox bodies stay off the anon key)
+// ---------------------------------------------------------------------------
+
+export interface InboxMessage {
+  id: string;
+  mailbox_email: string | null;
+  from_email: string | null;
+  from_name: string | null;
+  subject: string | null;
+  body: string | null;
+  lead_id: string | null;
+  campaign_id: string | null;
+  is_auto: boolean;
+  received_at: string | null;
+}
+
+const MOCK_INBOX: InboxMessage[] = [
+  { id: "i1", mailbox_email: "cbeyer@usecontentai.com", from_email: "owner@acmeinsurance.com", from_name: "Crystal D.", subject: "Re: back-office grind at C&E", body: "yeah happy to chat — how about Thursday?", lead_id: "l1", campaign_id: null, is_auto: false, received_at: new Date(Date.now() - 3600_000).toISOString() },
+  { id: "i2", mailbox_email: "c.beyer@dripwithai.com", from_email: "dan@advancedlocal.com", from_name: "Dan", subject: "Out of office", body: "I'm away until Monday.", lead_id: null, campaign_id: null, is_auto: true, received_at: new Date(Date.now() - 7200_000).toISOString() },
+];
+
+export async function getInboxMessages(campaignId?: string): Promise<InboxMessage[]> {
+  if (dataSource !== "supabase") return MOCK_INBOX;
+  const admin = serverAdminClient();
+  let q = admin
+    .from("inbox_messages")
+    .select("id, mailbox_email, from_email, from_name, subject, body, lead_id, campaign_id, is_auto, received_at")
+    .order("received_at", { ascending: false, nullsFirst: false })
+    .limit(500);
+  if (campaignId) q = q.eq("campaign_id", campaignId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data ?? []) as InboxMessage[];
+}
+
+// ---------------------------------------------------------------------------
 // Campaigns — list for the selector + /campaigns management surface
 // ---------------------------------------------------------------------------
 
