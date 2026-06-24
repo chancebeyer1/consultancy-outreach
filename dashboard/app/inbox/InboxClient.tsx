@@ -2,44 +2,106 @@
 
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { InboxMessage } from "@/lib/queries";
 
 type Row = InboxMessage & { campaign?: string | null };
 
+interface Thread {
+  key: string;
+  prospectName: string | null;
+  prospectEmail: string | null;
+  campaign: string | null;
+  messages: Row[]; // chronological (oldest first)
+  latest: Row;
+  needsReply: boolean; // latest message is an inbound human message → awaiting us
+  replyTarget: Row | null; // the inbound message to reply to
+}
+
+function buildThreads(messages: Row[]): Thread[] {
+  const groups = new Map<string, Row[]>();
+  for (const m of messages) {
+    const key = m.lead_id ? `lead:${m.lead_id}` : `email:${(m.from_email || "?").toLowerCase()}`;
+    let arr = groups.get(key);
+    if (!arr) {
+      arr = [];
+      groups.set(key, arr);
+    }
+    arr.push(m);
+  }
+  const threads: Thread[] = [];
+  for (const [key, msgs] of groups) {
+    msgs.sort((a, b) => ts(a.received_at) - ts(b.received_at));
+    const inbound = msgs.filter((m) => m.direction !== "out");
+    const prospect = inbound[0] ?? msgs[0];
+    const latest = msgs[msgs.length - 1];
+    const lastInbound = [...msgs].reverse().find((m) => m.direction !== "out") ?? null;
+    threads.push({
+      key,
+      prospectName: prospect.from_name,
+      prospectEmail: prospect.from_email,
+      campaign: msgs.find((m) => m.campaign)?.campaign ?? null,
+      messages: msgs,
+      latest,
+      needsReply: latest.direction !== "out" && !latest.is_auto,
+      replyTarget: lastInbound,
+    });
+  }
+  // Needs-reply first, then most-recent activity.
+  threads.sort((a, b) => Number(b.needsReply) - Number(a.needsReply) || ts(b.latest.received_at) - ts(a.latest.received_at));
+  return threads;
+}
+
 export function InboxClient({ messages }: { messages: Row[] }) {
-  const replies = messages.filter((m) => m.direction === "in" && !m.is_auto && m.lead_id).length;
-  const autos = messages.filter((m) => m.is_auto).length;
+  const threads = useMemo(() => buildThreads(messages), [messages]);
+  const [filter, setFilter] = useState<"needs" | "all">("needs");
+
+  const needs = threads.filter((t) => t.needsReply).length;
   const last24 = messages.filter(
     (m) => m.received_at && Date.now() - new Date(m.received_at).getTime() < 86_400_000,
   ).length;
+  const shown = filter === "needs" ? threads.filter((t) => t.needsReply) : threads;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-6">
+    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
       <header className="mb-6 border-b border-neutral-800 pb-5">
         <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          One unified inbox across all sending boxes — real inbound only (warmup stays out).
-          Reply right here; it sends from the box the prospect emailed and stays threaded.
+          Conversations across all boxes, grouped by prospect. &quot;Needs reply&quot; surfaces the
+          ones waiting on you. Reply here — it threads and sends from the right box.
         </p>
       </header>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Kpi label="Messages" value={String(messages.length)} />
-        <Kpi label="Replies" value={String(replies)} tone="text-emerald-400" />
-        <Kpi label="Auto / OOO" value={String(autos)} tone="text-neutral-400" />
+      <div className="grid grid-cols-3 gap-4">
+        <Kpi label="Conversations" value={String(threads.length)} />
+        <Kpi label="Needs reply" value={String(needs)} tone={needs > 0 ? "text-amber-400" : "text-neutral-100"} />
         <Kpi label="Last 24h" value={String(last24)} />
       </div>
 
-      {messages.length === 0 ? (
+      <div className="mt-5 flex gap-2">
+        {(["needs", "all"] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={clsx(
+              "rounded-full px-3 py-1 text-xs font-medium",
+              filter === f ? "bg-neutral-200 text-neutral-900" : "border border-neutral-700 text-neutral-400 hover:bg-neutral-900",
+            )}
+          >
+            {f === "needs" ? `Needs reply ${needs}` : `All ${threads.length}`}
+          </button>
+        ))}
+      </div>
+
+      {shown.length === 0 ? (
         <p className="mt-12 text-center text-sm italic text-neutral-600">
-          No inbound yet. Replies from your prospects will land here as they arrive.
+          {filter === "needs" ? "Nothing waiting on you. 🎉" : "No conversations yet."}
         </p>
       ) : (
-        <ul className="mt-6 divide-y divide-neutral-900 rounded-lg border border-neutral-800">
-          {messages.map((m) => (
-            <MessageRow key={m.id} m={m} />
+        <ul className="mt-5 space-y-3">
+          {shown.map((t) => (
+            <ThreadCard key={t.key} t={t} />
           ))}
         </ul>
       )}
@@ -47,12 +109,58 @@ export function InboxClient({ messages }: { messages: Row[] }) {
   );
 }
 
-function MessageRow({ m }: { m: Row }) {
+function ThreadCard({ t }: { t: Thread }) {
+  const [open, setOpen] = useState(t.needsReply);
+  return (
+    <li className="rounded-lg border border-neutral-800 bg-neutral-950">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 px-4 py-3 text-left">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-neutral-100">
+              {t.prospectName || t.prospectEmail || "(unknown)"}
+            </span>
+            {t.needsReply && (
+              <span className="rounded border border-amber-800 bg-amber-950 px-1.5 py-0.5 font-mono text-[10px] uppercase text-amber-300">
+                needs reply
+              </span>
+            )}
+            {t.campaign && <span className="truncate text-[11px] text-neutral-600">· {t.campaign}</span>}
+          </div>
+          <div className="mt-0.5 truncate text-xs text-neutral-500">
+            {t.latest.direction === "out" ? "You: " : ""}
+            {(t.latest.subject ? `${t.latest.subject} — ` : "") + (t.latest.body || "").slice(0, 90)}
+          </div>
+        </div>
+        <span className="shrink-0 font-mono text-[11px] text-neutral-500">{relTime(t.latest.received_at)}</span>
+      </button>
+
+      {open && (
+        <div className="border-t border-neutral-900 px-4 py-3">
+          <div className="space-y-2">
+            {t.messages.map((m) => (
+              <div key={m.id} className={clsx("rounded-md px-3 py-2 text-xs", m.direction === "out" ? "ml-6 bg-sky-950/40" : "mr-6 bg-neutral-900")}>
+                <div className="mb-0.5 flex items-center justify-between">
+                  <span className={clsx("font-medium", m.direction === "out" ? "text-sky-300" : "text-neutral-200")}>
+                    {m.direction === "out" ? "You" : m.from_name || m.from_email}
+                    {m.is_auto && <span className="ml-1 text-[10px] uppercase text-neutral-500">auto</span>}
+                  </span>
+                  <span className="font-mono text-[10px] text-neutral-600">{relTime(m.received_at)}</span>
+                </div>
+                {m.subject && <div className="text-neutral-400">{m.subject}</div>}
+                <div className="whitespace-pre-wrap text-neutral-400">{(m.body || "").slice(0, 1500)}</div>
+              </div>
+            ))}
+          </div>
+          {t.replyTarget && <ReplyBox target={t.replyTarget} />}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ReplyBox({ target }: { target: Row }) {
   const router = useRouter();
-  const outbound = m.direction === "out";
-  const matched = !outbound && !m.is_auto && m.lead_id;
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState(m.suggested_reply || ""); // pre-fill with the AI draft
+  const [text, setText] = useState(target.suggested_reply || "");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,13 +173,11 @@ function MessageRow({ m }: { m: Row }) {
       const res = await fetch("/api/reply", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ inboxMessageId: m.id, body: text }),
+        body: JSON.stringify({ inboxMessageId: target.id, body: text }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "send failed");
       setSent(true);
-      setOpen(false);
-      setText("");
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -80,89 +186,26 @@ function MessageRow({ m }: { m: Row }) {
     }
   }
 
+  if (sent) return <p className="mt-3 font-mono text-[11px] text-emerald-400">reply sent ✓</p>;
   return (
-    <li className={clsx("px-4 py-3", outbound ? "bg-neutral-950/60" : "hover:bg-neutral-950")}>
-      <div className="flex gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            {outbound ? (
-              <span className="text-sm font-medium text-sky-300">You</span>
-            ) : (
-              <span className="truncate text-sm font-medium text-neutral-100">
-                {m.from_name || m.from_email || "(unknown sender)"}
-              </span>
-            )}
-            {matched && (
-              <span className="rounded border border-emerald-800 bg-emerald-950 px-1.5 py-0.5 font-mono text-[10px] uppercase text-emerald-300">
-                reply
-              </span>
-            )}
-            {m.is_auto && (
-              <span className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] uppercase text-neutral-500">
-                auto
-              </span>
-            )}
-            {m.campaign && <span className="truncate text-[11px] text-neutral-600">· {m.campaign}</span>}
-          </div>
-          <div className="mt-0.5 truncate text-sm text-neutral-300">{m.subject || "(no subject)"}</div>
-          <div className="mt-0.5 whitespace-pre-wrap text-xs text-neutral-500">
-            {(m.body || "").slice(0, 400)}
-          </div>
-          <div className="mt-1 font-mono text-[10px] text-neutral-600">
-            {outbound ? `${m.from_email} → prospect` : `${m.from_email} → ${m.mailbox_email}`}
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          <span className="font-mono text-[11px] text-neutral-500">{relTime(m.received_at)}</span>
-          {!outbound && !open && (
-            <button
-              onClick={() => setOpen(true)}
-              className="rounded border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:bg-neutral-800"
-            >
-              {sent ? "Reply again" : m.suggested_reply ? "Reply ✨" : "Reply"}
-            </button>
-          )}
-          {sent && !open && <span className="font-mono text-[10px] text-emerald-400">sent ✓</span>}
-        </div>
-      </div>
-
-      {open && (
-        <div className="mt-3 rounded-md border border-neutral-800 bg-neutral-950 p-3">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={4}
-            autoFocus
-            placeholder={`Reply to ${m.from_name || m.from_email}… (sends from ${m.mailbox_email})`}
-            className="w-full resize-y rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-sky-500 focus:outline-none"
-          />
-          {m.suggested_reply && (
-            <p className="mt-1 text-[11px] text-sky-400/70">
-              ✨ AI-drafted from their reply — edit before sending.
-            </p>
-          )}
-          {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              onClick={send}
-              disabled={sending || !text.trim()}
-              className="rounded bg-sky-600 px-3 py-1 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
-            >
-              {sending ? "Sending…" : "Send reply"}
-            </button>
-            <button
-              onClick={() => {
-                setOpen(false);
-                setError(null);
-              }}
-              className="rounded px-3 py-1 text-sm text-neutral-400 hover:text-neutral-200"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </li>
+    <div className="mt-3">
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        placeholder={`Reply to ${target.from_name || target.from_email}…`}
+        className="w-full resize-y rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-sky-500 focus:outline-none"
+      />
+      {target.suggested_reply && <p className="mt-1 text-[11px] text-sky-400/70">✨ AI-drafted — edit before sending.</p>}
+      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+      <button
+        onClick={send}
+        disabled={sending || !text.trim()}
+        className="mt-2 rounded bg-sky-600 px-3 py-1 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+      >
+        {sending ? "Sending…" : "Send reply"}
+      </button>
+    </div>
   );
 }
 
@@ -175,10 +218,15 @@ function Kpi({ label, value, tone }: { label: string; value: string; tone?: stri
   );
 }
 
+function ts(iso: string | null): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
 function relTime(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
+  const then = ts(iso);
+  if (!then) return "—";
   const mins = Math.floor((Date.now() - then) / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
