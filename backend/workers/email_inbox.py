@@ -19,9 +19,10 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import psycopg
 
+from campaigns_loader import load_campaign
 from clients import smtp_email
 from config import require
-from workers import email_sender
+from workers import email_sender, reply_triage
 
 # Subject/sender markers for machine-generated mail we never alert on.
 _AUTO_SUBJECT = (
@@ -48,7 +49,7 @@ def _resolve_lead(cur, from_email: str, in_reply_to: str | None) -> tuple | None
     """Resolve a reply to a lead: first by sender address, then by thread."""
     if from_email:
         cur.execute(
-            "select id, campaign_id, name from leads where lower(email) = lower(%s) limit 1",
+            "select id, campaign_id, name, role, company from leads where lower(email) = lower(%s) limit 1",
             (from_email,),
         )
         row = cur.fetchone()
@@ -57,7 +58,7 @@ def _resolve_lead(cur, from_email: str, in_reply_to: str | None) -> tuple | None
     if in_reply_to:
         cur.execute(
             """
-            select l.id, l.campaign_id, l.name
+            select l.id, l.campaign_id, l.name, l.role, l.company
             from sends s
             join drafts d on d.id = s.draft_id
             join leads l on l.id = d.lead_id
@@ -104,6 +105,18 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
     # is real mail only), then raise curated alerts for the human, lead-matched ones.
     auto = skipped = stored = inbox_stored = 0
     new_replies: list[dict] = []
+    camp_cache: dict[str, Any] = {}
+
+    def _campaign(cid: str | None):
+        if not cid:
+            return None
+        if cid not in camp_cache:
+            try:
+                camp_cache[cid] = load_campaign(cid)
+            except Exception:  # noqa: BLE001
+                camp_cache[cid] = None
+        return camp_cache[cid]
+
     with _connect() as conn:
         with conn.cursor() as cur:
             for m in fetched:
@@ -112,20 +125,43 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 lead_id = lead[0] if lead else None
                 campaign_id = lead[1] if lead else None
                 lead_name = lead[2] if lead else None
+                lead_role = lead[3] if lead else None
+                lead_company = lead[4] if lead else None
                 mid = m.get("message_id") or None
+
+                already = False
+                if mid and lead and not is_auto:
+                    cur.execute("select 1 from replies where external_id = %s", (mid,))
+                    already = cur.fetchone() is not None
+
+                # Matched human reply → draft a campaign-aware response + classify it. Only the
+                # few real replies cost an LLM call; the inbox composer pre-fills with it.
+                cls: dict[str, Any] = {}
+                if lead and not is_auto and not already:
+                    try:
+                        cls = reply_triage.classify_reply(
+                            reply_body=(m.get("body") or "")[:4000],
+                            original_message=None,
+                            lead_name=lead_name, lead_role=lead_role, lead_company=lead_company,
+                            campaign=_campaign(str(campaign_id) if campaign_id else None),
+                        )
+                    except Exception:  # noqa: BLE001
+                        cls = {}
+                suggested = cls.get("suggested_reply")
 
                 if not dry_run:
                     cur.execute(
                         """
                         insert into inbox_messages
                             (mailbox_id, mailbox_email, from_email, from_name, subject, body,
-                             message_id, in_reply_to, lead_id, campaign_id, is_auto, received_at)
-                        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                             message_id, in_reply_to, lead_id, campaign_id, is_auto,
+                             suggested_reply, received_at)
+                        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
                         on conflict (message_id) do nothing
                         """,
                         (m.get("_box_id"), m.get("_box"), m.get("from_email"), m.get("from_name"),
                          m.get("subject"), (m.get("body") or "")[:8000], mid, m.get("in_reply_to"),
-                         lead_id, campaign_id, is_auto),
+                         lead_id, campaign_id, is_auto, suggested),
                     )
                     inbox_stored += 1
 
@@ -135,10 +171,8 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 if not lead:
                     skipped += 1  # in the inbox, but not tied to our outreach → no alert
                     continue
-                if mid:
-                    cur.execute("select 1 from replies where external_id = %s", (mid,))
-                    if cur.fetchone():
-                        continue  # already ingested as a curated reply
+                if already:
+                    continue
                 rec = {
                     "lead_id": str(lead_id), "campaign_id": str(campaign_id) if campaign_id else None,
                     "lead_name": lead_name, "from_email": m.get("from_email"),
@@ -147,10 +181,13 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 if not dry_run:
                     cur.execute(
                         """
-                        insert into replies (lead_id, channel, external_id, body, received_at)
-                        values (%s, 'email', %s, %s, now())
+                        insert into replies
+                            (lead_id, channel, external_id, body, sentiment, intent, summary,
+                             suggested_reply, next_action, received_at)
+                        values (%s, 'email', %s, %s, %s, %s, %s, %s, %s, now())
                         """,
-                        (lead_id, mid, rec["body"]),
+                        (lead_id, mid, rec["body"], cls.get("sentiment"), cls.get("intent"),
+                         cls.get("summary"), suggested, cls.get("next_action")),
                     )
                     stored += 1
                 new_replies.append(rec)

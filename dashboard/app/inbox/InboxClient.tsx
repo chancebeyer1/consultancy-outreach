@@ -52,7 +52,7 @@ function MessageRow({ m }: { m: Row }) {
   const outbound = m.direction === "out";
   const matched = !outbound && !m.is_auto && m.lead_id;
   const [open, setOpen] = useState(false);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(m.suggested_reply || ""); // pre-fill with the AI draft
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +119,7 @@ function MessageRow({ m }: { m: Row }) {
               onClick={() => setOpen(true)}
               className="rounded border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:bg-neutral-800"
             >
-              {sent ? "Reply again" : "Reply"}
+              {sent ? "Reply again" : m.suggested_reply ? "Reply ✨" : "Reply"}
             </button>
           )}
           {sent && !open && <span className="font-mono text-[10px] text-emerald-400">sent ✓</span>}
@@ -136,6 +136,11 @@ function MessageRow({ m }: { m: Row }) {
             placeholder={`Reply to ${m.from_name || m.from_email}… (sends from ${m.mailbox_email})`}
             className="w-full resize-y rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 focus:border-sky-500 focus:outline-none"
           />
+          {m.suggested_reply && (
+            <p className="mt-1 text-[11px] text-sky-400/70">
+              ✨ AI-drafted from their reply — edit before sending.
+            </p>
+          )}
           {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
           <div className="mt-2 flex items-center gap-2">
             <button
