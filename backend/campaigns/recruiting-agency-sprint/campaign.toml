@@ -6,10 +6,15 @@ name = "Recruiting Agency Sprint"
 slug = "recruiting-agency-sprint"
 is_default = false
 
+# Auto-send: approved first-touch openers go out without manual review (fit-gated >=60).
+auto_send = true
+
 channels = ["linkedin_connect", "linkedin_dm"]
 
-# US boutique staffing/recruiting agency owners (classic LinkedIn people search, geoUrn
-# 103644278 = United States). URL-encoded so it's TOML-safe. Tune in the dashboard.
-search_url = 'https://www.linkedin.com/search/results/people/?keywords=staffing%20agency%20owner&geoUrn=%5B%22103644278%22%5D'
+# Sourcing is driven by the structured Sales-Navigator filters in `search.json`
+# (owner/partner seniority @ "Staffing and Recruiting", US, 1-200 employees) — far
+# higher-ICP than a broad keyword URL. The replenish worker prefers search_params over
+# search_url, so we leave search_url unset.
+# search_url = '...'  # legacy broad keyword search, superseded by search.json
 
 inmail_min_fit = 85

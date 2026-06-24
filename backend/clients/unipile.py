@@ -236,6 +236,23 @@ def search_people(
 
 
 @_RETRY
+def search_parameters(param_type: str, keywords: str, *, limit: int = 10) -> list[dict[str, Any]]:
+    """Resolve Sales-Navigator filter IDs by keyword.  GET /linkedin/search/parameters
+
+    `param_type` is the filter to resolve — e.g. "INDUSTRY", "LOCATION", "COMPANY",
+    "SCHOOL". Returns [{"id", "title"}, …]. Used to turn human names ("Insurance",
+    "United States") into the numeric ids the structured people-search body needs
+    for its `industry` / `location` filters.
+    """
+    q = {"account_id": _li_account(), "type": param_type, "keywords": keywords, "limit": limit}
+    with httpx.Client(timeout=30.0) as c:
+        r = c.get(f"{_base()}/linkedin/search/parameters", headers=_headers(), params=q)
+        r.raise_for_status()
+        data = r.json()
+    return data.get("items", []) if isinstance(data, dict) else (data or [])
+
+
+@_RETRY
 def list_relations(*, cursor: str | None = None, limit: int = 100) -> dict[str, Any]:
     """One page of the account's 1st-degree connections.  GET /users/relations
 

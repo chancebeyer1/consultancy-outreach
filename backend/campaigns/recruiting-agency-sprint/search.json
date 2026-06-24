@@ -1,0 +1,8 @@
+{
+  "api": "sales_navigator",
+  "category": "people",
+  "industry": { "include": ["104"] },
+  "location": { "include": ["103644278"] },
+  "seniority": { "include": ["owner/partner"] },
+  "company_headcount": [{ "min": 1, "max": 10 }, { "min": 11, "max": 50 }, { "min": 51, "max": 200 }]
+}

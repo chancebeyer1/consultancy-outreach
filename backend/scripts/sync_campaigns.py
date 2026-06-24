@@ -20,6 +20,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -50,6 +51,7 @@ _WRITE_COLS = [
     "landing_url",
     "calcom_url",
     "search_url",
+    "search_params",
     "channels",
     "auto_send",
     "inmail_min_fit",
@@ -75,6 +77,12 @@ def _read_campaign_dir(folder: Path) -> dict | None:
 
     meta = tomllib.loads(toml_path.read_text(encoding="utf-8"))
     slug = meta.get("slug") or folder.name
+    # Optional structured search filters (Sales-Navigator). A sidecar JSON file keeps the
+    # nested filter object readable/versioned; the replenish worker prefers it over search_url.
+    search_json = folder / "search.json"
+    search_params = (
+        json.loads(search_json.read_text(encoding="utf-8")) if search_json.exists() else None
+    )
     return {
         "slug": slug,
         "name": meta.get("name") or slug,
@@ -86,6 +94,7 @@ def _read_campaign_dir(folder: Path) -> dict | None:
         "landing_url": meta.get("landing_url"),  # None → falls back to .env at read time
         "calcom_url": meta.get("calcom_url"),
         "search_url": meta.get("search_url"),
+        "search_params": search_params,  # dict | None → Postgres jsonb
         "channels": meta.get("channels"),  # list[str] | None → Postgres text[]
         "auto_send": bool(meta.get("auto_send", False)),
         "inmail_min_fit": meta.get("inmail_min_fit"),
@@ -150,8 +159,16 @@ def main(
 
     try:
         import psycopg
+        from psycopg.types.json import Jsonb
     except ImportError as e:
         raise RuntimeError("psycopg not installed. Run: uv sync --extra worker") from e
+
+    def vals(c: dict) -> list:
+        # search_params is jsonb — wrap the dict so psycopg adapts it; everything else passes through.
+        return [
+            Jsonb(c[col]) if col == "search_params" and c[col] is not None else c[col]
+            for col in _WRITE_COLS
+        ]
 
     inserted = updated = 0
     conn = psycopg.connect(require("DATABASE_URL"))
@@ -164,7 +181,7 @@ def main(
                         sets = ", ".join(f"{col} = %s" for col in _WRITE_COLS)
                         cur.execute(
                             f"update campaigns set {sets} where slug = %s",
-                            (*[c[col] for col in _WRITE_COLS], c["slug"]),
+                            (*vals(c), c["slug"]),
                         )
                         updated += 1
                     else:
@@ -172,7 +189,7 @@ def main(
                         placeholders = ", ".join(["%s"] * len(cols))
                         cur.execute(
                             f"insert into campaigns ({', '.join(cols)}) values ({placeholders})",
-                            (c["slug"], *[c[col] for col in _WRITE_COLS], False),
+                            (c["slug"], *vals(c), False),
                         )
                         inserted += 1
 

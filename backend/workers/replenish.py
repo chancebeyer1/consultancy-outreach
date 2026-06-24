@@ -51,10 +51,12 @@ def _load_campaigns() -> list:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "select id, slug, search_url from campaigns where status = 'active' and search_url is not null"
+                "select id, slug, search_url, search_params from campaigns "
+                "where status = 'active' and (search_url is not null or search_params is not null)"
             )
             return [
-                {"id": row[0], "slug": row[1], "search_url": row[2]} for row in cur.fetchall()
+                {"id": row[0], "slug": row[1], "search_url": row[2], "search_params": row[3]}
+                for row in cur.fetchall()
             ]
     finally:
         conn.close()
@@ -114,16 +116,27 @@ def _save_to_ledger(campaign_slug: str, urls: list[str]) -> None:
             f.write(json.dumps({"linkedin_url": url, "sourced_at": datetime.datetime.utcnow().isoformat()}) + "\n")
 
 
-def _pull_fresh_leads(search_url: str, limit: int, seen: set[str], max_pages: int = 10) -> list[dict]:
+def _pull_fresh_leads(
+    limit: int,
+    seen: set[str],
+    *,
+    search_url: str | None = None,
+    search_params: dict | None = None,
+    max_pages: int = 10,
+) -> list[dict]:
     """Page the Unipile people search, deduping against `seen`, until we have `limit`
-    fresh leads. search_people returns {"items": [already-normalized], "cursor"}, so we
-    paginate via the cursor (it does NOT take a limit)."""
+    fresh leads. Prefers structured `search_params` (Sales-Navigator filters) over a
+    raw `search_url`. search_people returns {"items": [already-normalized], "cursor"},
+    so we paginate via the cursor (it does NOT take a limit)."""
     fresh: list[dict] = []
     cursor: str | None = None
     pages = 0
     while len(fresh) < limit and pages < max_pages:
         try:
-            page = unipile.search_people(search_url=search_url, cursor=cursor)
+            if search_params:
+                page = unipile.search_people(params=search_params, cursor=cursor)
+            else:
+                page = unipile.search_people(search_url=search_url, cursor=cursor)
         except Exception as e:  # noqa: BLE001
             return fresh if fresh else {"error": f"search failed: {e}", "fetched": 0}
         for item in page.get("items", []):
@@ -356,6 +369,7 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
                 campaign_id = camp_info["id"]
                 campaign_slug = camp_info["slug"]
                 search_url = camp_info["search_url"]
+                search_params = camp_info["search_params"]
 
                 # 1. Count messageable queue
                 queue_count = _messageable_count(cur, campaign_id)
@@ -375,7 +389,9 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
 
                 # 3. Pull fresh leads (skip the sourced ledger AND everyone in the DB)
                 seen = _load_sourced_ledger(campaign_slug) | existing_urls
-                fresh_leads = _pull_fresh_leads(search_url, PULL_LIMIT, seen)
+                fresh_leads = _pull_fresh_leads(
+                    PULL_LIMIT, seen, search_url=search_url, search_params=search_params
+                )
 
                 if isinstance(fresh_leads, dict) and "error" in fresh_leads:
                     summary["skipped"].append({"slug": campaign_slug, "reason": fresh_leads["error"]})

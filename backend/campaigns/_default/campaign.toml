@@ -14,6 +14,10 @@ name = "AI-Agent Consultancy (default)"
 slug = "_default"
 is_default = true
 
+# Paused: this seed persona doesn't source or auto-send. Keep it paused so a sync
+# never accidentally re-activates it (auto_send defaults to false when omitted).
+status = "paused"
+
 # landing_url / calcom_url fall back to LANDING_URL / CALCOM_URL in .env when
 # omitted. Set them here to point a campaign at its own sales asset / booking link.
 # landing_url = "https://your-domain.com"
