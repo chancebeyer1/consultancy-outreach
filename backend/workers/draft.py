@@ -25,6 +25,8 @@ CHANNEL_BUDGETS = {
     "linkedin_dm": 500,
     "linkedin_inmail": 700,  # cold direct message to a non-connection (Sales Nav credit)
     "email": 1000,  # ~120 words incl subject
+    "linkedin_followup_1": 350,  # short no-pressure DM bump
+    "linkedin_followup_2": 350,
 }
 
 
@@ -160,12 +162,15 @@ def draft_for_channel(
     if channel not in CHANNEL_BUDGETS:
         raise ValueError(f"Unknown channel: {channel}")
 
-    prompt_name = {
-        "linkedin_connect": "draft_connection",
-        "linkedin_dm": "draft_dm",
-        "linkedin_inmail": "draft_inmail",
-        "email": "draft_email",
-    }[channel]
+    if channel.startswith("linkedin_followup"):
+        prompt_name = "draft_linkedin_followup"  # short no-pressure DM bump
+    else:
+        prompt_name = {
+            "linkedin_connect": "draft_connection",
+            "linkedin_dm": "draft_dm",
+            "linkedin_inmail": "draft_inmail",
+            "email": "draft_email",
+        }[channel]
     instruction = load_prompt(prompt_name)
 
     profile = enrichment.get("profile") or {}

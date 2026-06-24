@@ -37,6 +37,7 @@ LINKEDIN_STEPS: list[tuple[str, int]] = [
     ("linkedin_connect", 0),
     ("linkedin_dm", 4),
     ("linkedin_followup_1", 7),
+    ("linkedin_followup_2", 6),
 ]
 
 EMAIL_STEPS: list[tuple[str, int]] = [
