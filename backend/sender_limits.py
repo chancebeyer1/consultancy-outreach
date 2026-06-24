@@ -192,6 +192,57 @@ def quota(channel: str, *, now: datetime | None = None) -> Quota:
     )
 
 
+def campaign_share(channel: str, n_campaigns: int) -> int:
+    """Even-dispersal slice: the most of `channel` any ONE campaign may send per day.
+
+    So a multi-campaign experiment compares campaigns at ~equal volume instead of
+    letting the campaign with the oldest/biggest draft queue eat the shared daily
+    cap. Ceil division means slices can sum to slightly over the cap — the global
+    `quota()` still binds the true daily total; this only caps any single campaign.
+    """
+    cap = DAILY_CAPS.get(channel, DEFAULT_DAILY_CAP)
+    if n_campaigns <= 1:
+        return cap
+    return max(1, (cap + n_campaigns - 1) // n_campaigns)
+
+
+def campaign_daily_sent(channel: str, *, now: datetime | None = None) -> dict[str, int]:
+    """{campaign_id: count} of `channel` sends in the trailing 24h, from Postgres.
+
+    Backs the per-campaign fair-share cap. DB-only (the local JSONL ledger carries no
+    campaign link); returns {} with no DATABASE_URL or on any error so it never blocks
+    a send on a DB hiccup.
+    """
+    url = Config.database_url
+    if not url:
+        return {}
+    try:
+        import psycopg
+    except ImportError:
+        return {}
+    since = (now or _utcnow()) - timedelta(hours=24)
+    try:
+        with psycopg.connect(url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select l.campaign_id, count(distinct s.draft_id)
+                    from sends s
+                    join drafts d on d.id = s.draft_id
+                    join leads l on l.id = d.lead_id
+                    where d.channel = %s
+                      and s.sent_at >= %s
+                      and s.status = any(%s)
+                      and l.campaign_id is not null
+                    group by l.campaign_id
+                    """,
+                    (channel, since, list(_ACTIVE_SEND_STATUSES)),
+                )
+                return {str(cid): int(cnt) for cid, cnt in cur.fetchall()}
+    except Exception:
+        return {}
+
+
 def is_invite_limit_error(exc: BaseException) -> bool:
     """True if `exc` is LinkedIn's "you've hit the invite ceiling" signal.
 

@@ -26,7 +26,7 @@ from typing import Any
 
 from clients import unipile
 from config import require
-from sender_limits import is_invite_limit_error, quota
+from sender_limits import campaign_daily_sent, campaign_share, is_invite_limit_error, quota
 from workers.sequence import determine_next_action
 
 LINKEDIN_CHANNELS = {
@@ -297,6 +297,23 @@ def _record_send(
         conn.close()
 
 
+def _round_robin_by_campaign(rows: list, camp_idx: int = 8) -> list:
+    """Interleave rows by campaign_id (one per campaign per cycle), preserving each
+    campaign's existing order. Evens out which campaign sends first within a run."""
+    from collections import OrderedDict, deque
+
+    groups: "OrderedDict[str, deque]" = OrderedDict()
+    for r in rows:
+        groups.setdefault(str(r[camp_idx]), deque()).append(r)
+    out: list = []
+    while groups:
+        for key in list(groups.keys()):
+            out.append(groups[key].popleft())
+            if not groups[key]:
+                del groups[key]
+    return out
+
+
 def send_approved_first_touch(
     *,
     dry_run: bool = False,
@@ -322,7 +339,7 @@ def send_approved_first_touch(
             cur.execute(
                 """
                 select d.id, d.lead_id, d.channel, d.body, d.edited_body,
-                       l.linkedin_url, l.name, l.company
+                       l.linkedin_url, l.name, l.company, l.campaign_id
                 from drafts d
                 join leads l on l.id = d.lead_id
                 left join campaigns c on c.id = l.campaign_id
@@ -339,8 +356,15 @@ def send_approved_first_touch(
                 """
             )
             rows = cur.fetchall()
+            # How many campaigns are running → each gets an equal share of every cap.
+            cur.execute("select count(*) from campaigns where status = 'active'")
+            n_campaigns = int((cur.fetchone() or [1])[0] or 1)
     finally:
         conn.close()
+
+    # Interleave by campaign so a single run sends evenly across them (not all of the
+    # oldest campaign first). Within each campaign, generated_at order is preserved.
+    rows = _round_robin_by_campaign(rows)
 
     if limit is not None:
         rows = rows[:limit]
@@ -351,12 +375,27 @@ def send_approved_first_touch(
     failed: list[dict[str, Any]] = []
     fell_back: list[str] = []
     remaining: dict[str, int] = {}
+    blocked_fairness: list[str] = []
     connects_sent = 0  # per-run pacing for connection requests (avoid one daily burst)
 
     def _has_quota(channel: str) -> bool:
         if channel not in remaining:
             remaining[channel] = quota(channel).allowed
         return remaining[channel] > 0
+
+    # Even-dispersal: cap each campaign at its equal share of every channel's daily cap
+    # (trailing-24h sends + what this run already sent) so no campaign dominates the
+    # shared cap and the cross-campaign comparison stays apples-to-apples.
+    cam_window: dict[str, dict[str, int]] = {}
+    cam_run: dict[tuple[str | None, str], int] = {}
+
+    def _campaign_has_share(cid: str | None, ch: str) -> bool:
+        if not cid or n_campaigns <= 1:
+            return True
+        if ch not in cam_window:
+            cam_window[ch] = campaign_daily_sent(ch)
+        used = cam_window[ch].get(cid, 0) + cam_run.get((cid, ch), 0)
+        return used < campaign_share(ch, n_campaigns)
 
     # InMail credit budget for this run — fetched lazily once, decremented as spent.
     # When it hits 0, InMail drafts fall back to a connection request.
@@ -370,7 +409,8 @@ def send_approved_first_touch(
                 inmail_left["n"] = 0
         return inmail_left["n"] or 0
 
-    for draft_id, lead_id, channel, body, edited_body, url, name, company in rows:
+    for draft_id, lead_id, channel, body, edited_body, url, name, company, campaign_id in rows:
+        campaign_id = str(campaign_id) if campaign_id else None
         first, _, last = (name or "").partition(" ")
         lead = {
             "linkedin_url": url,
@@ -415,6 +455,10 @@ def send_approved_first_touch(
             blocked_quota.append(str(lead_id))
             continue
 
+        if not _campaign_has_share(campaign_id, send_channel):
+            blocked_fairness.append(str(lead_id))
+            continue
+
         try:
             response = _send_via_unipile(
                 lead, {"id": str(draft_id), "body": send_body}, send_channel
@@ -426,6 +470,7 @@ def send_approved_first_touch(
                 sent_body=send_body if fell else None,
             )
             remaining[send_channel] -= 1
+            cam_run[(campaign_id, send_channel)] = cam_run.get((campaign_id, send_channel), 0) + 1
             if send_channel == "linkedin_connect":
                 connects_sent += 1
             if send_channel == "linkedin_inmail" and inmail_left["n"] is not None:
@@ -452,12 +497,14 @@ def send_approved_first_touch(
         "pushed": len(pushed),
         "fell_back_to_connect": len(fell_back),
         "blocked_quota": len(blocked_quota),
+        "blocked_fairness": len(blocked_fairness),
         "blocked_no_recipient": len(blocked_no_recipient),
         "failed": len(failed),
         "details": {
             "pushed": pushed,
             "fell_back": fell_back,
             "blocked_quota": blocked_quota,
+            "blocked_fairness": blocked_fairness,
             "blocked_no_recipient": blocked_no_recipient,
             "failed": failed,
         },
