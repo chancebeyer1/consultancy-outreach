@@ -46,7 +46,10 @@ def send(
     msg["From"] = formataddr((from_name or from_email, from_email))
     msg["To"] = to_email
     msg["Subject"] = subject or ""
-    message_id = make_msgid()
+    # Anchor the Message-ID to the sending domain (not the local hostname) so it
+    # aligns with SPF/DKIM and doesn't look forged to spam filters.
+    domain = from_email.split("@")[-1] if "@" in from_email else None
+    message_id = make_msgid(domain=domain) if domain else make_msgid()
     msg["Message-ID"] = message_id
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to

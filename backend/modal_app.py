@@ -162,6 +162,57 @@ def progress_sequences_now(dry_run: bool = False, limit: int | None = None) -> d
 
 
 @app.function(
+    schedule=modal.Cron("22 * * * *"),  # every hour at :22 (offset from the LinkedIn crons)
+    secrets=secrets,
+    timeout=900,
+    retries=1,
+)
+def send_email_cron() -> dict:
+    """Send approved first-touch email drafts via Maildoso, rotating across mailboxes.
+
+    Only verified-deliverable leads on active campaigns are sent. Per-box warmup ramp,
+    the global email cap, and the per-campaign fair-share all apply. No-ops safely until
+    Apollo-sourced + verified email leads exist.
+    """
+    from workers.email_sender import send_email_first_touch
+
+    return send_email_first_touch()
+
+
+@app.function(
+    schedule=modal.Cron("*/15 * * * *"),  # every 15 min — keep the unibox responsive
+    secrets=secrets,
+    timeout=600,
+    retries=1,
+)
+def email_inbox_cron() -> dict:
+    """Sweep all Maildoso inboxes for real prospect replies; alert NOTIFY_EMAIL.
+
+    Matches inbound to a lead (by address or thread), filters warmup/auto-responders,
+    stores the reply (channel='email'), and notifies on every human reply.
+    """
+    from workers.email_inbox import poll_inboxes
+
+    return poll_inboxes(limit_per_box=25)
+
+
+@app.function(secrets=secrets, timeout=600)
+def send_email_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand email send. `modal run modal_app.py::send_email_now --dry-run`."""
+    from workers.email_sender import send_email_first_touch
+
+    return send_email_first_touch(dry_run=dry_run, limit=limit)
+
+
+@app.function(secrets=secrets, timeout=600)
+def email_inbox_now(dry_run: bool = False) -> dict:
+    """On-demand unibox sweep. `modal run modal_app.py::email_inbox_now --dry-run`."""
+    from workers.email_inbox import poll_inboxes
+
+    return poll_inboxes(dry_run=dry_run)
+
+
+@app.function(
     schedule=modal.Cron("47 * * * *"),  # every hour at :47 (offset from the others)
     secrets=secrets,
     timeout=900,

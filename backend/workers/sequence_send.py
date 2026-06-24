@@ -344,7 +344,8 @@ def send_approved_first_touch(
                 join leads l on l.id = d.lead_id
                 left join campaigns c on c.id = l.campaign_id
                 where d.status = 'approved'
-                  and d.channel in ('linkedin_connect', 'linkedin_inmail', 'email')
+                  -- email is sent by workers.email_sender (Maildoso SMTP rotation), NOT here
+                  and d.channel in ('linkedin_connect', 'linkedin_inmail')
                   and (c.status is null or c.status = 'active')  -- paused/archived campaigns don't send
                   and not exists (select 1 from sends s where s.draft_id = d.id)
                   and not exists (
