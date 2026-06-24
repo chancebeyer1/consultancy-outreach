@@ -17,6 +17,8 @@ from typing import Any
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+import re
+
 import psycopg
 
 from campaigns_loader import load_campaign
@@ -31,6 +33,26 @@ _AUTO_SUBJECT = (
     "undeliverable", "mail delivery failed", "returned mail",
 )
 _AUTO_SENDER = ("mailer-daemon", "postmaster", "no-reply", "noreply", "donotreply", "bounce")
+
+# Warmup-network signature (Instantly etc.): a pair of mixed alphanumeric tracking codes in the
+# subject/body (e.g. "H8QB7KX E7C6SPF"), each 5-9 chars with at least one digit.
+_WARMUP_CODE = re.compile(r"\b(?=[A-Z0-9]*\d)[A-Z0-9]{5,9}\b\s+\b(?=[A-Z0-9]*\d)[A-Z0-9]{5,9}\b")
+_WARMUP_PHRASES = (
+    "take you off our list",
+    "read your thoughts about this post",
+    "idea for a new website",
+    "idea for a new app",
+)
+
+
+def _is_warmup(msg: dict) -> bool:
+    """True for email-warmup traffic (Instantly's network) so it never enters the inbox."""
+    subject = msg.get("subject") or ""
+    body = msg.get("body") or ""
+    if _WARMUP_CODE.search(subject) or _WARMUP_CODE.search(body):
+        return True
+    low = f"{subject} {body}".lower()
+    return any(p in low for p in _WARMUP_PHRASES)
 
 
 def _connect():
@@ -103,7 +125,7 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
 
     # 2. Store EVERY inbound into the unified inbox (the boxes' INBOX is warmup-free, so this
     # is real mail only), then raise curated alerts for the human, lead-matched ones.
-    auto = skipped = stored = inbox_stored = 0
+    auto = skipped = stored = inbox_stored = warmup = 0
     new_replies: list[dict] = []
     camp_cache: dict[str, Any] = {}
 
@@ -120,6 +142,9 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
     with _connect() as conn:
         with conn.cursor() as cur:
             for m in fetched:
+                if _is_warmup(m):
+                    warmup += 1
+                    continue  # warmup-network traffic (Instantly) — never store or alert
                 is_auto = _is_auto(m)
                 lead = _resolve_lead(cur, m.get("from_email", ""), m.get("in_reply_to"))
                 lead_id = lead[0] if lead else None
@@ -212,6 +237,7 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
     return {
         "boxes_polled": len(boxes),
         "fetched": len(fetched),
+        "warmup_filtered": warmup,
         "inbox_stored": inbox_stored,
         "auto_filtered": auto,
         "noise_skipped": skipped,
