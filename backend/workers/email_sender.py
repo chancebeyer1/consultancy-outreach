@@ -33,6 +33,10 @@ from sender_limits import campaign_daily_sent, campaign_share, quota
 WARMUP_BASE = 5      # week 0 cold sends/day/box (Maildoso warms the box itself on top)
 WARMUP_STEP = 5      # +5 per completed week
 WARMUP_MAX = 25      # mature ceiling (also the stored daily_cap)
+# Cap per box PER RUN so the daily volume spreads across the day's hourly ticks instead of
+# bursting at the first run (better deliverability). 30 boxes x 2/run x ~24 runs comfortably
+# covers the per-box daily caps; the per-box DAILY cap is what ultimately bounds volume.
+EMAIL_PER_BOX_PER_RUN = 2
 _ACTIVE_SEND = ("queued", "sent", "delivered")
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -101,8 +105,12 @@ def _load_boxes(cur, today: date) -> list[dict[str, Any]]:
 
 
 def _next_box(boxes: list[dict], used: dict[str, int]) -> dict | None:
-    """Even rotation: fewest-used-this-run, then longest-idle, with capacity left."""
-    avail = [b for b in boxes if b["remaining"] - used.get(b["id"], 0) > 0]
+    """Even rotation: fewest-used-this-run, then longest-idle, with capacity left and
+    under the per-run cap (so volume spreads across the day, not one burst)."""
+    avail = [
+        b for b in boxes
+        if b["remaining"] - used.get(b["id"], 0) > 0 and used.get(b["id"], 0) < EMAIL_PER_BOX_PER_RUN
+    ]
     if not avail:
         return None
     avail.sort(key=lambda b: (used.get(b["id"], 0), b["last_send_at"] or _EPOCH))

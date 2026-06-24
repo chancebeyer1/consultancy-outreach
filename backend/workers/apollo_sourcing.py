@@ -36,6 +36,22 @@ SCAN_LIMIT = 25           # max candidates SCORED per campaign per run (bounds L
 APOLLO_PULL_LIMIT = 8     # max leads ENRICHED+ingested per campaign per run (bounds credits)
 MIN_FIT = 50              # only enrich (spend an Apollo credit) at/above this fit
 AUTO_APPROVE_MIN_FIT = 60 # auto-send only at/above this fit (same floor as LinkedIn)
+EMAIL_QUEUE_TARGET = 75   # stop sourcing a campaign once it has this many approved-unsent
+                          # emails queued — keeps a send buffer without wasting Apollo credits
+                          # on leads that would sit for days
+
+
+def _email_queue_count(cur, campaign_id: str) -> int:
+    cur.execute(
+        """
+        select count(*) from drafts d
+        join leads l on l.id = d.lead_id
+        where l.campaign_id = %s and d.channel = 'email' and d.status = 'approved'
+          and not exists (select 1 from sends s where s.draft_id = d.id)
+        """,
+        (campaign_id,),
+    )
+    return int((cur.fetchone() or [0])[0] or 0)
 
 
 def _connect():
@@ -89,9 +105,15 @@ def source_apollo_all(*, dry_run: bool = False, limit: int = APOLLO_PULL_LIMIT) 
             camps = [{"id": str(r[0]), "slug": r[1], "params": r[2], "auto_send": r[3]} for r in cur.fetchall()]
             existing_urls, existing_emails = _existing(cur)
             seen_by_camp = {c["id"]: _load_seen(cur, c["id"]) for c in camps}
+            queue_by_camp = {c["id"]: _email_queue_count(cur, c["id"]) for c in camps}
 
     out: dict = {"campaigns": [], "dry_run": dry_run}
     for camp in camps:
+        # Queue gate: don't source (and spend credits) when sends are already well-fed.
+        queued = queue_by_camp.get(camp["id"], 0)
+        if not dry_run and queued >= EMAIL_QUEUE_TARGET:
+            out["campaigns"].append({"slug": camp["slug"], "skipped": f"email queue full ({queued})"})
+            continue
         out["campaigns"].append(
             _source_one(camp, existing_urls, existing_emails, seen_by_camp[camp["id"]], dry_run=dry_run, limit=limit)
         )
@@ -146,12 +168,15 @@ def _source_one(camp: dict, existing_urls: set, existing_emails: set, seen: set,
             marks.append((aid, fit, "low_fit"))
             continue
 
-        # 2. Reveal the email (Apollo credit). Work preferred, personal fallback per policy.
+        # 2. Reveal the WORK email only — exactly 1 Apollo credit per lead. Revealing
+        # personal emails would bill a 2nd credit; the 11-200 sizing gives strong work-
+        # email coverage, so we skip it. (Flip reveal_personal_emails=True to trade a
+        # credit for more reach.)
         try:
             enr = apollo.enrich_person(
                 apollo_id=aid, linkedin_url=person.get("linkedin_url"),
                 first_name=person.get("first_name"), last_name=person.get("last_name"),
-                domain=person.get("company_domain"), reveal_personal_emails=True,
+                domain=person.get("company_domain"), reveal_personal_emails=False,
             )
         except Exception:  # noqa: BLE001
             continue  # transient enrich failure — leave unseen so a later run retries

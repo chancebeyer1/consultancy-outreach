@@ -40,9 +40,13 @@ DAILY_CAPS: dict[str, int] = {
     "linkedin_dm": 30,
     "linkedin_followup_1": 30,
     "linkedin_followup_2": 30,
-    "email": 80,
-    "email_followup_1": 80,
-    "email_followup_2": 80,
+    # Email is sent across ~30 Maildoso boxes, so the global ceiling must clear the sum of
+    # their per-box warmup caps (30 boxes x up to 25/day = 750) or it would bottleneck the
+    # fleet. The PER-BOX warmup ramp (email_sender) is the real safety limiter; this is just
+    # a fleet-wide backstop. Raise/lower with the mailbox count.
+    "email": 750,
+    "email_followup_1": 750,
+    "email_followup_2": 750,
 }
 
 # Trailing-7-day ceilings. LinkedIn caps *invitations* weekly (~100-200 for a paid
