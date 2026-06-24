@@ -30,9 +30,13 @@ from config import Config, require
 from sender_limits import campaign_daily_sent, campaign_share, quota
 
 # Warmup ramp: cold-send ceiling per box rises with weeks since ramp_started_at.
-WARMUP_BASE = 5      # week 0 cold sends/day/box (Maildoso warms the box itself on top)
-WARMUP_STEP = 5      # +5 per completed week
-WARMUP_MAX = 25      # mature ceiling (also the stored daily_cap)
+# TRICKLE MODE — domains are warming via a warmup tool (~2 weeks). Cold volume is held low
+# so we don't burn un-warmed new domains. Once warmup is running AND the domains have warmed
+# (~2-4 weeks), raise these to scale (e.g. BASE=5, STEP=5, MAX=25, toward Maildoso's ~30
+# cold/box/day when mature). Ask me to flip this when you're ready.
+WARMUP_BASE = 3      # cold sends/day/box during the warm-up trickle
+WARMUP_STEP = 0      # no auto-ramp while trickling (raised manually once warmed)
+WARMUP_MAX = 3       # flat trickle ceiling
 # Cap per box PER RUN so the daily volume spreads across the day's hourly ticks instead of
 # bursting at the first run (better deliverability). 30 boxes x 2/run x ~24 runs comfortably
 # covers the per-box daily caps; the per-box DAILY cap is what ultimately bounds volume.
