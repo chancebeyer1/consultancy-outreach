@@ -227,6 +227,47 @@ def notify_test() -> dict:
     return res
 
 
+@app.function(secrets=secrets, timeout=180)
+def deliverability_probe() -> dict:
+    """Send ONE plain email per sending domain to NOTIFY_EMAIL so we can see which domains
+    actually deliver (and where). `modal run modal_app.py::deliverability_probe`."""
+    import json as _json
+
+    import psycopg
+
+    from clients import smtp_email
+    from config import Config, require
+
+    dest = Config.notify_email
+    if not dest:
+        return {"error": "NOTIFY_EMAIL not set"}
+    with psycopg.connect(require("DATABASE_URL")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select distinct on (domain) email, from_name, smtp_host, smtp_port, username, app_password, domain
+                from mailboxes where status in ('active', 'warming')
+                order by domain, email
+                """
+            )
+            boxes = cur.fetchall()
+    out = []
+    for email, fn, sh, sp, user, pw, domain in boxes:
+        try:
+            smtp_email.send(
+                smtp_host=sh, smtp_port=sp, username=user, password=pw,
+                from_email=email, from_name=fn or "Chance Beyer", to_email=dest,
+                subject=f"Quick question from {domain.split('.')[0]}",
+                body=f"Hi — testing a quick note from {email}. "
+                "If you see this, reply and let me know where it landed (inbox or spam). Thanks!",
+            )
+            out.append({"domain": domain, "via": email, "sent": True})
+        except Exception as e:  # noqa: BLE001
+            out.append({"domain": domain, "via": email, "error": str(e)[:120]})
+    print("PROBE " + _json.dumps(out, default=str))
+    return out
+
+
 @app.function(secrets=secrets, timeout=120)
 def apollo_test() -> dict:
     """Validate the Apollo key + client live. One enrich call costs ~1 credit.

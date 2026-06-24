@@ -271,7 +271,9 @@ def notify(subject: str, body: str, *, to_email: str | None = None) -> dict[str,
     resp = smtp_email.send(
         smtp_host=box["smtp_host"], smtp_port=box["smtp_port"],
         username=box["username"], password=box["app_password"],
-        from_email=box["email"], from_name="Outreach Bot",
+        # Use the box's real From name (not "Outreach Bot") — a botty display name on a
+        # cold domain gets filtered hard; mirror the email that actually delivered.
+        from_email=box["email"], from_name=box.get("from_name") or "Chance Beyer",
         to_email=dest, subject=subject, body=body,
     )
     return {"sent": True, "via": box["email"], "to": dest, "message_id": resp.get("message_id")}
