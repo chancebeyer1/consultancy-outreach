@@ -202,15 +202,19 @@ def main(
                 # (so an InMail-only lead gets step 0), not a fixed global list.
                 drafts = rec.get("drafts") or {}
                 chosen_hook = rec.get("chosen_hook")
-                # auto_send campaigns pre-approve the first-touch opener (connect note or
-                # InMail) so the send_approved cron sends it without manual review.
+                # auto_send campaigns pre-approve the first-touch opener — but only above a
+                # fit floor (>=60), so a broad/noisy search can't auto-blast marginal leads.
+                # Below the floor the draft queues as 'draft' for manual review.
                 auto_send = auto_by_id.get(campaign_id or "", False)
+                fit = int(score.get("fit_score") or 0)
                 first_touch = {"linkedin_connect", "linkedin_inmail"}
                 for step_index, (channel, body) in enumerate(drafts.items()):
                     if not body:
                         continue
                     draft_status = (
-                        "approved" if (auto_send and channel in first_touch) else "draft"
+                        "approved"
+                        if (auto_send and channel in first_touch and fit >= 60)
+                        else "draft"
                     )
                     cur.execute(
                         """

@@ -300,12 +300,16 @@ def _ingest_records(records: list[dict]) -> dict:
                     drafts = rec.get("drafts") or {}
                     chosen_hook = rec.get("chosen_hook")
                     auto_send = auto_by_id.get(campaign_id or "", False)
+                    fit = int(score_data.get("fit_score") or 0)
                     first_touch = {"linkedin_connect", "linkedin_inmail"}
                     for step_index, (channel, body) in enumerate(drafts.items()):
                         if not body:
                             continue
+                        # auto-approve only above a fit floor so a noisy search can't auto-blast
                         draft_status = (
-                            "approved" if (auto_send and channel in first_touch) else "draft"
+                            "approved"
+                            if (auto_send and channel in first_touch and fit >= 60)
+                            else "draft"
                         )
                         cur.execute(
                             """
