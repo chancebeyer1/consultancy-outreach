@@ -35,7 +35,7 @@ from config import BACKEND_DIR, Config
 # Per-account daily ceilings (trailing 24h). Conservative on purpose — the account
 # is the user's real LinkedIn, driven directly by Unipile's hosted session.
 DAILY_CAPS: dict[str, int] = {
-    "linkedin_connect": 20,
+    "linkedin_connect": 30,  # guide: 30-50/day recommended (max ~80-100); ramped from 20, still conservative
     "linkedin_inmail": 5,  # Sales Nav gives ~50 InMail credits/month — pace, don't burn them
     "linkedin_dm": 30,
     "linkedin_followup_1": 30,
@@ -53,7 +53,7 @@ DAILY_CAPS: dict[str, int] = {
 # account; 100 is the conservative-safe read). Messages are bounded per-day by
 # LinkedIn, not per-week, so only the invite channel carries a weekly cap.
 WEEKLY_CAPS: dict[str, int] = {
-    "linkedin_connect": 100,
+    "linkedin_connect": 130,  # guide max is 200/week; 130 is a gradual ramp from 100
     "linkedin_inmail": 20,  # ~monthly credit budget spread across weeks
 }
 
