@@ -193,7 +193,11 @@ def email_inbox_now(dry_run: bool = False) -> dict:
     """On-demand unibox sweep. `modal run modal_app.py::email_inbox_now --dry-run`."""
     from workers.email_inbox import poll_inboxes
 
-    return poll_inboxes(dry_run=dry_run)
+    res = poll_inboxes(dry_run=dry_run)
+    import json as _json
+
+    print("INBOX_RESULT " + _json.dumps({k: v for k, v in res.items() if k != "details"}, default=str))
+    return res
 
 
 @app.function(secrets=secrets, timeout=900)

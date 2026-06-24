@@ -238,12 +238,34 @@ def _pick_one_box() -> dict | None:
     return _next_box(boxes, {}) if boxes else None
 
 
+def _notify_box() -> dict | None:
+    """A STABLE box for internal alerts — always the same sender so you can whitelist it
+    once in Gmail (rotating senders look spammy + can't be whitelisted). Notifications
+    don't record sends, so this doesn't touch warmup-cap accounting."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select email, from_name, smtp_host, smtp_port, username, app_password
+                from mailboxes where status in ('active', 'warming')
+                order by email limit 1
+                """
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "email": row[0], "from_name": row[1], "smtp_host": row[2],
+        "smtp_port": row[3], "username": row[4], "app_password": row[5],
+    }
+
+
 def notify(subject: str, body: str, *, to_email: str | None = None) -> dict[str, Any]:
-    """Send an internal notification (e.g. 'new reply') from a Maildoso box."""
+    """Send an internal notification (e.g. 'new reply') from the fixed alert box."""
     dest = to_email or Config.notify_email
     if not dest:
         return {"sent": False, "reason": "NOTIFY_EMAIL not set"}
-    box = _pick_one_box()
+    box = _notify_box()
     if not box:
         return {"sent": False, "reason": "no available mailbox"}
     resp = smtp_email.send(
