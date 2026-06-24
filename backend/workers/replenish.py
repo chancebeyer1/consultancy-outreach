@@ -180,8 +180,12 @@ def _process_lead(
 
         fit = int((record.get("score") or {}).get("fit_score") or 0)
         channels = draft.resolve_channels(campaign, fit)
+        _url = record.get("linkedin_url")
         record["drafts"] = {
-            channel: draft.draft_for_channel(channel, enrichment, chosen, campaign=campaign)
+            channel: draft.draft_for_channel(
+                channel, enrichment, chosen, campaign=campaign,
+                variant=draft.connect_variant(_url) if channel == "linkedin_connect" else None,
+            )
             for channel in channels
         }
         record["status"] = "ok"
@@ -310,10 +314,13 @@ def _ingest_records(records: list[dict]) -> dict:
 
                     # 4. INSERT drafts. step_index follows the lead's own channel order
                     # (InMail-only leads get step 0). auto_send pre-approves the opener.
+                    from workers.draft import connect_variant
+
                     drafts = rec.get("drafts") or {}
                     chosen_hook = rec.get("chosen_hook")
                     auto_send = auto_by_id.get(campaign_id or "", False)
                     fit = int(score_data.get("fit_score") or 0)
+                    lead_url = rec.get("linkedin_url")
                     first_touch = {"linkedin_connect", "linkedin_inmail"}
                     for step_index, (channel, body) in enumerate(drafts.items()):
                         if not body:
@@ -324,18 +331,20 @@ def _ingest_records(records: list[dict]) -> dict:
                             if (auto_send and channel in first_touch and fit >= 60)
                             else "draft"
                         )
+                        # A/B tag the connect note (deterministic per lead); other channels stay NULL.
+                        variant = connect_variant(lead_url) if channel == "linkedin_connect" else None
                         cur.execute(
                             """
                             insert into drafts
-                                (lead_id, channel, step_index, hook, body, status, generated_at)
-                            values (%s, %s, %s, %s, %s, %s, now())
+                                (lead_id, channel, step_index, hook, body, status, variant, generated_at)
+                            values (%s, %s, %s, %s, %s, %s, %s, now())
                             on conflict (lead_id, channel, step_index, variant) do update
                               set body = excluded.body,
                                   hook = excluded.hook,
                                   generated_at = now()
                               where drafts.status in ('draft', 'rejected')
                             """,
-                            (lead_id, channel, step_index, Jsonb(chosen_hook), body, draft_status),
+                            (lead_id, channel, step_index, Jsonb(chosen_hook), body, draft_status, variant),
                         )
                         inserted_drafts += 1
     finally:

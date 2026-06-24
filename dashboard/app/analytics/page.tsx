@@ -59,6 +59,33 @@ export default async function AnalyticsPage() {
         </div>
       </div>
 
+      {a.connectVariants.length > 0 && (
+        <div className="mt-10">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-300">
+            Connect-note A/B
+          </h2>
+          <p className="mt-1 text-xs text-neutral-500">Which connect angle gets accepted more</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {a.connectVariants.map((v) => (
+              <div key={v.variant} className="rounded-lg border border-neutral-800 bg-neutral-950 p-4">
+                <div className="flex items-baseline justify-between">
+                  <span className="font-mono text-sm">
+                    Variant {v.variant.toUpperCase()}
+                    <span className="text-neutral-500">{v.variant === "a" ? " · curiosity" : " · observation"}</span>
+                  </span>
+                  <span className={clsx("font-mono text-lg", rateTone(v.acceptRate, "reply"))}>
+                    {pct(v.acceptRate)}
+                  </span>
+                </div>
+                <div className="mt-1 font-mono text-xs text-neutral-500">
+                  {fmt(v.accepted)}/{fmt(v.sent)} accepted
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="mt-10 grid gap-10 lg:grid-cols-2">
         <Breakdown
           title="By campaign"

@@ -36,6 +36,14 @@ CHANNEL_BUDGETS = {
 FIRST_TOUCH_CHANNELS = {"linkedin_connect", "linkedin_inmail", "email"}
 
 
+def connect_variant(key: str | None) -> str:
+    """Deterministic A/B bucket ('a'|'b') for the connect note, keyed off the lead's URL so
+    drafting and storage agree without threading state. ~50/50 split; tracked in analytics."""
+    if not key:
+        return "a"
+    return "a" if sum(key.encode("utf-8", "ignore")) % 2 == 0 else "b"
+
+
 def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:
     """First-touch channels to draft for one lead, applying InMail routing.
 
@@ -157,6 +165,7 @@ def draft_for_channel(
     hook: Hook | None,
     *,
     campaign: Campaign | None = None,
+    variant: str | None = None,
 ) -> str:
     """Generate a single draft for the given channel."""
     if channel not in CHANNEL_BUDGETS:
@@ -192,6 +201,7 @@ def draft_for_channel(
         else None,
         "channel": channel,
         "char_budget": CHANNEL_BUDGETS[channel],
+        "variant": variant,  # 'a'|'b' for connect-note A/B; the prompt picks the angle
     }
     raw = claude.call(
         instruction=instruction,

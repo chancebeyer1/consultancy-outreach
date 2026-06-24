@@ -13,6 +13,13 @@ export interface AnalyticsRow {
   interestRate: number; // interested / sent
 }
 
+export interface ConnectVariantRow {
+  variant: string; // 'a' | 'b'
+  sent: number;
+  accepted: number;
+  acceptRate: number;
+}
+
 export interface Analytics {
   totals: AnalyticsRow;
   byCampaign: AnalyticsRow[];
@@ -21,6 +28,7 @@ export interface Analytics {
   bySegment: AnalyticsRow[];
   byTrigger: AnalyticsRow[];
   byHookType: AnalyticsRow[];
+  connectVariants: ConnectVariantRow[];
   empty: boolean;
 }
 
@@ -85,6 +93,10 @@ function mockAnalytics(): Analytics {
       rateRow("funding_event", 5, 3, 1),
       rateRow("tech_choice", 4, 1, 0),
       rateRow("content_theme", 6, 1, 0),
+    ],
+    connectVariants: [
+      { variant: "a", sent: 18, accepted: 5, acceptRate: 5 / 18 },
+      { variant: "b", sent: 16, accepted: 7, acceptRate: 7 / 16 },
     ],
     empty: false,
   };
@@ -194,6 +206,33 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
     [...sentLeadIds].filter((id) => interestedLeadIds.has(id)).length,
   );
 
+  // Connect-note A/B: accept rate per variant (sent linkedin_connect drafts).
+  let connectVariants: ConnectVariantRow[] = [];
+  try {
+    const { data: cvData } = await supabase
+      .from("drafts")
+      .select("variant, leads!inner(accepted_at, campaign_id), sends!inner(id)")
+      .eq("channel", "linkedin_connect");
+    const cvRows = (cvData ?? []) as unknown as Array<{
+      variant: string | null;
+      leads: { accepted_at: string | null; campaign_id: string | null };
+    }>;
+    const scoped = campaignId ? cvRows.filter((r) => r.leads.campaign_id === campaignId) : cvRows;
+    const m = new Map<string, { sent: number; accepted: number }>();
+    for (const r of scoped) {
+      const v = r.variant || "a";
+      const e = m.get(v) ?? { sent: 0, accepted: 0 };
+      e.sent += 1;
+      if (r.leads.accepted_at) e.accepted += 1;
+      m.set(v, e);
+    }
+    connectVariants = [...m.entries()]
+      .map(([variant, s]) => ({ variant, sent: s.sent, accepted: s.accepted, acceptRate: s.sent ? s.accepted / s.sent : 0 }))
+      .sort((a, b) => a.variant.localeCompare(b.variant));
+  } catch {
+    connectVariants = [];
+  }
+
   return {
     totals,
     byCampaign,
@@ -202,6 +241,7 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
     bySegment,
     byTrigger,
     byHookType,
+    connectVariants,
     empty: sentLeadIds.size === 0,
   };
 }
@@ -222,6 +262,7 @@ export async function getAnalytics(campaignId?: string): Promise<Analytics> {
     bySegment: [],
     byTrigger: [],
     byHookType: [],
+    connectVariants: [],
     empty: true,
   };
 }
