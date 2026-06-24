@@ -41,6 +41,24 @@ export default async function AnalyticsPage() {
 
       <KpiStrip totals={a.totals} />
 
+      <div className="mt-10">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-300">
+          Head-to-head
+        </h2>
+        <div className="mt-4 grid gap-10 lg:grid-cols-2">
+          <Breakdown
+            title="By campaign × channel"
+            subtitle="Which campaign + channel actually converts"
+            rows={a.byCampaignChannel}
+          />
+          <Breakdown
+            title="By channel"
+            subtitle="LinkedIn vs email, overall"
+            rows={a.byChannel}
+          />
+        </div>
+      </div>
+
       <div className="mt-10 grid gap-10 lg:grid-cols-2">
         <Breakdown
           title="By campaign"

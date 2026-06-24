@@ -16,10 +16,20 @@ export interface AnalyticsRow {
 export interface Analytics {
   totals: AnalyticsRow;
   byCampaign: AnalyticsRow[];
+  byChannel: AnalyticsRow[];
+  byCampaignChannel: AnalyticsRow[];
   bySegment: AnalyticsRow[];
   byTrigger: AnalyticsRow[];
   byHookType: AnalyticsRow[];
   empty: boolean;
+}
+
+/** Collapse the concrete channels into the two we compare: LinkedIn vs Email. */
+function channelGroup(channel: string | null): string {
+  if (!channel) return "unknown";
+  if (channel.startsWith("linkedin")) return "LinkedIn";
+  if (channel === "email" || channel.startsWith("email")) return "Email";
+  return channel;
 }
 
 function emptyRow(bucket: string): AnalyticsRow {
@@ -52,6 +62,12 @@ function mockAnalytics(): Analytics {
     byCampaign: MOCK_CAMPAIGNS.map((c, i) =>
       i === 0 ? rateRow(c.name, 24, 5, 2) : rateRow(c.name, 12, 3, 1),
     ),
+    byChannel: [rateRow("LinkedIn", 28, 7, 3), rateRow("Email", 8, 1, 0)],
+    byCampaignChannel: [
+      rateRow("Mortgage Discovery · LinkedIn", 16, 4, 2),
+      rateRow("Insurance Agency · LinkedIn", 12, 3, 1),
+      rateRow("Insurance Agency · Email", 8, 1, 0),
+    ],
     bySegment: [
       rateRow("ai_native_consultancy", 18, 4, 2),
       rateRow("traditional_consultancy_pivot", 12, 2, 1),
@@ -88,7 +104,7 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
   const [sendsRes, repliesRes, campaignsRes] = await Promise.all([
     supabase
       .from("sends")
-      .select("draft_id, drafts!inner(lead_id, hook, leads!inner(segment, trigger, campaign_id))"),
+      .select("draft_id, drafts!inner(lead_id, channel, hook, leads!inner(segment, trigger, campaign_id))"),
     supabase
       .from("replies")
       .select("lead_id, intent, leads!inner(segment, trigger, campaign_id)"),
@@ -103,6 +119,7 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
     draft_id: string;
     drafts: {
       lead_id: string;
+      channel: string | null;
       hook: { type?: string } | null;
       leads: { segment: string | null; trigger: string | null; campaign_id: string | null };
     };
@@ -163,6 +180,11 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
     ...r,
     bucket: campaignNameById.get(r.bucket) ?? r.bucket,
   }));
+  const byChannel = rowsFor((s) => channelGroup(s.drafts.channel));
+  const byCampaignChannel = rowsFor(
+    (s) =>
+      `${campaignNameById.get(s.drafts.leads.campaign_id ?? "") ?? "unknown"} · ${channelGroup(s.drafts.channel)}`,
+  );
 
   const sentLeadIds = new Set(sends.map((s) => s.drafts.lead_id));
   const totals = rateRow(
@@ -175,6 +197,8 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
   return {
     totals,
     byCampaign,
+    byChannel,
+    byCampaignChannel,
     bySegment,
     byTrigger,
     byHookType,
@@ -193,6 +217,8 @@ export async function getAnalytics(campaignId?: string): Promise<Analytics> {
   return {
     totals: emptyRow("all"),
     byCampaign: [],
+    byChannel: [],
+    byCampaignChannel: [],
     bySegment: [],
     byTrigger: [],
     byHookType: [],

@@ -6,7 +6,7 @@
 import { loadDraftReviewRowsFromFile } from "./jsonl-source";
 import { MOCK_CAMPAIGNS, MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
 import { loadReplyRowsFromFile } from "./replies-source";
-import { dataSource, serverClient } from "./supabase";
+import { dataSource, serverAdminClient, serverClient } from "./supabase";
 import type {
   Campaign,
   Channel,
@@ -46,6 +46,63 @@ function filterByCampaign<T>(
 ): T[] {
   if (!campaignId) return rows;
   return rows.filter((r) => getId(r) === campaignId);
+}
+
+// ---------------------------------------------------------------------------
+// Mailboxes — sending-fleet health for /mailboxes
+//
+// The `mailboxes` table is RLS-locked with NO anon policy (it holds credentials),
+// so this reads via the service-role client (server-only) and selects SAFE columns
+// only — never username / app_password.
+// ---------------------------------------------------------------------------
+
+export interface MailboxRow {
+  id: string;
+  email: string;
+  provider: string | null;
+  domain: string | null;
+  status: string;
+  daily_cap: number;
+  warmup_stage: number | null;
+  ramp_started_at: string | null;
+  bounce_count: number;
+  last_send_at: string | null;
+  last_error: string | null;
+  sent_today: number;
+}
+
+const MOCK_MAILBOXES: MailboxRow[] = [
+  { id: "m1", email: "c.beyer@automatedcontentai.com", provider: "maildoso", domain: "automatedcontentai.com", status: "warming", daily_cap: 25, warmup_stage: 0, ramp_started_at: null, bounce_count: 0, last_send_at: null, last_error: null, sent_today: 2 },
+  { id: "m2", email: "cbeyer@usecontentai.com", provider: "maildoso", domain: "usecontentai.com", status: "warming", daily_cap: 25, warmup_stage: 0, ramp_started_at: null, bounce_count: 0, last_send_at: null, last_error: null, sent_today: 1 },
+  { id: "m3", email: "chance.beyer@dripwithai.com", provider: "maildoso", domain: "dripwithai.com", status: "active", daily_cap: 25, warmup_stage: 2, ramp_started_at: null, bounce_count: 1, last_send_at: null, last_error: null, sent_today: 4 },
+];
+
+export async function getMailboxes(): Promise<MailboxRow[]> {
+  if (dataSource !== "supabase") return MOCK_MAILBOXES;
+
+  const admin = serverAdminClient();
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const [boxesRes, sendsRes] = await Promise.all([
+    admin
+      .from("mailboxes")
+      .select(
+        "id, email, provider, domain, status, daily_cap, warmup_stage, ramp_started_at, bounce_count, last_send_at, last_error",
+      )
+      .order("status", { ascending: true })
+      .order("email", { ascending: true }),
+    admin.from("sends").select("mailbox_id").gte("sent_at", since).not("mailbox_id", "is", null),
+  ]);
+  if (boxesRes.error) throw boxesRes.error;
+  if (sendsRes.error) throw sendsRes.error;
+
+  const sentToday = new Map<string, number>();
+  for (const s of (sendsRes.data ?? []) as Array<{ mailbox_id: string }>) {
+    sentToday.set(s.mailbox_id, (sentToday.get(s.mailbox_id) ?? 0) + 1);
+  }
+  return ((boxesRes.data ?? []) as Omit<MailboxRow, "sent_today">[]).map((b) => ({
+    ...b,
+    sent_today: sentToday.get(b.id) ?? 0,
+  }));
 }
 
 // ---------------------------------------------------------------------------

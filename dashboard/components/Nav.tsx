@@ -11,6 +11,7 @@ const links = [
   { href: "/replies", label: "Replies" },
   { href: "/leads", label: "Leads" },
   { href: "/sequences", label: "Sequences" },
+  { href: "/mailboxes", label: "Mailboxes" },
   { href: "/campaigns", label: "Campaigns" },
   { href: "/analytics", label: "Analytics" },
 ];
