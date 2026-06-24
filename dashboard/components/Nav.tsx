@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 
+import { AuthStatus } from "./AuthStatus";
 import { CampaignSelector } from "./CampaignSelector";
 import { CAMPAIGN_COOKIE } from "../lib/campaign-filter";
 import { getCampaigns } from "../lib/queries";
-import { dataSource } from "../lib/supabase";
+import { dataSource, serverClient } from "../lib/supabase";
 
 const links = [
   { href: "/drafts", label: "Drafts" },
@@ -28,6 +29,17 @@ export async function Nav() {
   const [campaigns, cookieStore] = await Promise.all([getCampaigns(), cookies()]);
   const selected = cookieStore.get(CAMPAIGN_COOKIE)?.value ?? "all";
 
+  let userEmail: string | null = null;
+  if (dataSource === "supabase") {
+    try {
+      const supabase = await serverClient();
+      const { data } = await supabase.auth.getUser();
+      userEmail = data.user?.email ?? null;
+    } catch {
+      userEmail = null;
+    }
+  }
+
   return (
     <header className="border-b border-neutral-800">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 sm:px-6">
@@ -49,6 +61,7 @@ export async function Nav() {
           >
             source · {dataSource}
           </div>
+          {dataSource === "supabase" && <AuthStatus email={userEmail} />}
         </div>
       </div>
     </header>
