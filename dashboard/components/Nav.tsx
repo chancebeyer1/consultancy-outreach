@@ -15,6 +15,7 @@ const links = [
   { href: "/mailboxes", label: "Mailboxes" },
   { href: "/campaigns", label: "Campaigns" },
   { href: "/analytics", label: "Analytics" },
+  { href: "/activity", label: "Activity" },
 ];
 
 const sourceColor = {

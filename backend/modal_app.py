@@ -78,6 +78,7 @@ image = (
         "prompts_loader",
         "campaigns_loader",
         "sender_limits",  # rolling-window send caps, imported by workers.sequence_send
+        "activity",  # append-only activity log
     )
     # Prompts are referenced from prompts_loader → backend/prompts/*.md.
     # Campaign persona files back the file-seed fallback in campaigns_loader when
@@ -90,6 +91,18 @@ app = modal.App("consultancy-outreach", image=image)
 
 # All scheduled functions share one secret bundle.
 secrets = [modal.Secret.from_name("outreach")]
+
+
+def _logged(action: str, result):
+    """Record a worker run + its result counts to the activity log, then return the result.
+    Resilient — logging never breaks the run."""
+    try:
+        from activity import log
+
+        log(action, source="worker", meta=result if isinstance(result, dict) else {"result": str(result)})
+    except Exception:  # noqa: BLE001
+        pass
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +133,7 @@ def pull_replies_cron() -> dict:
         email = poll_inboxes(limit_per_box=25)
     except Exception as e:  # noqa: BLE001
         email = {"error": str(e)}
-    return {"unipile": unipile, "email": email}
+    return _logged("cron_inbound_sweep", {"unipile": unipile, "email": email})
 
 
 @app.function(
@@ -138,7 +151,7 @@ def progress_sequences_cron() -> dict:
     """
     from workers.sequence_send import progress_sequences
 
-    return progress_sequences(limit=50)
+    return _logged("cron_sequences", progress_sequences(limit=50))
 
 
 @app.function(
@@ -169,7 +182,7 @@ def replenish_queue_cron() -> dict:
         email = source_apollo_all(dry_run=False)
     except Exception as e:  # noqa: BLE001
         email = {"error": str(e)}
-    return {"linkedin": linkedin, "apollo_email": email}
+    return _logged("cron_replenish", {"linkedin": linkedin, "apollo_email": email})
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -327,7 +340,7 @@ def send_approved_cron() -> dict:
         email = send_email_first_touch()
     except Exception as e:  # noqa: BLE001
         email = {"error": str(e)}
-    return {"linkedin": linkedin, "email": email}
+    return _logged("cron_send", {"linkedin": linkedin, "email": email})
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -352,7 +365,7 @@ def detect_connections_cron() -> dict:
     """
     from workers.sequence_send import progress_accepted_connections
 
-    return progress_accepted_connections(limit=30)
+    return _logged("cron_detect_connections", progress_accepted_connections(limit=30))
 
 
 @app.function(secrets=secrets, timeout=600)

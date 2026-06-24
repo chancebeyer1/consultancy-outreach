@@ -145,6 +145,41 @@ export async function getInboxMessages(campaignId?: string): Promise<InboxMessag
 }
 
 // ---------------------------------------------------------------------------
+// Activity log — unified action timeline for /activity (service-role read)
+// ---------------------------------------------------------------------------
+
+export interface ActivityRow {
+  id: string;
+  created_at: string;
+  actor: string;
+  action: string;
+  source: string;
+  channel: string | null;
+  summary: string | null;
+  campaign_id: string | null;
+  lead_id: string | null;
+  meta: Record<string, unknown> | null;
+}
+
+const MOCK_ACTIVITY: ActivityRow[] = [
+  { id: "a1", created_at: new Date(Date.now() - 600_000).toISOString(), actor: "operator", action: "reply_sent", source: "dashboard", channel: "email", summary: "Replied to owner@acmeinsurance.com", campaign_id: null, lead_id: null, meta: {} },
+  { id: "a2", created_at: new Date(Date.now() - 1_200_000).toISOString(), actor: "system", action: "cron_send", source: "worker", channel: null, summary: null, campaign_id: null, lead_id: null, meta: { linkedin: { pushed: 4 }, email: { pushed: 2 } } },
+  { id: "a3", created_at: new Date(Date.now() - 3_600_000).toISOString(), actor: "system", action: "reply_received", source: "worker", channel: "email", summary: "Reply from Crystal D.", campaign_id: null, lead_id: null, meta: {} },
+];
+
+export async function getActivity(limit = 200): Promise<ActivityRow[]> {
+  if (dataSource !== "supabase") return MOCK_ACTIVITY;
+  const admin = serverAdminClient();
+  const { data, error } = await admin
+    .from("activity_log")
+    .select("id, created_at, actor, action, source, channel, summary, campaign_id, lead_id, meta")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []) as ActivityRow[];
+}
+
+// ---------------------------------------------------------------------------
 // Campaigns — list for the selector + /campaigns management surface
 // ---------------------------------------------------------------------------
 

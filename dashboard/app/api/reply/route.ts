@@ -86,5 +86,20 @@ export async function POST(req: Request) {
     received_at: new Date().toISOString(),
   });
 
+  // Activity log (best-effort; never block the send on it).
+  await admin
+    .from("activity_log")
+    .insert({
+      actor: "operator",
+      source: "dashboard",
+      action: "reply_sent",
+      channel: "email",
+      lead_id: msg.lead_id,
+      campaign_id: msg.campaign_id,
+      summary: `Replied to ${msg.from_email}`,
+      meta: { to: msg.from_email, subject },
+    })
+    .then(() => {}, () => {});
+
   return NextResponse.json({ ok: true, messageId: info.messageId, to: msg.from_email });
 }

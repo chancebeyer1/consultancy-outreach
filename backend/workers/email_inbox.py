@@ -216,6 +216,17 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                     )
                     stored += 1
                 new_replies.append(rec)
+                try:
+                    from activity import log as _alog
+
+                    _alog(
+                        "reply_received", source="worker", channel="email",
+                        lead_id=rec.get("lead_id"), campaign_id=rec.get("campaign_id"),
+                        summary=f"Reply from {rec.get('lead_name') or rec.get('from_email')}",
+                        meta={"from": rec.get("from_email"), "subject": rec.get("subject")},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
     # 3. Alert on every (human, matched) reply, sent from a Maildoso box.
     notified = 0
