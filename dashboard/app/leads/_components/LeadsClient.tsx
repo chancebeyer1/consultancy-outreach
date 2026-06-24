@@ -25,6 +25,23 @@ interface Props {
   campaigns: Campaign[];
 }
 
+// Email + a verification dot: green = deliverable, red = bad, amber = risky/unknown.
+function emailCell(email?: string | null, status?: string | null) {
+  if (!email) return <span className="text-neutral-600">—</span>;
+  const tone =
+    status === "deliverable"
+      ? "bg-emerald-500"
+      : status === "undeliverable" || status === "invalid"
+        ? "bg-red-500"
+        : "bg-amber-500";
+  return (
+    <span className="flex items-center gap-1.5" title={status ?? "unknown"}>
+      <span className={clsx("h-1.5 w-1.5 shrink-0 rounded-full", tone)} />
+      <span className="max-w-[15rem] truncate font-mono text-xs text-neutral-300">{email}</span>
+    </span>
+  );
+}
+
 export function LeadsClient({ rows, campaigns }: Props) {
   const [filter, setFilter] = useState<"all" | LeadDisplayStatus>("all");
   const [q, setQ] = useState("");
@@ -46,7 +63,7 @@ export function LeadsClient({ rows, campaigns }: Props) {
       if (filter !== "all" && r.display_status !== filter) return false;
       if (!needle) return true;
       const hay =
-        `${r.lead.name ?? ""} ${r.lead.company ?? ""} ${r.lead.role ?? ""} ${r.lead.location ?? ""}`.toLowerCase();
+        `${r.lead.name ?? ""} ${r.lead.company ?? ""} ${r.lead.role ?? ""} ${r.lead.location ?? ""} ${r.lead.email ?? ""}`.toLowerCase();
       return hay.includes(needle);
     });
   }, [rows, filter, q]);
@@ -63,7 +80,7 @@ export function LeadsClient({ rows, campaigns }: Props) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search name, company, role…"
+          placeholder="Search name, company, role, email…"
           className="w-64 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-100 focus:border-sky-500 focus:outline-none"
         />
       </div>
@@ -91,6 +108,7 @@ export function LeadsClient({ rows, campaigns }: Props) {
             <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
               <th className="px-4 py-2 font-medium">Name</th>
               <th className="px-4 py-2 font-medium">Company</th>
+              <th className="px-4 py-2 font-medium">Email</th>
               <th className="px-4 py-2 font-medium">Role</th>
               <th className="px-4 py-2 font-medium">Location</th>
               <th className="px-4 py-2 text-right font-medium">Fit</th>
@@ -117,6 +135,7 @@ export function LeadsClient({ rows, campaigns }: Props) {
                     </a>
                   </td>
                   <td className="px-4 py-2.5 text-neutral-400">{r.lead.company ?? "—"}</td>
+                  <td className="px-4 py-2.5">{emailCell(r.lead.email, r.lead.email_status)}</td>
                   <td className="max-w-[18rem] truncate px-4 py-2.5 text-neutral-400">
                     {r.lead.role ?? "—"}
                   </td>

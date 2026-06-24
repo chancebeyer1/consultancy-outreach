@@ -60,6 +60,8 @@ export interface Lead {
   trigger: Trigger | null;
   status: LeadStatus;
   notes: string | null;
+  email?: string | null;
+  email_status?: string | null; // unknown | deliverable | risky | undeliverable
   accepted_at?: string | null;
   created_at: string;
   updated_at: string;
