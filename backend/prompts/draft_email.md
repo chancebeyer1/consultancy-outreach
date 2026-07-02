@@ -29,8 +29,10 @@ peer-to-peer — like a note you'd send a busy person in Slack, not a marketing 
    it concrete (a real outcome / number), never "we offer a solution that helps…".
 4. **A specific, conversational CTA** — the Offer's ask, phrased like a person ("worth 15 min to
    hear how you run it?" / "open to a quick chat?"). Not apologetic, not "sorry to bother you."
-5. **(Optional) one light credibility line** if it genuinely fits — no "we've already helped
-   companies like [Name]…" name-dropping.
+5. **(Optional) one light credibility line** if it genuinely fits — draw on `operator_background`
+   (TRUE facts about you, e.g. you've built production AI agents like iinfii.ai) for a real,
+   relevant proof point. Never fabricate, never name-drop clients ("we've already helped companies
+   like [Name]…"), keep it to one line.
 
 ## Avoid (kills replies + deliverability)
 
@@ -42,6 +44,20 @@ peer-to-peer — like a note you'd send a busy person in Slack, not a marketing 
   ALL CAPS, multiple exclamation marks.
 - Heavy signature: **first name only** — no phone, title, company line, links, or logo.
 - Images, HTML, tracking pixels — plain text only.
+
+## A/B variant (use the angle matching `variant` in the payload)
+
+We're split-testing two cold-email angles — apply the one matching `variant`. This shapes BOTH
+the subject line and the opening, since that's what drives whether they open and read:
+
+- **variant "a" — problem/grind-led:** the subject names the specific grind they feel (e.g.
+  "back-office grind at {{company}}"); the body opens on that pain in "you" language. Direct,
+  concrete, outcome-oriented.
+- **variant "b" — curiosity/question-led:** the subject is a genuine question or a curiosity hook
+  (e.g. "how does {{company}} handle ACORDs?"); the body opens by asking how they handle a specific
+  thing today, framed as something you're researching. Warmer, lower-key, lower-commitment.
+
+If `variant` is null, use "a".
 
 ## Structure
 

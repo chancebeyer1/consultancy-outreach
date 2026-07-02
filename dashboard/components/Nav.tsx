@@ -3,14 +3,18 @@ import { cookies } from "next/headers";
 
 import { AuthStatus } from "./AuthStatus";
 import { CampaignSelector } from "./CampaignSelector";
+import { NavLinks } from "./NavLinks";
 import { CAMPAIGN_COOKIE } from "../lib/campaign-filter";
 import { getCampaigns } from "../lib/queries";
-import { dataSource, serverClient } from "../lib/supabase";
+import { dataSource, serverAdminClient, serverClient } from "../lib/supabase";
 
 const links = [
-  { href: "/drafts", label: "Drafts" },
-  { href: "/inbox", label: "Inbox" },
+  { href: "/content", label: "Content" },
+  { href: "/comments", label: "Comments" },
+  { href: "/newsletter", label: "Newsletter" },
   { href: "/replies", label: "Replies" },
+  { href: "/sends", label: "Sends" },
+  { href: "/pipeline", label: "Pipeline" },
   { href: "/leads", label: "Leads" },
   { href: "/sequences", label: "Sequences" },
   { href: "/mailboxes", label: "Mailboxes" },
@@ -30,39 +34,54 @@ export async function Nav() {
   const selected = cookieStore.get(CAMPAIGN_COOKIE)?.value ?? "all";
 
   let userEmail: string | null = null;
+  let isAdmin = false;
   if (dataSource === "supabase") {
     try {
       const supabase = await serverClient();
       const { data } = await supabase.auth.getUser();
       userEmail = data.user?.email ?? null;
+      if (data.user) {
+        const { data: me } = await serverAdminClient()
+          .from("profiles")
+          .select("is_admin")
+          .eq("id", data.user.id)
+          .single();
+        isAdmin = Boolean(me?.is_admin);
+      }
     } catch {
       userEmail = null;
     }
   }
 
+  // Admins get the Team (invite/onboarding) link; members don't.
+  const navLinks = isAdmin ? [...links, { href: "/team", label: "Team" }] : links;
+
   return (
-    <header className="border-b border-neutral-800">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 sm:px-6">
-        <Link href="/" className="font-mono text-sm font-bold tracking-wide">
-          OUTREACH
-        </Link>
-        {/* Mobile: full-width, horizontally scrollable row under the logo. Desktop: inline. */}
-        <nav className="order-3 -mx-4 flex w-full gap-4 overflow-x-auto px-4 text-sm text-neutral-400 [-ms-overflow-style:none] [scrollbar-width:none] sm:order-none sm:mx-0 sm:w-auto sm:flex-1 sm:overflow-visible sm:px-0">
-          {links.map((l) => (
-            <Link key={l.href} href={l.href} className="whitespace-nowrap hover:text-white">
-              {l.label}
-            </Link>
-          ))}
-        </nav>
-        <div className="ml-auto flex items-center gap-3">
-          <CampaignSelector campaigns={campaigns} selected={selected} />
-          <div
-            className={`hidden font-mono text-[10px] uppercase tracking-wide sm:block ${sourceColor[dataSource]}`}
+    <header className="sticky top-0 z-30 border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6">
+        {/* Row 1 — brand + utilities. Kept light so the tab bar below has room to breathe. */}
+        <div className="flex h-14 items-center justify-between gap-4">
+          <Link
+            href="/"
+            className="flex shrink-0 items-center gap-2 font-mono text-sm font-bold tracking-wide text-white"
           >
-            source · {dataSource}
+            <span className="h-2 w-2 rounded-full bg-sky-400" />
+            OUTREACH
+          </Link>
+          <div className="flex min-w-0 items-center gap-3">
+            <CampaignSelector campaigns={campaigns} selected={selected} />
+            <span
+              className={`hidden font-mono text-[10px] uppercase tracking-wide sm:inline ${sourceColor[dataSource]}`}
+            >
+              {dataSource}
+            </span>
+            {dataSource === "supabase" && <AuthStatus email={userEmail} />}
           </div>
-          {dataSource === "supabase" && <AuthStatus email={userEmail} />}
         </div>
+        {/* Row 2 — primary navigation as a full-width tab bar (scrolls horizontally on mobile). */}
+        <nav className="-mx-4 -mb-px flex gap-0.5 overflow-x-auto px-4 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:px-0">
+          <NavLinks links={navLinks} />
+        </nav>
       </div>
     </header>
   );

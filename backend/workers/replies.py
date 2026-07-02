@@ -169,6 +169,7 @@ def _linkedin_replies(
                 received_at=msg.get("timestamp"),
             )
             if record is not None:
+                record["chat_id"] = chat_id  # so the dashboard can thread + reply to this chat
                 records.append(record)
                 seen.add(mid)
     return records

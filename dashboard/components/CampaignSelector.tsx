@@ -38,7 +38,7 @@ export function CampaignSelector({ campaigns, selected }: Props) {
         onChange={(e) => onChange(e.target.value)}
         className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 font-mono text-xs text-neutral-200 outline-none focus:border-neutral-600 disabled:opacity-50"
       >
-        <option value={ALL}>all campaigns</option>
+        <option value={ALL}>All campaigns</option>
         {campaigns.map((c) => (
           <option key={c.id} value={c.id}>
             {c.name}

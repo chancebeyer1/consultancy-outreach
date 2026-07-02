@@ -122,12 +122,16 @@ def _pull_fresh_leads(
     *,
     search_url: str | None = None,
     search_params: dict | None = None,
-    max_pages: int = 10,
+    max_pages: int = 20,
 ) -> list[dict]:
     """Page the Unipile people search, deduping against `seen`, until we have `limit`
-    fresh leads. Prefers structured `search_params` (Sales-Navigator filters) over a
-    raw `search_url`. search_people returns {"items": [already-normalized], "cursor"},
-    so we paginate via the cursor (it does NOT take a limit)."""
+    fresh leads. Prefers structured `search_params` over a raw `search_url`. search_people
+    returns {"items": [already-normalized], "cursor"}, so we paginate via the cursor.
+
+    Unipile's cursor is ephemeral (can't persist across runs like Apollo's page number), so
+    each run re-scans from the top and skips anyone already in the DB. max_pages is set deep
+    enough that, as the early pages fill with already-sourced leads over time, the search can
+    still reach fresh ones further down."""
     fresh: list[dict] = []
     cursor: str | None = None
     pages = 0
@@ -154,7 +158,7 @@ def _pull_fresh_leads(
 
 
 def _process_lead(
-    url: str, campaign, skip_score: bool = False
+    url: str, campaign, skip_score: bool = False, company_domain: str | None = None, lead: dict | None = None
 ) -> dict | None:
     """Enrich → score → draft one lead for the campaign. Returns None on error."""
     import datetime
@@ -167,7 +171,7 @@ def _process_lead(
         "campaign_slug": campaign.slug,
     }
     try:
-        enrichment = enrich.enrich(url)
+        enrichment = enrich.enrich(url, company_domain=company_domain, lead=lead)
         record["enrichment"] = enrichment
 
         if not skip_score:
@@ -416,7 +420,7 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
                 for lead_info in fresh_leads:
                     url = lead_info.get("linkedin_url")
                     if url:
-                        rec = _process_lead(url, campaign)
+                        rec = _process_lead(url, campaign, company_domain=lead_info.get("company_domain"), lead=lead_info)
                         if rec:
                             records.append(rec)
                             if rec.get("status") == "ok":

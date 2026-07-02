@@ -16,6 +16,7 @@ import type {
   Hook,
   Intent,
   Lead,
+  LeadChannelKind,
   LeadDisplayStatus,
   LeadRow,
   LeadStatus,
@@ -207,6 +208,8 @@ export async function getCampaigns(): Promise<Campaign[]> {
 
 export async function getLeadRows(campaignId?: string): Promise<LeadRow[]> {
   if (dataSource === "mock") {
+    const kindOf = (ch?: string | null): LeadChannelKind[] =>
+      ch?.startsWith("email") ? ["email"] : ["linkedin"];
     const byId = new Map<string, LeadRow>();
     for (const r of MOCK_DRAFT_ROWS) {
       byId.set(r.lead.id, {
@@ -214,6 +217,7 @@ export async function getLeadRows(campaignId?: string): Promise<LeadRow[]> {
         fit_score: r.score?.fit_score ?? null,
         display_status: "queued",
         last_sent_at: null,
+        channels: kindOf(r.drafts[0]?.channel),
       });
     }
     for (const r of MOCK_REPLY_ROWS) {
@@ -222,6 +226,7 @@ export async function getLeadRows(campaignId?: string): Promise<LeadRow[]> {
         fit_score: byId.get(r.lead.id)?.fit_score ?? null,
         display_status: "replied",
         last_sent_at: null,
+        channels: kindOf(r.reply.channel),
       });
     }
     return filterByCampaign([...byId.values()], campaignId, (r) => r.lead.campaign_id);
@@ -232,18 +237,44 @@ export async function getLeadRows(campaignId?: string): Promise<LeadRow[]> {
   return loadLeadRowsFromSupabase(campaignId);
 }
 
+// Supabase returns 400 ("Bad Request") when a request URL gets too long, which happens once an
+// `.in(column, ids)` filter carries a few hundred ids. Run the query over small id chunks and
+// merge — each chunk keeps the URL short and stays under the default row cap. Returns the same
+// {data, error} shape as a normal query so call sites need no other changes.
+async function inChunks(
+  ids: string[],
+  run: (chunk: string[]) => PromiseLike<{ data: unknown; error: unknown }>,
+  size = 100,
+): Promise<{ data: unknown[]; error: unknown }> {
+  const out: unknown[] = [];
+  for (let i = 0; i < ids.length; i += size) {
+    const { data, error } = await run(ids.slice(i, i + size));
+    if (error) return { data: out, error };
+    if (Array.isArray(data)) out.push(...data);
+  }
+  return { data: out, error: null };
+}
+
 async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]> {
   const supabase = await serverClient();
 
-  let leadQuery = supabase
-    .from("leads")
-    .select("*")
-    .order("updated_at", { ascending: false })
-    .limit(2000);
-  if (campaignId) leadQuery = leadQuery.eq("campaign_id", campaignId);
-  const { data: leadsData, error: leadsErr } = await leadQuery;
-  if (leadsErr) throw leadsErr;
-  const leads = (leadsData ?? []) as unknown as Lead[];
+  // Supabase caps a single response at 1000 rows, so page through with .range() to load them ALL —
+  // otherwise the total + filter chips silently under-count (they're computed client-side here).
+  const leads: Lead[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase
+      .from("leads")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (campaignId) q = q.eq("campaign_id", campaignId);
+    const { data, error } = await q;
+    if (error) throw error;
+    const batch = (data ?? []) as unknown as Lead[];
+    leads.push(...batch);
+    if (batch.length < PAGE) break;
+  }
   if (leads.length === 0) return [];
 
   const leadIds = leads.map((l) => l.id);
@@ -251,9 +282,9 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
   // Scores, drafts (for status + channel), replies. Sends are looked up by
   // draft_id in a second pass (drafts carry the lead_id).
   const [scoresRes, draftsRes, repliesRes] = await Promise.all([
-    supabase.from("scores").select("lead_id, fit_score").in("lead_id", leadIds),
-    supabase.from("drafts").select("id, lead_id, channel, status").in("lead_id", leadIds),
-    supabase.from("replies").select("lead_id").in("lead_id", leadIds),
+    inChunks(leadIds, (c) => supabase.from("scores").select("lead_id, fit_score").in("lead_id", c)),
+    inChunks(leadIds, (c) => supabase.from("drafts").select("id, lead_id, channel, status").in("lead_id", c)),
+    inChunks(leadIds, (c) => supabase.from("replies").select("lead_id").in("lead_id", c)),
   ]);
   if (scoresRes.error) throw scoresRes.error;
   if (draftsRes.error) throw draftsRes.error;
@@ -267,10 +298,9 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
   }>;
   const draftIds = draftRows.map((d) => d.id);
 
-  const sendsRes =
-    draftIds.length > 0
-      ? await supabase.from("sends").select("draft_id, sent_at").in("draft_id", draftIds)
-      : { data: [], error: null };
+  const sendsRes = await inChunks(draftIds, (c) =>
+    supabase.from("sends").select("draft_id, sent_at").in("draft_id", c),
+  );
   if (sendsRes.error) throw sendsRes.error;
   const sendRows = (sendsRes.data ?? []) as Array<{ draft_id: string; sent_at: string }>;
 
@@ -300,6 +330,29 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
   );
   const acceptedLeads = new Set<string>(leads.filter((l) => l.accepted_at).map((l) => l.id));
 
+  // Outreach channel(s) per lead, from its draft channels. Every lead has a
+  // linkedin_url, so the channel a lead is actually worked through is the truer
+  // signal than contact fields — derive it from the drafts.
+  const channelsByLead = new Map<string, Set<LeadChannelKind>>();
+  for (const d of draftRows) {
+    const kind: LeadChannelKind | null = d.channel.startsWith("linkedin")
+      ? "linkedin"
+      : d.channel.startsWith("email")
+        ? "email"
+        : null;
+    if (!kind) continue;
+    const set = channelsByLead.get(d.lead_id) ?? new Set<LeadChannelKind>();
+    set.add(kind);
+    channelsByLead.set(d.lead_id, set);
+  }
+
+  function channelsFor(lead: Lead): LeadChannelKind[] {
+    const set = channelsByLead.get(lead.id);
+    if (set && set.size) return [...set];
+    // No drafts yet → fall back to contact capability (Apollo leads carry an email).
+    return lead.email ? ["email"] : ["linkedin"];
+  }
+
   function statusFor(leadId: string): LeadDisplayStatus {
     if (repliedLeads.has(leadId)) return "replied";
     if (acceptedLeads.has(leadId)) return "connected"; // connection accepted (real signal)
@@ -313,6 +366,7 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
     fit_score: fitByLead.get(lead.id) ?? null,
     display_status: statusFor(lead.id),
     last_sent_at: sentByLead.get(lead.id)?.lastSentAt ?? null,
+    channels: channelsFor(lead),
   }));
 }
 
@@ -368,9 +422,9 @@ async function loadSequenceRowsFromSupabase(campaignId?: string): Promise<Sequen
   const draftIds = sd.map((d) => d.id);
 
   const [leadsRes, sendsRes, repliesRes] = await Promise.all([
-    supabase.from("leads").select("*").in("id", leadIds),
-    supabase.from("sends").select("draft_id, sent_at").in("draft_id", draftIds),
-    supabase.from("replies").select("lead_id").in("lead_id", leadIds),
+    inChunks(leadIds, (c) => supabase.from("leads").select("*").in("id", c)),
+    inChunks(draftIds, (c) => supabase.from("sends").select("draft_id, sent_at").in("draft_id", c)),
+    inChunks(leadIds, (c) => supabase.from("replies").select("lead_id").in("lead_id", c)),
   ]);
   if (leadsRes.error) throw leadsRes.error;
   if (sendsRes.error) throw sendsRes.error;
@@ -495,12 +549,14 @@ async function loadDraftReviewRowsFromSupabase(campaignId?: string): Promise<Dra
 
   // 2. In parallel: leads, scores, enrichments for those lead ids.
   const [leadsRes, scoresRes, enrichmentsRes] = await Promise.all([
-    supabase.from("leads").select("*").in("id", leadIds),
-    supabase.from("scores").select("*").in("lead_id", leadIds),
-    supabase
-      .from("enrichments")
-      .select("lead_id, hooks_json, recent_posts_json, company_signals_json")
-      .in("lead_id", leadIds),
+    inChunks(leadIds, (c) => supabase.from("leads").select("*").in("id", c)),
+    inChunks(leadIds, (c) => supabase.from("scores").select("*").in("lead_id", c)),
+    inChunks(leadIds, (c) =>
+      supabase
+        .from("enrichments")
+        .select("lead_id, hooks_json, recent_posts_json, company_signals_json")
+        .in("lead_id", c),
+    ),
   ]);
   if (leadsRes.error) throw leadsRes.error;
   if (scoresRes.error) throw scoresRes.error;
@@ -617,13 +673,15 @@ async function loadReplyRowsFromSupabase(campaignId?: string): Promise<ReplyRevi
   // Pull the lead + the most recent outbound draft we sent (for context in the
   // suggested-reply UX). We join via drafts.lead_id where status='sent'.
   const [leadsRes, sentDraftsRes] = await Promise.all([
-    supabase.from("leads").select("*").in("id", leadIds),
-    supabase
-      .from("drafts")
-      .select("lead_id, body, edited_body, channel, decided_at")
-      .in("lead_id", leadIds)
-      .eq("status", "sent")
-      .order("decided_at", { ascending: false }),
+    inChunks(leadIds, (c) => supabase.from("leads").select("*").in("id", c)),
+    inChunks(leadIds, (c) =>
+      supabase
+        .from("drafts")
+        .select("lead_id, body, edited_body, channel, decided_at")
+        .in("lead_id", c)
+        .eq("status", "sent")
+        .order("decided_at", { ascending: false }),
+    ),
   ]);
   if (leadsRes.error) throw leadsRes.error;
   if (sentDraftsRes.error) throw sentDraftsRes.error;
@@ -656,4 +714,106 @@ async function loadReplyRowsFromSupabase(campaignId?: string): Promise<ReplyRevi
     })
     .filter((r): r is ReplyReviewRow => r !== null)
     .filter((r) => !campaignId || r.lead.campaign_id === campaignId);
+}
+
+// ---------------------------------------------------------------------------
+// Deal detail — /pipeline/[id] CRM page (deal + contact + conversation + notes)
+// ---------------------------------------------------------------------------
+export type DealDetail = {
+  deal: {
+    id: string;
+    contact_name: string | null;
+    company: string | null;
+    value_usd: number | string | null;
+    stage: string;
+    source: string | null;
+    notes: string | null;
+    next_action: string | null;
+    brief: string | null;
+    brief_generated_at: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+    closed_at: string | null;
+    lead_id: string | null;
+  };
+  lead: {
+    id: string;
+    name: string | null;
+    linkedin_url: string | null;
+    email: string | null;
+    role: string | null;
+    headline: string | null;
+    company: string | null;
+    location: string | null;
+  } | null;
+  campaignName: string | null;
+  messages: Array<{
+    id: string;
+    from_name: string | null;
+    from_email: string | null;
+    subject: string | null;
+    body: string | null;
+    direction: string;
+    received_at: string | null;
+    created_at: string | null;
+  }>;
+  notes: Array<{ id: string; body: string; created_at: string }>;
+  auditReport: {
+    summary?: string;
+    opportunities?: Array<{
+      title: string;
+      today: string;
+      agent: string;
+      time_saved: string;
+      complexity: string;
+    }>;
+    first_build?: string;
+    note?: string;
+    website?: string;
+  } | null;
+};
+
+export async function getDealDetail(id: string): Promise<DealDetail | null> {
+  if (dataSource !== "supabase") return null;
+  const admin = serverAdminClient();
+
+  const { data: deal } = await admin.from("deals").select("*").eq("id", id).maybeSingle();
+  if (!deal) return null;
+
+  const [leadRes, msgRes, notesRes, campRes, auditRes] = await Promise.all([
+    deal.lead_id
+      ? admin
+          .from("leads")
+          .select("id, name, linkedin_url, email, role, headline, company, location")
+          .eq("id", deal.lead_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    deal.lead_id
+      ? admin
+          .from("inbox_messages")
+          .select("id, from_name, from_email, subject, body, direction, received_at, created_at")
+          .eq("lead_id", deal.lead_id)
+          .order("received_at", { ascending: true, nullsFirst: true })
+          .limit(50)
+      : Promise.resolve({ data: [] }),
+    admin
+      .from("deal_notes")
+      .select("id, body, created_at")
+      .eq("deal_id", id)
+      .order("created_at", { ascending: false }),
+    deal.campaign_id
+      ? admin.from("campaigns").select("name").eq("id", deal.campaign_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    admin.from("audits").select("report").eq("deal_id", id).order("created_at", { ascending: false }).limit(1),
+  ]);
+
+  const auditRow = (auditRes.data as Array<{ report?: DealDetail["auditReport"] }> | null)?.[0];
+  return {
+    deal: deal as DealDetail["deal"],
+    lead: (leadRes.data ?? null) as DealDetail["lead"],
+    campaignName: (campRes.data as { name?: string } | null)?.name ?? null,
+    messages: (msgRes.data ?? []) as DealDetail["messages"],
+    notes: (notesRes.data ?? []) as DealDetail["notes"],
+    auditReport: auditRow?.report ?? null,
+  };
 }

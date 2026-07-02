@@ -1040,21 +1040,89 @@ def detect_connections_now(dry_run: bool = False, limit: int | None = None) -> d
     return progress_accepted_connections(dry_run=dry_run, limit=limit)
 
 
+@app.function(secrets=secrets, timeout=300)
+def dispatch_comments_cron() -> dict:
+    """Release at most one operator-approved LinkedIn growth comment, paced to look human.
+
+    The pacer self-gates (weekday, US business-hours window, daily cap, min-gap since the last one,
+    random hold), so running it every hour just gives it the chance to drip one out when the timing
+    is right. Approved comments therefore trickle out 1 at a time across the afternoon — never in a
+    burst that LinkedIn would flag as automation.
+    """
+    from workers.comment_pacer import dispatch_due_comments
+
+    try:
+        res = dispatch_due_comments()
+    except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_dispatch_comments", res)
+
+
+@app.function(secrets=secrets, timeout=120)
+def dispatch_comments_now(dry_run: bool = False, force: bool = False) -> dict:
+    """On-demand pacer tick. `--dry-run` previews the next comment; `--force` posts one immediately,
+    bypassing the timing gates (for a live end-to-end test).
+
+        modal run modal_app.py::dispatch_comments_now --dry-run
+        modal run modal_app.py::dispatch_comments_now --force
+    """
+    from workers.comment_pacer import dispatch_due_comments
+
+    return dispatch_due_comments(dry_run=dry_run, force=force)
+
+
+def _run_job(name: str, fn, timeout: int = 600) -> str:
+    """Run one dispatcher job under a hard wall-clock cap.
+
+    The jobs run via `.local()`, so Modal's per-function timeouts do NOT apply — one hung call (a
+    stalled SMTP/Unipile socket, a DB lock) would otherwise block every job after it and burn the
+    whole dispatcher timeout (the 2026-07 incident: an intermittent `cron_send` stall hung ~80 min
+    and killed the tick). Running each job in a daemon thread and joining with a timeout means a
+    hang is abandoned after `timeout` seconds; the remaining jobs still run and the next hourly tick
+    retries it. Normal jobs finish in seconds, so this only ever trips on a real hang."""
+    import threading
+
+    box: dict = {}
+
+    def _target():
+        try:
+            box["r"] = fn.local()
+        except Exception:  # noqa: BLE001
+            import traceback
+
+            box["e"] = traceback.format_exc()[:1500]
+
+    t = threading.Thread(target=_target, name=f"job-{name}", daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        _logged(f"cron_dispatcher_{name}", {"error": f"job hung >{timeout}s, abandoned this tick"})
+        return "timed_out"
+    if "e" in box:
+        _logged(f"cron_dispatcher_{name}", {"error": box["e"]})
+        return "crashed"
+    r = box.get("r")
+    return "error" if isinstance(r, dict) and "error" in r else "ok"
+
+
 @app.function(
     schedule=modal.Cron("0 * * * *"),  # the ONE scheduled function for this app
     secrets=secrets,
-    timeout=4800,  # covers the sum of all five jobs' individual timeouts
+    timeout=4800,  # backstop only — the per-job caps in _run_job keep the real total well under this
     retries=0,  # each job alerts + logs on failure; the next tick is an hour away
 )
 def hourly_dispatcher() -> dict:
-    """Run the five hourly jobs sequentially, in their old minute order.
+    """Run the hourly jobs sequentially, in their old minute order.
 
-    Replaces five separate crons (Modal Starter caps the workspace at 5
-    scheduled functions; the trading-bot app needs a slot). Sequential
-    execution preserves the non-overlap the old minute offsets provided —
-    these jobs share Unipile/LinkedIn rate windows and DB send caps.
-    `.local()` runs each in this container; every job already does its own
-    activity logging + operator alerting via `_logged`.
+    Replaces separate crons (Modal Starter caps the workspace at 5 scheduled
+    functions; the trading-bot app needs a slot). Sequential execution preserves
+    the non-overlap the old minute offsets provided — these jobs share
+    Unipile/LinkedIn rate windows and DB send caps. `.local()` runs each in this
+    container; every job already does its own activity logging + operator alerting
+    via `_logged`. The comment pacer runs last and self-gates on timing, so most
+    ticks it's a no-op.
     """
     jobs = (
         ("pull_replies", pull_replies_cron),
@@ -1062,16 +1130,11 @@ def hourly_dispatcher() -> dict:
         ("progress_sequences", progress_sequences_cron),
         ("replenish_queue", replenish_queue_cron),
         ("send_approved", send_approved_cron),
+        ("dispatch_comments", dispatch_comments_cron),
     )
     results: dict = {}
     for name, fn in jobs:
-        try:
-            results[name] = "ok" if not isinstance(r := fn.local(), dict) else ("error" if "error" in r else "ok")
-        except Exception:  # noqa: BLE001 — one job must never block the rest
-            import traceback
-
-            results[name] = "crashed"
-            _logged(f"cron_dispatcher_{name}", {"error": traceback.format_exc()[:1500]})
+        results[name] = _run_job(name, fn)
     return _logged("cron_dispatcher", results)
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from clients import tavily, unipile
+from clients import scrape, tavily, unipile
 
 
 def _experiences(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -88,6 +88,7 @@ def _normalize_profile(raw: dict[str, Any]) -> dict[str, Any]:
         or raw.get("accomplishment_projects")
         or [],
         "interests": raw.get("interests") or raw.get("skills") or [],
+        "websites": raw.get("websites") or (raw.get("contact_info") or {}).get("websites") or [],
         # Provider ids — preserved so messaging/invite paths can resolve a target
         # from a stored profile without a second fetch.
         "provider_id": raw.get("provider_id"),
@@ -106,11 +107,15 @@ def _company_name(profile: dict[str, Any]) -> str | None:
     return experiences[0].get("company")
 
 
-def enrich(linkedin_url: str) -> dict[str, Any]:
+def enrich(
+    linkedin_url: str, company_domain: str | None = None, lead: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Run the full enrichment pipeline for one LinkedIn URL.
 
-    Returns a dict with: profile (normalized), recent_posts, company_signals.
-    Any field that fails or is unavailable is set to None / empty.
+    Returns a dict with: profile (normalized), recent_posts, company_signals (incl. the company
+    website text — the richest hook source for owner-operators who don't post). Any field that
+    fails or is unavailable is set to None / empty. `lead` is the optional source row (Apollo
+    fields) used as a profile fallback when Unipile can't fetch.
     """
     out: dict[str, Any] = {
         "linkedin_url": linkedin_url,
@@ -119,16 +124,22 @@ def enrich(linkedin_url: str) -> dict[str, Any]:
         "company_signals": {},
     }
 
-    # 1. Unipile profile (required — fail loudly), normalized to the stable shape.
-    out["profile"] = _normalize_profile(unipile.fetch_profile(linkedin_url))
+    # 1. Unipile profile — best-effort. A 502 (LinkedIn throttling profile views) or a timeout must
+    #    NOT kill the lead: the company website is the primary hook source now, so on failure we fall
+    #    back to a minimal profile from the source lead fields and carry on.
+    try:
+        out["profile"] = _normalize_profile(unipile.fetch_profile(linkedin_url))
+    except Exception as e:  # noqa: BLE001
+        out["profile_error"] = str(e)[:200]
+        out["profile"] = _profile_from_lead(lead)
 
-    # 2. Recent posts (nice-to-have)
+    # 2. Recent posts (nice-to-have; owner/operator ICPs rarely post, and the endpoint often 422s)
     try:
         out["recent_posts"] = unipile.fetch_recent_posts(linkedin_url, count=10)
     except Exception as e:  # noqa: BLE001
         out["recent_posts_error"] = str(e)
 
-    # 3. Company signals via Tavily (nice-to-have)
+    # 3. Company signals via Tavily (nice-to-have; sparse for small local businesses)
     company = _company_name(out["profile"])
     if company:
         try:
@@ -137,4 +148,57 @@ def enrich(linkedin_url: str) -> dict[str, Any]:
             out["company_signals_error"] = str(e)
     out["company"] = company
 
+    # 4. Company website text — scrape their own site (Apollo domain, else a profile website). This
+    #    is the strongest, most reliable personalization signal for this ICP: their real words about
+    #    what they do, who they serve, and how long. Folded into company_signals so it flows to the
+    #    hook extractor with no schema change.
+    site_url = company_domain or _profile_website(out["profile"])
+    if site_url:
+        try:
+            text = scrape.fetch_text(site_url, max_chars=4000)
+            if text:
+                if not isinstance(out["company_signals"], dict):
+                    out["company_signals"] = {}
+                out["company_signals"]["site_text"] = text
+                out["company_signals"]["site_url"] = scrape.normalize_url(site_url)
+        except Exception as e:  # noqa: BLE001
+            out["company_site_error"] = str(e)
+
     return out
+
+
+def _profile_from_lead(lead: dict[str, Any] | None) -> dict[str, Any]:
+    """Minimal profile built from the source lead (Apollo) — the fallback when Unipile can't fetch
+    the LinkedIn profile (502/timeout). Keeps drafts personal (name + role + company) despite the
+    failure; the company website still supplies the sharp hooks."""
+    if not lead:
+        return {}
+    name = (lead.get("name") or " ".join(
+        p for p in (lead.get("first_name"), lead.get("last_name")) if p
+    )).strip()
+    first = lead.get("first_name") or (name.split(" ", 1)[0] if name else None)
+    headline = lead.get("headline") or lead.get("title") or lead.get("role")
+    company = lead.get("company") or lead.get("organization")
+    role = lead.get("title") or lead.get("role")
+    return {
+        "first_name": first or None,
+        "full_name": name or None,
+        "headline": headline,
+        "occupation": headline,
+        "experiences": [{"company": company, "title": role}] if company else [],
+    }
+
+
+def _profile_website(profile: dict[str, Any] | None) -> str | None:
+    """Best-effort company/personal website from a normalized profile (fallback when no Apollo
+    domain). Skips social URLs."""
+    if not profile:
+        return None
+    cands = profile.get("websites") or []
+    for w in cands if isinstance(cands, list) else [cands]:
+        url = w.get("url") if isinstance(w, dict) else w
+        if isinstance(url, str) and url.startswith("http") and not any(
+            s in url for s in ("linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com")
+        ):
+            return url
+    return None

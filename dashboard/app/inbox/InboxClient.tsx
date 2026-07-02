@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
+import { PageHeader } from "@/components/PageHeader";
 import type { InboxMessage } from "@/lib/queries";
 
 type Row = InboxMessage & { campaign?: string | null };
@@ -34,6 +35,7 @@ function buildThreads(messages: Row[]): Thread[] {
   for (const [key, msgs] of groups) {
     msgs.sort((a, b) => ts(a.received_at) - ts(b.received_at));
     const inbound = msgs.filter((m) => m.direction !== "out");
+    if (inbound.length === 0) continue; // outbound-only (no reply yet) — not a conversation
     const prospect = inbound[0] ?? msgs[0];
     const latest = msgs[msgs.length - 1];
     const lastInbound = [...msgs].reverse().find((m) => m.direction !== "out") ?? null;
@@ -65,13 +67,10 @@ export function InboxClient({ messages }: { messages: Row[] }) {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
-      <header className="mb-6 border-b border-neutral-800 pb-5">
-        <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Conversations across all boxes, grouped by prospect. &quot;Needs reply&quot; surfaces the
-          ones waiting on you. Reply here — it threads and sends from the right box.
-        </p>
-      </header>
+      <PageHeader
+        title="Inbox"
+        description="Conversations across all boxes, grouped by prospect. “Needs reply” surfaces the ones waiting on you — reply here and it threads from the right box."
+      />
 
       <div className="grid grid-cols-3 gap-4">
         <Kpi label="Conversations" value={String(threads.length)} />

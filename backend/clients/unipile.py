@@ -69,6 +69,26 @@ def _li_account() -> str:
     return require("UNIPILE_LINKEDIN_ACCOUNT_ID")
 
 
+# Connection-invite note limit. LinkedIn's standard cap is 300 chars; verified empirically on
+# 2026-06-29 that this account accepts 225- and 265-char notes (the earlier 200 cap was an
+# over-correction). Over-long notes get rejected with errors/too_many_characters, so we still
+# truncate at a sentence/word boundary as a safety net.
+INVITE_NOTE_LIMIT = 300
+
+
+def _invite_note(msg: str | None, limit: int = INVITE_NOTE_LIMIT) -> str:
+    msg = (msg or "").strip()
+    if len(msg) <= limit:
+        return msg
+    cut = msg[:limit]
+    for sep in (". ", "! ", "? "):
+        i = cut.rfind(sep)
+        if i >= limit * 0.55:
+            return cut[: i + 1].strip()
+    i = cut.rfind(" ")
+    return (cut[:i] if i > limit * 0.55 else cut).strip()
+
+
 def _email_account() -> str:
     return require("UNIPILE_EMAIL_ACCOUNT_ID")
 
@@ -102,14 +122,18 @@ def public_identifier(linkedin_url: str) -> str:
 # ---------------------------------------------------------------------------
 
 @_RETRY
-def fetch_profile(linkedin_url: str, *, notify: bool = False) -> dict[str, Any]:
+def fetch_profile(
+    linkedin_url: str, *, notify: bool = False, account_id: str | None = None
+) -> dict[str, Any]:
     """Retrieve a LinkedIn profile.  GET /users/{identifier}?account_id=…
 
     `notify=False` avoids leaving a "viewed your profile" footprint during
     enrichment. The response is Unipile's profile shape — normalize downstream.
+    `account_id` defaults to the global connected account (multi-user: pass the
+    lead-owner's account so the lookup runs from their session).
     """
     ident = public_identifier(linkedin_url)
-    params = {"account_id": _li_account(), "notify": str(notify).lower()}
+    params = {"account_id": account_id or _li_account(), "notify": str(notify).lower()}
     with httpx.Client(timeout=60.0) as c:
         r = c.get(f"{_base()}/users/{ident}", headers=_headers(), params=params)
         r.raise_for_status()
@@ -147,12 +171,15 @@ def provider_id_from_profile(profile: dict[str, Any] | None) -> str | None:
     return None
 
 
-def resolve_provider_id(linkedin_url: str, *, profile: dict[str, Any] | None = None) -> str:
+def resolve_provider_id(
+    linkedin_url: str, *, profile: dict[str, Any] | None = None, account_id: str | None = None
+) -> str:
     """The provider-internal id required to invite / message a user.
 
-    Pulled from a profile payload (fetched if not supplied).
+    Pulled from a profile payload (fetched if not supplied). `account_id` selects which
+    connected account performs the lookup (defaults to the global account).
     """
-    p = profile if profile is not None else fetch_profile(linkedin_url)
+    p = profile if profile is not None else fetch_profile(linkedin_url, account_id=account_id)
     for key in ("provider_id", "id", "member_id", "entity_urn", "public_identifier"):
         val = p.get(key)
         if val:
@@ -236,6 +263,44 @@ def search_people(
 
 
 @_RETRY
+def search_posts(keywords: str, *, account_id: str | None = None, cursor: str | None = None) -> dict[str, Any]:
+    """Search LinkedIn posts by keyword.  POST /linkedin/search (category=posts).
+
+    Returns {"items": [{social_id, text, reactions, comments, reposts, impressions,
+    author_name, author_headline, url, date, is_job}], "cursor"}. Engagement counts let us
+    rank for what actually went viral.
+    """
+    q: dict[str, Any] = {"account_id": account_id or _li_account()}
+    if cursor:
+        q["cursor"] = cursor
+    body = {"api": "classic", "category": "posts", "keywords": keywords}
+    with httpx.Client(timeout=60.0) as c:
+        r = c.post(f"{_base()}/linkedin/search", headers=_headers(), params=q, json=body)
+        r.raise_for_status()
+        data = r.json()
+    raw = data.get("items", []) if isinstance(data, dict) else (data or [])
+    items: list[dict[str, Any]] = []
+    for p in raw:
+        if not isinstance(p, dict):
+            continue
+        author = p.get("author") or {}
+        items.append({
+            "social_id": p.get("social_id") or p.get("id"),
+            "text": p.get("text") or "",
+            "reactions": int(p.get("reaction_counter") or 0),
+            "comments": int(p.get("comment_counter") or 0),
+            "reposts": int(p.get("repost_counter") or 0),
+            "impressions": int(p.get("impressions_counter") or 0),
+            "author_name": author.get("name"),
+            "author_headline": author.get("headline"),
+            "url": p.get("share_url"),
+            "date": p.get("parsed_datetime") or p.get("date"),
+            "is_job": bool(p.get("job_posting")),
+        })
+    return {"items": items, "cursor": data.get("cursor") if isinstance(data, dict) else None}
+
+
+@_RETRY
 def search_parameters(param_type: str, keywords: str, *, limit: int = 10) -> list[dict[str, Any]]:
     """Resolve Sales-Navigator filter IDs by keyword.  GET /linkedin/search/parameters
 
@@ -253,15 +318,18 @@ def search_parameters(param_type: str, keywords: str, *, limit: int = 10) -> lis
 
 
 @_RETRY
-def list_relations(*, cursor: str | None = None, limit: int = 100) -> dict[str, Any]:
+def list_relations(
+    *, cursor: str | None = None, limit: int = 100, account_id: str | None = None
+) -> dict[str, Any]:
     """One page of the account's 1st-degree connections.  GET /users/relations
 
     `member_id` is the LinkedIn member urn (ACoAA…) we match leads on for
     connection-acceptance detection. Returns {"items": [{provider_id,
     public_identifier, name}], "cursor": <next or None>} — relations come back
     most-recent-first, so newly-accepted connections are on the first pages.
+    `account_id` selects whose connections to page (defaults to the global account).
     """
-    params: dict[str, Any] = {"account_id": _li_account(), "limit": limit}
+    params: dict[str, Any] = {"account_id": account_id or _li_account(), "limit": limit}
     if cursor:
         params["cursor"] = cursor
     with httpx.Client(timeout=60.0) as c:
@@ -281,38 +349,114 @@ def list_relations(*, cursor: str | None = None, limit: int = 100) -> dict[str, 
     return {"items": items, "cursor": data.get("cursor") if isinstance(data, dict) else None}
 
 
+def list_sent_invitations(
+    *, account_id: str | None = None, max_pages: int = 40
+) -> list[dict[str, Any]]:
+    """All OUTSTANDING (pending/unaccepted) sent invitations.  GET /users/invite/sent
+
+    LinkedIn throttles new invites once too many are left pending (422
+    cannot_resend_yet / "temporary provider limit"), and that ceiling counts the
+    operator's own old manual invites too — which our send-rate quota can't see.
+    This is the input to the pending-invite guard and the stale-invite withdrawal.
+
+    Returns a list of {id, sent_at, name, public_id, member_id, text}, newest first.
+    """
+    acct = account_id or _li_account()
+    out: list[dict[str, Any]] = []
+    cursor: str | None = None
+    with httpx.Client(timeout=60.0) as c:
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"account_id": acct, "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            r = c.get(f"{_base()}/users/invite/sent", headers=_headers(), params=params)
+            r.raise_for_status()
+            data = r.json()
+            items = data.get("items", []) if isinstance(data, dict) else (data or [])
+            if not items:
+                break
+            for it in items:
+                inv_id = it.get("id")
+                if not inv_id:
+                    continue
+                out.append(
+                    {
+                        "id": str(inv_id),
+                        "sent_at": it.get("parsed_datetime"),  # ISO8601 or None
+                        "name": it.get("invited_user"),
+                        "public_id": it.get("invited_user_public_id"),
+                        "member_id": it.get("invited_user_id"),
+                        "text": it.get("invitation_text"),
+                    }
+                )
+            cursor = data.get("cursor") if isinstance(data, dict) else None
+            if not cursor:
+                break
+    return out
+
+
 # ---------------------------------------------------------------------------
 # sending  (replaces heyreach.add_leads_to_campaign + smartlead.add_leads_to_campaign)
 # ---------------------------------------------------------------------------
 
 @_RETRY
 def send_linkedin_invitation(
-    provider_id: str, message: str, *, user_email: str | None = None
+    provider_id: str, message: str, *, user_email: str | None = None, account_id: str | None = None
 ) -> dict[str, Any]:
     """Send a connection request with a note.  POST /users/invite (JSON).
 
-    `message` is truncated to LinkedIn's 300-char invite-note limit.
+    `message` is truncated to LinkedIn's 300-char invite-note limit. `account_id` is the
+    sending account (defaults to the global account; multi-user passes the lead owner's).
     """
     body: dict[str, Any] = {
-        "account_id": _li_account(),
+        "account_id": account_id or _li_account(),
         "provider_id": provider_id,
-        "message": (message or "")[:300],
+        "message": _invite_note(message),
     }
     if user_email:
         body["user_email"] = user_email
     with httpx.Client(timeout=60.0) as c:
         r = c.post(f"{_base()}/users/invite", headers=_headers(), json=body)
-        r.raise_for_status()
+        if r.is_error:  # surface Unipile's real reason (e.g. too_many_characters), not a generic 400
+            raise httpx.HTTPStatusError(
+                f"invite {r.status_code}: {r.text[:300]}", request=r.request, response=r
+            )
         return r.json()
 
 
 @_RETRY
-def send_linkedin_message(provider_id: str, text: str) -> dict[str, Any]:
+def withdraw_invitation(invitation_id: str, *, account_id: str | None = None) -> dict[str, Any]:
+    """Withdraw a pending sent invitation.  DELETE /users/invite/sent/{id}
+
+    Used to clear stale/never-accepted invites that count against LinkedIn's
+    pending-invitation ceiling. `invitation_id` is the `id` from
+    list_sent_invitations(). Note: LinkedIn enforces a ~3-week cooldown before
+    you can re-invite someone whose invite you withdrew.
+    """
+    acct = account_id or _li_account()
+    with httpx.Client(timeout=60.0) as c:
+        r = c.request(
+            "DELETE",
+            f"{_base()}/users/invite/sent/{invitation_id}",
+            headers=_headers(),
+            params={"account_id": acct},
+        )
+        if r.is_error:
+            raise httpx.HTTPStatusError(
+                f"withdraw {r.status_code}: {r.text[:300]}", request=r.request, response=r
+            )
+        return r.json() if r.text.strip() else {"ok": True}
+
+
+@_RETRY
+def send_linkedin_message(
+    provider_id: str, text: str, *, account_id: str | None = None
+) -> dict[str, Any]:
     """DM a connection by starting (or reusing) a chat.  POST /chats (multipart).
 
-    Returns at least {chat_id, message_id}.
+    Returns at least {chat_id, message_id}. `account_id` defaults to the global account.
     """
-    fields = _form({"account_id": _li_account(), "attendees_ids": provider_id, "text": text})
+    fields = _form({"account_id": account_id or _li_account(), "attendees_ids": provider_id, "text": text})
     with httpx.Client(timeout=60.0) as c:
         r = c.post(f"{_base()}/chats", headers=_headers(), files=fields)
         r.raise_for_status()
@@ -320,17 +464,20 @@ def send_linkedin_message(provider_id: str, text: str) -> dict[str, Any]:
 
 
 @_RETRY
-def send_linkedin_inmail(provider_id: str, text: str) -> dict[str, Any]:
+def send_linkedin_inmail(
+    provider_id: str, text: str, *, account_id: str | None = None
+) -> dict[str, Any]:
     """Send a LinkedIn InMail to a NON-connection.  POST /chats (multipart).
 
     Reaches a prospect directly without a connection request, skipping the
     accept-wait. Requires Sales Navigator / Recruiter InMail credits on the
     connected account (`linkedin[inmail]=true`, `linkedin[api]=sales_navigator`).
     Each send consumes one credit; check inmail_balance() before a batch.
+    `account_id` defaults to the global account (multi-user passes the owner's).
     """
     fields = _form(
         {
-            "account_id": _li_account(),
+            "account_id": account_id or _li_account(),
             "attendees_ids": provider_id,
             "text": text,
             "linkedin[api]": "sales_navigator",
@@ -368,19 +515,63 @@ def send_chat_message(chat_id: str, text: str) -> dict[str, Any]:
 
 
 @_RETRY
+def create_post(
+    text: str, *, account_id: str | None = None, external_link: str | None = None,
+    image: bytes | None = None, image_name: str = "card.png",
+) -> dict[str, Any]:
+    """Publish a post to the connected account's feed (LinkedIn share).  POST /posts (multipart).
+
+    `account_id` defaults to the global account (multi-user passes the author's). `external_link`
+    adds a preview card. `image` (PNG bytes) attaches a visual. Returns the created post payload
+    (post / share id). 201 = published.
+    """
+    fields: dict[str, Any] = {"account_id": account_id or _li_account(), "text": text}
+    if external_link:
+        fields["external_link"] = external_link
+    files = _form(fields)
+    if image:
+        files["attachments"] = (image_name, image, "image/png")
+    with httpx.Client(timeout=90.0) as c:
+        r = c.post(f"{_base()}/posts", headers=_headers(), files=files)
+        r.raise_for_status()
+        return r.json()
+
+
+@_RETRY
+def comment_on_post(
+    social_id: str, text: str, *, account_id: str | None = None,
+) -> dict[str, Any]:
+    """Comment on a LinkedIn post.  POST /posts/{social_id}/comments (JSON).
+
+    `social_id` MUST be the post's `social_id` (the urn:li:activity:… form that `search_posts`
+    returns) — LinkedIn exposes several ids for one post and only the social_id is reliable across
+    action endpoints. Returns the created-comment payload. Used by the growth comment pacer, which
+    posts operator-approved comments one at a time across the day (never in a bulk burst — LinkedIn
+    visibility-limits comments it detects as automated).
+    """
+    body = {"account_id": account_id or _li_account(), "text": text}
+    with httpx.Client(timeout=60.0) as c:
+        r = c.post(f"{_base()}/posts/{social_id}/comments", headers=_headers(), json=body)
+        r.raise_for_status()
+        return r.json() if r.content else {"ok": True}
+
+
+@_RETRY
 def send_email(
-    to_email: str, subject: str, body: str, *, display_name: str | None = None
+    to_email: str, subject: str, body: str, *, display_name: str | None = None,
+    account_id: str | None = None,
 ) -> dict[str, Any]:
     """Send an email from the connected mailbox.  POST /emails (multipart).
 
-    Returns at least {tracking_id, provider_id}.
+    Returns at least {tracking_id, provider_id}. `account_id` defaults to the global
+    email account (multi-user passes the sender's connected mailbox account).
     """
     recipient: dict[str, str] = {"identifier": to_email}
     if display_name:
         recipient["display_name"] = display_name
     fields = _form(
         {
-            "account_id": _email_account(),
+            "account_id": account_id or _email_account(),
             "to": json.dumps([recipient]),
             "subject": subject,
             "body": body,

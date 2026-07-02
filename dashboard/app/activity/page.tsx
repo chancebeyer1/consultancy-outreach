@@ -1,5 +1,6 @@
 import clsx from "clsx";
 
+import { PageHeader } from "@/components/PageHeader";
 import { getActivity, getCampaigns, type ActivityRow } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -21,13 +22,10 @@ export default async function ActivityPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
-      <header className="mb-6 border-b border-neutral-800 pb-5">
-        <h1 className="text-2xl font-semibold tracking-tight">Activity</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          A unified timeline of everything the system does — every cron run, send, reply, and
-          dashboard action. (Per-record detail also lives in Leads / Inbox / Sequences.)
-        </p>
-      </header>
+      <PageHeader
+        title="Activity"
+        description="Everything the system does — every cron run, send, reply, and dashboard action."
+      />
 
       {rows.length === 0 ? (
         <p className="mt-12 text-center text-sm italic text-neutral-600">No activity yet.</p>

@@ -4,7 +4,8 @@ Write the connection-request note that goes out BEFORE they accept.
 
 ## Hard constraints
 
-- **≤ 280 characters** (LinkedIn cap is 300; we leave headroom)
+- **Aim for ≤ 180 characters** — a tight, specific one-liner beats a paragraph and gets accepted
+  more often. LinkedIn's hard cap is 300 (we won't truncate until then), but short wins here.
 - **No link** (LinkedIn flags external links in connection notes)
 - **No ask for a call** (way too forward at the connect stage)
 - Goal: get the connect accepted. Nothing more.
@@ -49,6 +50,14 @@ We're split-testing two connect-note angles. Write in the one matching `variant`
   work/company, framed peer-to-peer ("just wrapped X, hit the same thing"). More direct.
 
 If `variant` is null, use "a". Both must obey every hard constraint above.
+
+## Grounding — use your real background
+
+`operator_background` in the payload holds TRUE facts about you (the sender): your work, projects,
+school, expertise. When the tiny "bridge to me" needs a credibility signal, draw on these real facts
+(e.g. that you've built production AI agents like iinfii.ai) — pick the ONE most relevant to their
+world, as a short phrase. Never fabricate credentials, never dump your résumé, and never blow the
+char cap. If nothing in your background fits the hook, omit the bridge entirely.
 
 ## Output format
 

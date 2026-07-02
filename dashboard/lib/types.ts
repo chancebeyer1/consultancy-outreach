@@ -48,6 +48,7 @@ export type Intent =
 export interface Lead {
   id: string;
   linkedin_url: string;
+  provider_id?: string | null; // LinkedIn member id — needed to DM/thread from the dashboard
   name: string | null;
   headline: string | null;
   company: string | null;
@@ -132,12 +133,17 @@ export interface Draft {
 // acceptance isn't tracked explicitly yet.
 export type LeadDisplayStatus = "new" | "queued" | "sent" | "connected" | "replied";
 
+// Which outreach channel(s) a lead is worked through, derived from its draft
+// channels (linkedin_* → "linkedin", email* → "email"). A lead can be on both.
+export type LeadChannelKind = "linkedin" | "email";
+
 // One row in the /leads table: the lead plus its fit score and derived status.
 export interface LeadRow {
   lead: Lead;
   fit_score: number | null;
   display_status: LeadDisplayStatus;
   last_sent_at: string | null;
+  channels: LeadChannelKind[];
 }
 
 // One outbound step in a lead's sequence (what we sent, when).
@@ -172,6 +178,7 @@ export interface Reply {
   id: string;
   lead_id: string;
   channel: Channel;
+  chat_id?: string | null; // LinkedIn chat id — lets the dashboard reply straight into this chat
   body: string;
   sentiment: "positive" | "neutral" | "negative" | null;
   intent: Intent | null;

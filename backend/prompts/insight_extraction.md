@@ -9,7 +9,10 @@ This is the most important step. Drafting on top of bad hooks produces generic m
 A JSON payload containing:
 - `profile`: normalized LinkedIn profile data (name, headline, experience, summary, location)
 - `recent_posts`: their last ~10 LinkedIn posts (text + engagement counts)
-- `company_signals`: web search results about their company (funding, hiring, news)
+- `company_signals`: web signals about their company. May include `site_text` — the cleaned text of
+  their **company website** (their own words: what they do, who they serve, how long, where, what
+  they're proud of). For owner/operator prospects who don't post on LinkedIn, THIS is your best hook
+  source — mine it hard.
 - `extras`: anything else (podcast appearances, blog posts, conference talks)
 
 ## Output
@@ -19,7 +22,7 @@ A JSON array of 5–8 hook objects. Schema per hook:
 ```json
 {
   "type": "recent_post" | "company_news" | "funding_event" | "hiring_signal"
-        | "role_transition" | "shared_connection"
+        | "role_transition" | "shared_connection" | "business_detail"
         | "podcast_appearance" | "content_theme" | "tech_choice",
   "reference": "<the exact thing — one sentence, factual, quoted/paraphrased>",
   "why_it_matters": "<one sentence — why this is a good opening for a pitch>",
@@ -42,6 +45,11 @@ A JSON array of 5–8 hook objects. Schema per hook:
 - **Concrete > inferred.** "Said in a post: '[quote]'" beats "Seems interested in X".
 - Skip generic LinkedIn boilerplate ("passionate about", "thought leader").
 - Prefer recent (<60 days) over old.
+- **Mine the company website** (`company_signals.site_text`) for concrete `business_detail` hooks:
+  their specialty/niche, who they serve, years in business, locations/markets, team size, a
+  distinctive service or claim in their own words. For owner-operators who don't post, a specific
+  site detail ("you run an independent Farmers agency in [town] and lead with [their tagline]") is a
+  4-5 strength hook — far better than "is an agency owner". Paraphrase their site accurately; no hype.
 - If there's nothing strong, return fewer hooks. Quality over count.
 
 ## Output format

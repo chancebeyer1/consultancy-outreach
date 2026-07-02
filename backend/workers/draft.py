@@ -6,6 +6,7 @@ cached system prefix; the concrete sales link comes from `campaign.landing_url`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from clients import claude
 from config import Config
+from operator_profile import operator_bio
 from prompts_loader import load_prompt, system_prefix
 
 if TYPE_CHECKING:
@@ -27,6 +29,9 @@ CHANNEL_BUDGETS = {
     "email": 1000,  # ~120 words incl subject
     "linkedin_followup_1": 350,  # short no-pressure DM bump
     "linkedin_followup_2": 350,
+    "email_followup_1": 600,  # short threaded email bump (body only — replies on the opener)
+    "email_followup_2": 600,
+    "email_followup_3": 600,
 }
 
 
@@ -36,9 +41,23 @@ CHANNEL_BUDGETS = {
 FIRST_TOUCH_CHANNELS = {"linkedin_connect", "linkedin_inmail", "email"}
 
 
+def ab_variant(key: str | None, salt: str = "") -> str:
+    """Deterministic A/B bucket ('a'|'b') keyed off a stable per-lead string (URL or email) so
+    drafting and storage agree without threading state. ~50/50 split; tracked in analytics.
+
+    Uses a salted SHA-1 so `salt` genuinely decorrelates independent experiments — a lead can be
+    connect-note 'a' but email 'b'. (A byte-sum hash can't: an even-sum salt never flips parity.)
+    """
+    if not key:
+        return "a"
+    digest = hashlib.sha1(f"{salt}:{key}".encode("utf-8", "ignore")).digest()
+    return "a" if digest[0] % 2 == 0 else "b"
+
+
 def connect_variant(key: str | None) -> str:
-    """Deterministic A/B bucket ('a'|'b') for the connect note, keyed off the lead's URL so
-    drafting and storage agree without threading state. ~50/50 split; tracked in analytics."""
+    """A/B bucket for the LinkedIn connect note. Keeps the original byte-sum algorithm so leads
+    assigned before ab_variant existed keep their bucket — variants are stored per draft row, and
+    a re-draft must land on the same (lead, channel, step, variant) row, not spawn a duplicate."""
     if not key:
         return "a"
     return "a" if sum(key.encode("utf-8", "ignore")) % 2 == 0 else "b"
@@ -173,6 +192,8 @@ def draft_for_channel(
 
     if channel.startswith("linkedin_followup"):
         prompt_name = "draft_linkedin_followup"  # short no-pressure DM bump
+    elif channel.startswith("email_followup"):
+        prompt_name = "draft_email_followup"  # short threaded email bump (body only)
     else:
         prompt_name = {
             "linkedin_connect": "draft_connection",
@@ -191,6 +212,7 @@ def draft_for_channel(
         "prospect_headline": profile.get("headline"),
         "prospect_company": enrichment.get("company"),
         "my_first_name": Config.sender_first_name,  # sign-off name; never invent one
+        "operator_background": operator_bio(),  # TRUE facts about the sender — proof, not invention
         "landing_url": landing_url,
         "chosen_hook": {
             "type": hook.type if hook else None,
@@ -231,7 +253,9 @@ def draft_all_channels(
     channels = (
         [c for c in campaign.channels if c in CHANNEL_BUDGETS]
         if campaign and campaign.channels
-        else list(CHANNEL_BUDGETS)
+        # Default = cold openers only; *_followup_* are generated on-demand when due,
+        # never drafted upfront, so keep them out of the all-channels convenience path.
+        else [c for c in CHANNEL_BUDGETS if "followup" not in c]
     )
     return {
         "hooks": [h.__dict__ for h in hooks],

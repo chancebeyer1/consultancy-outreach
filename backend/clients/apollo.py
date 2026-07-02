@@ -91,6 +91,7 @@ def search_people(
     seniorities: list[str] | None = None,
     locations: list[str] | None = None,
     num_employees_ranges: list[str] | None = None,
+    org_keywords: list[str] | None = None,
     keywords: str | None = None,
     page: int = 1,
     per_page: int = 25,
@@ -98,8 +99,9 @@ def search_people(
     """One page of an Apollo people search. Returns {"people": [...], page/total_pages/total}.
 
     seniorities use Apollo's enum: owner, founder, c_suite, vp, director, manager, senior,
-    entry, intern. num_employees_ranges are "min,max" strings, e.g. "1,10".
-    No emails here (Apollo design) — enrich the ones you want.
+    entry, intern. num_employees_ranges are "min,max" strings, e.g. "1,10". `org_keywords`
+    constrains to people whose COMPANY matches those keyword tags (e.g. ["mortgage"]) — the
+    single biggest lever for keeping the results on-industry. No emails here (Apollo design).
     """
     body: dict[str, Any] = {"page": page, "per_page": min(per_page, 100)}
     if titles:
@@ -110,6 +112,8 @@ def search_people(
         body["person_locations"] = locations
     if num_employees_ranges:
         body["organization_num_employees_ranges"] = num_employees_ranges
+    if org_keywords:
+        body["q_organization_keyword_tags"] = org_keywords
     if keywords:
         body["q_keywords"] = keywords
     with httpx.Client(timeout=60.0) as c:

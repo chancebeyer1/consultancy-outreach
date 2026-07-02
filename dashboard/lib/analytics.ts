@@ -20,6 +20,31 @@ export interface ConnectVariantRow {
   acceptRate: number;
 }
 
+// One arm of an A/B experiment. `sample` is the denominator (messages sent, or leads sourced).
+// accept/avgFit are null where they don't apply (e.g. email has no "accept"; only search has fit).
+export interface VariantStat {
+  variant: string;
+  label: string | null; // human description of the angle/recipe
+  sample: number;
+  replied: number;
+  replyRate: number;
+  accepted: number | null;
+  acceptRate: number | null;
+  avgFit: number | null;
+  isWinner: boolean;
+}
+
+// A named A/B test. `metric` is the headline that decides the winner; `sampleLabel` names the
+// denominator ("sent" for messages, "sourced" for search recipes).
+export interface Experiment {
+  key: string;
+  title: string;
+  subtitle: string;
+  metric: "replyRate" | "acceptRate";
+  sampleLabel: string;
+  variants: VariantStat[];
+}
+
 export interface Analytics {
   totals: AnalyticsRow;
   byCampaign: AnalyticsRow[];
@@ -29,7 +54,23 @@ export interface Analytics {
   byTrigger: AnalyticsRow[];
   byHookType: AnalyticsRow[];
   connectVariants: ConnectVariantRow[];
+  experiments: Experiment[];
   empty: boolean;
+}
+
+// A winner is only flagged once at least two arms clear this sample floor — below it, rate
+// differences are noise. Matches the user's "measure + surface" choice (no premature auto-calls).
+const MIN_SAMPLE = 10;
+const VARIANT_LABELS: Record<string, Record<string, string>> = {
+  email: { a: "problem-led", b: "curiosity-led" },
+  linkedin_connect: { a: "curiosity", b: "observation" },
+};
+
+function withWinner(variants: VariantStat[], metric: "replyRate" | "acceptRate"): VariantStat[] {
+  const eligible = variants.filter((v) => v.sample >= MIN_SAMPLE && v[metric] != null);
+  if (eligible.length < 2) return variants;
+  const best = eligible.reduce((a, b) => ((b[metric] ?? 0) > (a[metric] ?? 0) ? b : a));
+  return variants.map((v) => ({ ...v, isWinner: v.variant === best.variant && (best[metric] ?? 0) > 0 }));
 }
 
 /** Collapse the concrete channels into the two we compare: LinkedIn vs Email. */
@@ -97,6 +138,32 @@ function mockAnalytics(): Analytics {
     connectVariants: [
       { variant: "a", sent: 18, accepted: 5, acceptRate: 5 / 18 },
       { variant: "b", sent: 16, accepted: 7, acceptRate: 7 / 16 },
+    ],
+    experiments: [
+      {
+        key: "email", title: "Email opener", metric: "replyRate", sampleLabel: "sent",
+        subtitle: "subject + first line — which angle earns more replies",
+        variants: [
+          { variant: "a", label: "problem-led", sample: 42, replied: 5, replyRate: 5 / 42, accepted: null, acceptRate: null, avgFit: null, isWinner: false },
+          { variant: "b", label: "curiosity-led", sample: 39, replied: 9, replyRate: 9 / 39, accepted: null, acceptRate: null, avgFit: null, isWinner: true },
+        ],
+      },
+      {
+        key: "linkedin_connect", title: "LinkedIn connect note", metric: "acceptRate", sampleLabel: "sent",
+        subtitle: "curiosity vs observation — which angle gets accepted",
+        variants: [
+          { variant: "a", label: "curiosity", sample: 18, replied: 2, replyRate: 2 / 18, accepted: 5, acceptRate: 5 / 18, avgFit: null, isWinner: false },
+          { variant: "b", label: "observation", sample: 16, replied: 3, replyRate: 3 / 16, accepted: 7, acceptRate: 7 / 16, avgFit: null, isWinner: true },
+        ],
+      },
+      {
+        key: "search", title: "Search recipe", metric: "replyRate", sampleLabel: "sourced",
+        subtitle: "which targeting sources leads that fit, accept, and reply",
+        variants: [
+          { variant: "owners", label: null, sample: 120, replied: 8, replyRate: 8 / 120, accepted: 14, acceptRate: 14 / 120, avgFit: 71, isWinner: true },
+          { variant: "ops-managers", label: null, sample: 96, replied: 3, replyRate: 3 / 96, accepted: 9, acceptRate: 9 / 96, avgFit: 63, isWinner: false },
+        ],
+      },
     ],
     empty: false,
   };
@@ -233,6 +300,114 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
     connectVariants = [];
   }
 
+  // ---- A/B experiments: attribute each outcome back to the variant that earned it. ----
+  // Replies carry the draft (email opener / connect note) that earned them, and there's one such
+  // draft per lead, so a Set of replied draft ids is exactly the set of leads that replied — keyed
+  // by the variant on that draft. This is the join the new replies.draft_id column unlocks.
+  const experiments: Experiment[] = [];
+  try {
+    const { data: rdData } = await supabase.from("replies").select("draft_id").not("draft_id", "is", null);
+    const repliedDraftIds = new Set(
+      ((rdData ?? []) as Array<{ draft_id: string | null }>).map((r) => r.draft_id).filter(Boolean) as string[],
+    );
+
+    // 1) Email opener — reply rate per subject/body angle.
+    const { data: emData } = await supabase
+      .from("drafts")
+      .select("id, variant, leads!inner(campaign_id), sends!inner(id)")
+      .eq("channel", "email")
+      .eq("step_index", 0);
+    let openers = (emData ?? []) as unknown as Array<{ id: string; variant: string | null; leads: { campaign_id: string | null } }>;
+    if (campaignId) openers = openers.filter((o) => o.leads.campaign_id === campaignId);
+    if (openers.length) {
+      const m = new Map<string, { sample: number; replied: number }>();
+      for (const o of openers) {
+        if (!o.variant) continue; // pre-experiment drafts have no bucket — don't muddy the A/B
+        const e = m.get(o.variant) ?? { sample: 0, replied: 0 };
+        e.sample += 1;
+        if (repliedDraftIds.has(o.id)) e.replied += 1;
+        m.set(o.variant, e);
+      }
+      const variants = withWinner(
+        [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([variant, s]) => ({
+          variant, label: VARIANT_LABELS.email[variant] ?? null, sample: s.sample, replied: s.replied,
+          replyRate: s.sample ? s.replied / s.sample : 0, accepted: null, acceptRate: null, avgFit: null, isWinner: false,
+        })),
+        "replyRate",
+      );
+      if (variants.length >= 2) {
+        experiments.push({ key: "email", title: "Email opener", subtitle: "subject + first line — which angle earns more replies", metric: "replyRate", sampleLabel: "sent", variants });
+      }
+    }
+
+    // 2) LinkedIn connect note — accept rate (headline) plus reply rate, per angle.
+    const { data: cnData } = await supabase
+      .from("drafts")
+      .select("id, variant, leads!inner(accepted_at, campaign_id), sends!inner(id)")
+      .eq("channel", "linkedin_connect");
+    let connects = (cnData ?? []) as unknown as Array<{ id: string; variant: string | null; leads: { accepted_at: string | null; campaign_id: string | null } }>;
+    if (campaignId) connects = connects.filter((c) => c.leads.campaign_id === campaignId);
+    if (connects.length) {
+      const m = new Map<string, { sample: number; accepted: number; replied: number }>();
+      for (const c of connects) {
+        if (!c.variant) continue; // pre-experiment drafts have no bucket — don't muddy the A/B
+        const e = m.get(c.variant) ?? { sample: 0, accepted: 0, replied: 0 };
+        e.sample += 1;
+        if (c.leads.accepted_at) e.accepted += 1;
+        if (repliedDraftIds.has(c.id)) e.replied += 1;
+        m.set(c.variant, e);
+      }
+      const variants = withWinner(
+        [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([variant, s]) => ({
+          variant, label: VARIANT_LABELS.linkedin_connect[variant] ?? null, sample: s.sample, replied: s.replied,
+          replyRate: s.sample ? s.replied / s.sample : 0, accepted: s.accepted, acceptRate: s.sample ? s.accepted / s.sample : 0, avgFit: null, isWinner: false,
+        })),
+        "acceptRate",
+      );
+      if (variants.length >= 2) {
+        experiments.push({ key: "linkedin_connect", title: "LinkedIn connect note", subtitle: "curiosity vs observation — which angle gets accepted", metric: "acceptRate", sampleLabel: "sent", variants });
+      }
+    }
+
+    // 3) Search recipes — fit (now), accept (days), reply (weeks) per sourcing recipe.
+    const { data: svData } = await supabase
+      .from("leads")
+      .select("id, search_variant, accepted_at, campaign_id, scores(fit_score), replies(id)")
+      .not("search_variant", "is", null);
+    let svLeads = (svData ?? []) as unknown as Array<{
+      search_variant: string | null; accepted_at: string | null; campaign_id: string | null;
+      scores: unknown; replies: unknown;
+    }>;
+    if (campaignId) svLeads = svLeads.filter((l) => l.campaign_id === campaignId);
+    if (svLeads.length) {
+      const m = new Map<string, { sample: number; accepted: number; replied: number; fitSum: number; fitN: number }>();
+      for (const l of svLeads) {
+        const v = l.search_variant || "default";
+        const e = m.get(v) ?? { sample: 0, accepted: 0, replied: 0, fitSum: 0, fitN: 0 };
+        e.sample += 1;
+        if (l.accepted_at) e.accepted += 1;
+        if (embeddedCount(l.replies) > 0) e.replied += 1;
+        const fit = embeddedFit(l.scores);
+        if (fit != null) { e.fitSum += fit; e.fitN += 1; }
+        m.set(v, e);
+      }
+      const variants = withWinner(
+        [...m.entries()].sort((a, b) => b[1].sample - a[1].sample).map(([variant, s]) => ({
+          variant, label: null, sample: s.sample, replied: s.replied,
+          replyRate: s.sample ? s.replied / s.sample : 0,
+          accepted: s.accepted, acceptRate: s.sample ? s.accepted / s.sample : 0,
+          avgFit: s.fitN ? s.fitSum / s.fitN : null, isWinner: false,
+        })),
+        "replyRate",
+      );
+      if (variants.length >= 2) {
+        experiments.push({ key: "search", title: "Search recipe", subtitle: "which targeting sources leads that fit, accept, and reply", metric: "replyRate", sampleLabel: "sourced", variants });
+      }
+    }
+  } catch {
+    // Experiments are best-effort enrichment — never break the analytics page over them.
+  }
+
   return {
     totals,
     byCampaign,
@@ -242,8 +417,19 @@ async function supabaseAnalytics(campaignId?: string): Promise<Analytics> {
     byTrigger,
     byHookType,
     connectVariants,
+    experiments,
     empty: sentLeadIds.size === 0,
   };
+}
+
+// Supabase embeds a 1:1 relation as an object and a 1:many as an array; normalize both.
+function embeddedFit(scores: unknown): number | null {
+  const row = Array.isArray(scores) ? scores[0] : scores;
+  const fit = (row as { fit_score?: number | null } | null | undefined)?.fit_score;
+  return typeof fit === "number" ? fit : null;
+}
+function embeddedCount(rel: unknown): number {
+  return Array.isArray(rel) ? rel.length : rel ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +449,7 @@ export async function getAnalytics(campaignId?: string): Promise<Analytics> {
     byTrigger: [],
     byHookType: [],
     connectVariants: [],
+    experiments: [],
     empty: true,
   };
 }

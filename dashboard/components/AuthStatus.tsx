@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { browserClient } from "@/lib/supabase-browser";
@@ -20,7 +21,14 @@ export function AuthStatus({ email }: { email: string | null }) {
   }
   return (
     <div className="flex items-center gap-2">
-      <span className="hidden max-w-[140px] truncate text-[11px] text-neutral-500 md:inline">{email}</span>
+      {/* Email doubles as the profile / settings link (replaces the Settings nav tab). */}
+      <Link
+        href="/settings"
+        title="Your profile & settings"
+        className="max-w-[160px] truncate text-[11px] text-neutral-400 underline-offset-2 hover:text-white hover:underline"
+      >
+        {email}
+      </Link>
       <button onClick={signOut} className="text-xs text-neutral-400 hover:text-white">
         Sign out
       </button>

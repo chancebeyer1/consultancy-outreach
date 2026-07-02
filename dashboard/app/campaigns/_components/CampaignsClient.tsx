@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { PageHeader } from "@/components/PageHeader";
 import type { Campaign } from "@/lib/types";
 
 interface Props {
@@ -120,22 +121,19 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
-      <header className="mb-6 border-b border-neutral-800 pb-5">
-        <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          A campaign is a persona bundle: audience (ICP) + offer, with optional voice/style
-          overrides. The pipeline targets the selected campaign on its next run.
+      <PageHeader
+        title="Campaigns"
+        description="A campaign is a persona bundle: audience (ICP) + offer, with optional voice/style overrides. The pipeline targets the selected campaign on its next run."
+      />
+      {!writable && (
+        <p className="-mt-1 mb-5 rounded-md border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+          Read-only in <span className="font-mono">{mode}</span> mode. Set{" "}
+          <code className="rounded bg-neutral-900 px-1 py-0.5">NEXT_PUBLIC_DATA_SOURCE=supabase</code>{" "}
+          (with a service-role key) to create or edit campaigns. Files in{" "}
+          <code className="rounded bg-neutral-900 px-1 py-0.5">backend/campaigns/</code> remain the
+          versioned seed.
         </p>
-        {!writable && (
-          <p className="mt-3 rounded-md border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-            Read-only in <span className="font-mono">{mode}</span> mode. Set{" "}
-            <code className="rounded bg-neutral-900 px-1 py-0.5">NEXT_PUBLIC_DATA_SOURCE=supabase</code>{" "}
-            (with a service-role key) to create or edit campaigns. Files in{" "}
-            <code className="rounded bg-neutral-900 px-1 py-0.5">backend/campaigns/</code> remain the
-            versioned seed.
-          </p>
-        )}
-      </header>
+      )}
 
       <div className="grid gap-8 lg:grid-cols-[260px_1fr]">
         {/* List */}
@@ -228,9 +226,9 @@ export function CampaignsClient({ initialCampaigns, writable, mode }: Props) {
                 onChange={(e) => set("status", e.target.value as FormState["status"])}
                 className={inputCls}
               >
-                <option value="active">active</option>
-                <option value="paused">paused</option>
-                <option value="archived">archived</option>
+                <option value="active">Active</option>
+                <option value="paused">Paused</option>
+                <option value="archived">Archived</option>
               </select>
             </Field>
             <Field label="Default campaign">
@@ -385,5 +383,5 @@ function StatusBadge({ status }: { status: string }) {
       : status === "paused"
         ? "text-amber-400"
         : "text-neutral-500";
-  return <span className={tone}>{status}</span>;
+  return <span className={tone}>{status.charAt(0).toUpperCase() + status.slice(1)}</span>;
 }

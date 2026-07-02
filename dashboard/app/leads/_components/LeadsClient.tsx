@@ -2,7 +2,9 @@
 
 import clsx from "clsx";
 import { useMemo, useState } from "react";
-import type { Campaign, LeadDisplayStatus, LeadRow } from "../../../lib/types";
+
+import { PageHeader } from "../../../components/PageHeader";
+import type { Campaign, LeadChannelKind, LeadDisplayStatus, LeadRow } from "../../../lib/types";
 
 const STATUS_META: Record<LeadDisplayStatus, { label: string; cls: string }> = {
   new: { label: "New", cls: "bg-neutral-800 text-neutral-300" },
@@ -12,12 +14,23 @@ const STATUS_META: Record<LeadDisplayStatus, { label: string; cls: string }> = {
   replied: { label: "Replied", cls: "bg-emerald-900/50 text-emerald-300" },
 };
 
+const CHANNEL_META: Record<LeadChannelKind, { label: string; cls: string }> = {
+  linkedin: { label: "LinkedIn", cls: "bg-sky-900/50 text-sky-300" },
+  email: { label: "Email", cls: "bg-emerald-900/50 text-emerald-300" },
+};
+
 const FILTERS: Array<{ key: "all" | LeadDisplayStatus; label: string }> = [
   { key: "all", label: "All" },
   { key: "queued", label: "Queued" },
   { key: "sent", label: "Sent" },
   { key: "connected", label: "Connected" },
   { key: "replied", label: "Replied" },
+];
+
+const CHANNELS: Array<{ key: "all" | LeadChannelKind; label: string }> = [
+  { key: "all", label: "All channels" },
+  { key: "linkedin", label: "LinkedIn" },
+  { key: "email", label: "Email" },
 ];
 
 interface Props {
@@ -44,6 +57,7 @@ function emailCell(email?: string | null, status?: string | null) {
 
 export function LeadsClient({ rows, campaigns }: Props) {
   const [filter, setFilter] = useState<"all" | LeadDisplayStatus>("all");
+  const [chan, setChan] = useState<"all" | LeadChannelKind>("all");
   const [q, setQ] = useState("");
 
   const campaignName = useMemo(() => {
@@ -57,35 +71,39 @@ export function LeadsClient({ rows, campaigns }: Props) {
     return c;
   }, [rows]);
 
+  const chanCounts = useMemo(() => {
+    const c: Record<string, number> = { all: rows.length, linkedin: 0, email: 0 };
+    for (const r of rows) for (const k of r.channels) c[k] = (c[k] ?? 0) + 1;
+    return c;
+  }, [rows]);
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return rows.filter((r) => {
       if (filter !== "all" && r.display_status !== filter) return false;
+      if (chan !== "all" && !r.channels.includes(chan)) return false;
       if (!needle) return true;
       const hay =
         `${r.lead.name ?? ""} ${r.lead.company ?? ""} ${r.lead.role ?? ""} ${r.lead.location ?? ""} ${r.lead.email ?? ""}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [rows, filter, q]);
+  }, [rows, filter, chan, q]);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Leads</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            {rows.length} total · filter by status, or use the campaign selector up top.
-          </p>
-        </div>
+      <PageHeader
+        title="Leads"
+        description={`${rows.length} total · filter by status, or use the campaign selector up top.`}
+      >
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search name, company, role, email…"
-          className="w-64 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-100 focus:border-sky-500 focus:outline-none"
+          className="w-56 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-100 focus:border-sky-500 focus:outline-none sm:w-64"
         />
-      </div>
+      </PageHeader>
 
-      <div className="mt-5 flex flex-wrap gap-2">
+      <div className="mt-5 flex flex-wrap items-center gap-2">
         {FILTERS.map((f) => (
           <button
             key={f.key}
@@ -98,6 +116,23 @@ export function LeadsClient({ rows, campaigns }: Props) {
             )}
           >
             {f.label} <span className="opacity-60">{counts[f.key] ?? 0}</span>
+          </button>
+        ))}
+
+        <span className="mx-1 hidden h-5 w-px bg-neutral-800 sm:inline-block" aria-hidden />
+
+        {CHANNELS.map((c) => (
+          <button
+            key={c.key}
+            onClick={() => setChan(c.key)}
+            className={clsx(
+              "rounded-full px-3 py-1 text-xs font-medium",
+              chan === c.key
+                ? "bg-neutral-200 text-neutral-900"
+                : "border border-neutral-700 text-neutral-400 hover:bg-neutral-900",
+            )}
+          >
+            {c.label} <span className="opacity-60">{chanCounts[c.key] ?? 0}</span>
           </button>
         ))}
       </div>
@@ -113,6 +148,7 @@ export function LeadsClient({ rows, campaigns }: Props) {
               <th className="px-4 py-2 font-medium">Location</th>
               <th className="px-4 py-2 text-right font-medium">Fit</th>
               <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium">Channel</th>
               <th className="px-4 py-2 font-medium">Campaign</th>
             </tr>
           </thead>
@@ -147,6 +183,21 @@ export function LeadsClient({ rows, campaigns }: Props) {
                     <span className={clsx("rounded-full px-2 py-0.5 text-xs font-medium", meta.cls)}>
                       {meta.label}
                     </span>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex flex-wrap gap-1">
+                      {r.channels.map((k) => (
+                        <span
+                          key={k}
+                          className={clsx(
+                            "rounded-full px-2 py-0.5 text-xs font-medium",
+                            CHANNEL_META[k].cls,
+                          )}
+                        >
+                          {CHANNEL_META[k].label}
+                        </span>
+                      ))}
+                    </div>
                   </td>
                   <td className="px-4 py-2.5 text-neutral-500">{campaignName(r.lead.campaign_id)}</td>
                 </tr>

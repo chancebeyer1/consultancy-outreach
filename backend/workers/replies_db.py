@@ -109,6 +109,18 @@ def _match_lead(cur, *, provider_id: str | None, linkedin_url: str | None) -> st
     return None
 
 
+def _connect_draft_id(cur, lead_id) -> str | None:
+    """The lead's connect-note draft id — it carries the A/B variant. Attributing a LinkedIn reply
+    back to it lets us measure reply rate (not just accept rate) per connect-note variant."""
+    cur.execute(
+        "select id from drafts where lead_id = %s and channel = 'linkedin_connect' "
+        "order by generated_at asc limit 1",
+        (lead_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
 def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
     """Insert classified reply records. Returns counts.
 
@@ -123,6 +135,7 @@ def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
     inserted = 0
     skipped = 0
     dropped = 0
+    new_alerts: list[dict[str, Any]] = []
     try:
         with conn:
             with conn.cursor() as cur:
@@ -136,17 +149,19 @@ def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
                         # Not a lead we've contacted — inbox noise, don't persist.
                         dropped += 1
                         continue
+                    draft_id = _connect_draft_id(cur, lead_id)
                     cur.execute(
                         """
                         insert into replies
-                            (lead_id, channel, external_id, body,
+                            (lead_id, draft_id, channel, external_id, body,
                              sentiment, intent, summary, suggested_reply,
-                             next_action, received_at)
-                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             next_action, received_at, chat_id)
+                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         on conflict (external_id) where external_id is not null do nothing
                         """,
                         (
                             lead_id,
+                            draft_id,
                             rec.get("channel") or "linkedin_dm",
                             rec.get("message_id"),
                             rec.get("body") or "",
@@ -156,12 +171,30 @@ def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
                             rec.get("suggested_reply"),
                             rec.get("next_action"),
                             rec.get("received_at"),
+                            rec.get("chat_id"),
                         ),
                     )
                     if cur.rowcount > 0:
                         inserted += 1
+                        if (rec.get("intent") or "") != "oof":  # don't ping on OOO auto-replies
+                            new_alerts.append(rec)
                     else:
                         skipped += 1
     finally:
         conn.close()
+
+    # Alert the operator on each new (non-OOO) LinkedIn reply — email replies alert in email_inbox,
+    # so this closes the gap where LinkedIn replies fired no notification at all.
+    for rec in new_alerts:
+        try:
+            from workers.email_sender import notify
+
+            who = rec.get("lead_name") or "a lead"
+            notify(
+                subject=f"New LinkedIn reply from {who}",
+                body=f"{who} just replied on LinkedIn:\n\n{(rec.get('body') or '')[:600]}\n\n"
+                f"Open the Replies page to respond.",
+            )
+        except Exception:  # noqa: BLE001 — a notification failure must never break ingestion
+            pass
     return {"inserted": inserted, "skipped": skipped, "dropped": dropped}

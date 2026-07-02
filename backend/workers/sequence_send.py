@@ -26,8 +26,13 @@ from typing import Any
 
 from clients import unipile
 from config import require
+from provider_cooldown import active as cooldown_active, trip as cooldown_trip
 from sender_limits import campaign_daily_sent, campaign_share, is_invite_limit_error, quota
 from workers.sequence import determine_next_action
+
+# LinkedIn throttles new invites once too many sit unaccepted (422 cannot_resend_yet).
+# Our send-rate quota can't see pending count, so pre-empt the wall at this ceiling.
+PENDING_INVITE_CEILING = 150
 
 LINKEDIN_CHANNELS = {
     "linkedin_connect",
@@ -105,14 +110,17 @@ def _load_state() -> tuple[dict, dict, dict]:
                 cur.execute(
                     """
                     select l.id, l.linkedin_url, l.name, l.company, l.campaign_id,
-                           coalesce(c.status, 'active'), l.accepted_at
+                           coalesce(c.status, 'active'), l.accepted_at,
+                           p.unipile_account_id, p.unipile_email_account_id
                     from leads l
                     left join campaigns c on c.id = l.campaign_id
+                    left join profiles p on p.id = l.user_id
                     where l.id = any(%s::uuid[])
                     """,
                     (ids,),
                 )
-                for lid, url, name, company, campaign_id, camp_status, accepted_at in cur.fetchall():
+                for (lid, url, name, company, campaign_id, camp_status, accepted_at,
+                     acct, email_acct) in cur.fetchall():
                     first, _, last = (name or "").partition(" ")
                     leads_by_id[str(lid)] = {
                         "linkedin_url": url,
@@ -122,6 +130,8 @@ def _load_state() -> tuple[dict, dict, dict]:
                         "last_name": last or None,
                         "company": company,
                         "campaign_status": camp_status,
+                        "account_id": acct,
+                        "email_account_id": email_acct,
                     }
     finally:
         conn.close()
@@ -225,21 +235,53 @@ def _ensure_draft_for_step(*, lead_id: str, channel: str, campaign_id: str | Non
         conn.close()
 
 
+def _store_provider_id(linkedin_url: str | None, provider_id: str | None) -> None:
+    """Persist a resolved LinkedIn provider_id onto the lead so inbound replies can be matched back
+    to it. Best-effort — never blocks a send/detection."""
+    if not linkedin_url or not provider_id:
+        return
+    try:
+        conn = _connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "update leads set provider_id = %s, updated_at = now() "
+                        "where linkedin_url = %s and coalesce(provider_id, '') <> %s",
+                        (provider_id, linkedin_url, provider_id),
+                    )
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _send_via_unipile(lead: dict, draft: dict, channel: str) -> dict[str, Any]:
-    """Send one approved draft via the right Unipile call. Returns the response."""
+    """Send one approved draft via the right Unipile call. Returns the response.
+
+    Multi-user: `lead["account_id"]` / `lead["email_account_id"]` route the send through the
+    lead OWNER's connected account. Both are None for leads owned by the operator (or with no
+    owner), so the Unipile client falls back to the global account — today's behavior.
+    """
     body = draft["body"]
+    account_id = lead.get("account_id")
     if channel in EMAIL_CHANNELS:
         subject, email_body = _parse_email_body(body)
         display = " ".join(p for p in (lead.get("first_name"), lead.get("last_name")) if p) or None
         return unipile.send_email(
-            lead["email"], subject or "Quick question", email_body, display_name=display
+            lead["email"], subject or "Quick question", email_body, display_name=display,
+            account_id=lead.get("email_account_id"),
         )
-    provider_id = unipile.resolve_provider_id(lead["linkedin_url"])
+    provider_id = unipile.resolve_provider_id(lead["linkedin_url"], account_id=account_id)
+    # Persist the resolved provider_id on the lead. The reply poller keys inbound LinkedIn replies
+    # back to leads by provider_id; without this, an accepted lead who replies (even "interested")
+    # can't be matched and their reply is silently dropped. Best-effort, never blocks the send.
+    _store_provider_id(lead.get("linkedin_url"), provider_id)
     if channel == "linkedin_connect":
-        return unipile.send_linkedin_invitation(provider_id, body)
+        return unipile.send_linkedin_invitation(provider_id, body, account_id=account_id)
     if channel == "linkedin_inmail":
-        return unipile.send_linkedin_inmail(provider_id, body)
-    return unipile.send_linkedin_message(provider_id, body)
+        return unipile.send_linkedin_inmail(provider_id, body, account_id=account_id)
+    return unipile.send_linkedin_message(provider_id, body, account_id=account_id)
 
 
 def _to_connect_note(body: str, limit: int = 280) -> str:
@@ -339,10 +381,12 @@ def send_approved_first_touch(
             cur.execute(
                 """
                 select d.id, d.lead_id, d.channel, d.body, d.edited_body,
-                       l.linkedin_url, l.name, l.company, l.campaign_id
+                       l.linkedin_url, l.name, l.company, l.campaign_id,
+                       p.unipile_account_id, p.unipile_email_account_id
                 from drafts d
                 join leads l on l.id = d.lead_id
                 left join campaigns c on c.id = l.campaign_id
+                left join profiles p on p.id = l.user_id
                 where d.status = 'approved'
                   -- email is sent by workers.email_sender (Maildoso SMTP rotation), NOT here
                   and d.channel in ('linkedin_connect', 'linkedin_inmail')
@@ -377,12 +421,23 @@ def send_approved_first_touch(
     fell_back: list[str] = []
     remaining: dict[str, int] = {}
     blocked_fairness: list[str] = []
+    blocked_cooldown: list[str] = []
     connects_sent = 0  # per-run pacing for connection requests (avoid one daily burst)
 
     def _has_quota(channel: str) -> bool:
         if channel not in remaining:
             remaining[channel] = quota(channel).allowed
         return remaining[channel] > 0
+
+    # Cross-run cooldown: after a LinkedIn 422 "temporary provider limit" we back off
+    # for hours so the every-47-min cron stops re-poking LinkedIn (which prolongs the
+    # block). Checked once per channel; the 422 handler flips it on mid-run too.
+    cooled: dict[str, bool] = {}
+
+    def _in_cooldown(channel: str) -> bool:
+        if channel not in cooled:
+            cooled[channel] = cooldown_active(channel)[0]
+        return cooled[channel]
 
     # Even-dispersal: cap each campaign at its equal share of every channel's daily cap
     # (trailing-24h sends + what this run already sent) so no campaign dominates the
@@ -410,7 +465,28 @@ def send_approved_first_touch(
                 inmail_left["n"] = 0
         return inmail_left["n"] or 0
 
-    for draft_id, lead_id, channel, body, edited_body, url, name, company, campaign_id in rows:
+    # Pending-invite ceiling guard: if invites are piling up unaccepted, pre-empt
+    # LinkedIn's 422 wall by tripping the connect cooldown now — cheaper than
+    # discovering it mid-send and far gentler on the account.
+    if (
+        not dry_run
+        and any(r[2] == "linkedin_connect" for r in rows)
+        and not _in_cooldown("linkedin_connect")
+    ):
+        try:
+            pending = len(unipile.list_sent_invitations())
+            if pending >= PENDING_INVITE_CEILING:
+                cooldown_trip(
+                    "linkedin_connect",
+                    hours=12.0,
+                    reason=f"pending invites {pending} >= {PENDING_INVITE_CEILING}",
+                )
+                cooled["linkedin_connect"] = True
+        except Exception:  # noqa: BLE001 — a failed pre-check must not block the run
+            pass
+
+    for (draft_id, lead_id, channel, body, edited_body, url, name, company, campaign_id,
+         acct, email_acct) in rows:
         campaign_id = str(campaign_id) if campaign_id else None
         first, _, last = (name or "").partition(" ")
         lead = {
@@ -418,6 +494,8 @@ def send_approved_first_touch(
             "first_name": first or None,
             "last_name": last or None,
             "company": company,
+            "account_id": acct,
+            "email_account_id": email_acct,
         }
         if channel in LINKEDIN_CHANNELS and not url:
             blocked_no_recipient.append(str(lead_id))
@@ -450,6 +528,10 @@ def send_approved_first_touch(
             and connect_per_run is not None
             and connects_sent >= connect_per_run
         ):
+            continue
+
+        if _in_cooldown(send_channel):
+            blocked_cooldown.append(str(lead_id))
             continue
 
         if not _has_quota(send_channel):
@@ -488,8 +570,12 @@ def send_approved_first_touch(
             pushed.append(rec)
         except Exception as e:  # noqa: BLE001
             if is_invite_limit_error(e):
+                # LinkedIn temporary provider limit — stop this channel for this run
+                # AND for the next several hours (so the cron stops re-poking it).
                 remaining[send_channel] = 0
-                blocked_quota.append(str(lead_id))
+                cooled[send_channel] = True
+                cooldown_trip(send_channel, reason=str(e)[:280])
+                blocked_cooldown.append(str(lead_id))
                 continue
             failed.append({"lead_id": str(lead_id), "error": str(e)})
 
@@ -499,6 +585,7 @@ def send_approved_first_touch(
         "fell_back_to_connect": len(fell_back),
         "blocked_quota": len(blocked_quota),
         "blocked_fairness": len(blocked_fairness),
+        "blocked_cooldown": len(blocked_cooldown),
         "blocked_no_recipient": len(blocked_no_recipient),
         "failed": len(failed),
         "details": {
@@ -506,6 +593,7 @@ def send_approved_first_touch(
             "fell_back": fell_back,
             "blocked_quota": blocked_quota,
             "blocked_fairness": blocked_fairness,
+            "blocked_cooldown": blocked_cooldown,
             "blocked_no_recipient": blocked_no_recipient,
             "failed": failed,
         },
@@ -514,21 +602,26 @@ def send_approved_first_touch(
 
 
 def _send_accepted_dms(*, dry_run: bool = False, limit: int | None = None) -> dict[str, Any]:
-    """Send approved post-accept DMs to leads whose connection was accepted."""
+    """Send approved post-accept DMs to accepted connections — but never to a lead who has already
+    replied on any channel (the query's `not exists replies` guard). This is what stops us DMing
+    someone who messaged us first, e.g. a connection who opened with a question."""
     conn = _connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                select d.id, d.lead_id, d.body, d.edited_body, l.linkedin_url
+                select d.id, d.lead_id, d.body, d.edited_body, l.linkedin_url,
+                       p.unipile_account_id
                 from drafts d
                 join leads l on l.id = d.lead_id
                 left join campaigns c on c.id = l.campaign_id
+                left join profiles p on p.id = l.user_id
                 where d.channel = 'linkedin_dm'
                   and d.status = 'approved'
                   and l.accepted_at is not null
                   and (c.status is null or c.status = 'active')
                   and not exists (select 1 from sends s where s.draft_id = d.id)
+                  and not exists (select 1 from replies r where r.lead_id = l.id)
                 order by d.generated_at asc
                 """
             )
@@ -543,7 +636,7 @@ def _send_accepted_dms(*, dry_run: bool = False, limit: int | None = None) -> di
     failed: list[dict[str, Any]] = []
     remaining: dict[str, int] = {}
 
-    for draft_id, lead_id, body, edited_body, url in rows:
+    for draft_id, lead_id, body, edited_body, url, acct in rows:
         if not url:
             continue
         if dry_run:
@@ -556,7 +649,8 @@ def _send_accepted_dms(*, dry_run: bool = False, limit: int | None = None) -> di
             continue
         try:
             resp = _send_via_unipile(
-                {"linkedin_url": url}, {"id": str(draft_id), "body": edited_body or body}, "linkedin_dm"
+                {"linkedin_url": url, "account_id": acct},
+                {"id": str(draft_id), "body": edited_body or body}, "linkedin_dm",
             )
             _record_send(str(draft_id), resp)
             remaining["linkedin_dm"] -= 1
@@ -585,8 +679,9 @@ def progress_accepted_connections(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                select l.id, l.provider_id, l.campaign_id
+                select l.id, l.provider_id, l.campaign_id, p.unipile_account_id
                 from leads l
+                left join profiles p on p.id = l.user_id
                 where l.provider_id is not null
                   and l.accepted_at is null
                   and exists (
@@ -595,17 +690,23 @@ def progress_accepted_connections(
                   )
                 """
             )
-            pending = {r[1]: (str(r[0]), str(r[2]) if r[2] else None) for r in cur.fetchall()}
+            pending: dict[str, tuple[str, str | None]] = {}
+            # Group pending provider_ids by the OWNER's account — acceptances must be detected
+            # on the account that sent the invite (acct None → the global/operator account).
+            by_account: dict[str | None, set[str]] = {}
+            for lead_id, provider_id, campaign_id, acct in cur.fetchall():
+                pending[provider_id] = (str(lead_id), str(campaign_id) if campaign_id else None)
+                by_account.setdefault(acct, set()).add(provider_id)
     finally:
         conn.close()
 
     newly: list[tuple[str, str, str | None]] = []  # (provider_id, lead_id, campaign_id)
-    if pending:
-        remaining_ids = set(pending)
+    for acct, pids in by_account.items():
+        remaining_ids = set(pids)
         cursor: str | None = None
         pages = 0
         while remaining_ids and pages < max_pages:
-            page = unipile.list_relations(cursor=cursor, limit=100)
+            page = unipile.list_relations(cursor=cursor, limit=100, account_id=acct)
             for rel in page["items"]:
                 pid = rel["provider_id"]
                 if pid in remaining_ids:
@@ -623,10 +724,15 @@ def progress_accepted_connections(
             with conn:
                 with conn.cursor() as cur:
                     for _pid, lead_id, _cid in newly:
+                        # Store provider_id here too (belt-and-suspenders): accept-detection is
+                        # exactly when a lead is about to start replying, and the relation gives us
+                        # their provider_id — so their reply can be matched even for leads sent
+                        # before provider_id-on-send existed.
                         cur.execute(
-                            "update leads set accepted_at = %s, updated_at = now() "
+                            "update leads set accepted_at = %s, "
+                            "provider_id = coalesce(provider_id, %s), updated_at = now() "
                             "where id = %s and accepted_at is null",
-                            (now, lead_id),
+                            (now, _pid, lead_id),
                         )
         finally:
             conn.close()
@@ -644,7 +750,8 @@ def progress_sequences(
 ) -> dict[str, Any]:
     """One pass through the sequence engine. Returns a summary dict.
 
-    Suitable for a cron tick; idempotent across runs.
+    Suitable for a cron tick; idempotent across runs. Follow-ups run automatically and stop
+    per-lead the moment they reply (determine_next_action halts on any reply).
     """
     sends_by_lead, replies_by_lead, leads_by_id = _load_state()
     actionable_list = determine_next_action(
@@ -693,6 +800,10 @@ def progress_sequences(
                 continue
             # Paused/archived campaigns don't progress — pausing stops all sending.
             if lead.get("campaign_status") not in (None, "active"):
+                continue
+            # Email (opener + follow-ups) is sent by workers.email_sender over Maildoso SMTP,
+            # never through Unipile — skip any email step here so it isn't double-sent.
+            if a.next_channel in EMAIL_CHANNELS:
                 continue
             # The post-accept DM is owned by progress_accepted_connections; any LinkedIn
             # follow-up needs an accepted connection — don't fire on a timer otherwise.

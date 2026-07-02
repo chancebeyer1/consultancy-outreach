@@ -1,5 +1,6 @@
 import clsx from "clsx";
 
+import { PageHeader } from "../../components/PageHeader";
 import { getSelectedCampaignId } from "../../lib/campaign-filter";
 import { getSequenceRows } from "../../lib/queries";
 
@@ -31,13 +32,10 @@ export default async function SequencesPage() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
-      <header className="mb-6 border-b border-neutral-800 pb-5">
-        <h1 className="text-2xl font-semibold tracking-tight">Sequences</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          {rows.length} lead{rows.length === 1 ? "" : "s"} in flight — each one&apos;s outbound steps
-          and what happens next. Pause a campaign on the Campaigns page to halt its sequences.
-        </p>
-      </header>
+      <PageHeader
+        title="Sequences"
+        description={`${rows.length} lead${rows.length === 1 ? "" : "s"} in flight — each one's outbound steps and what fires next. Pause a campaign to halt its sequences.`}
+      />
 
       <div className="space-y-2">
         {rows.map((r) => (

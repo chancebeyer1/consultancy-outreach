@@ -20,6 +20,15 @@ PROMPTS_DIR = BACKEND_DIR / "prompts"
 # already in the shell (e.g. an empty ANTHROPIC_API_KEY) silently shadows .env.
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
+# libpq's default connect timeout is INFINITE — a stalled TCP connect to the Supabase pooler
+# hangs the worker forever (the 2026-07 hourly_dispatcher 80-min hang). libpq reads this env
+# var at connect time; setdefault so an explicit env override still wins.
+os.environ.setdefault("PGCONNECT_TIMEOUT", "15")
+# Likewise cap how long any single statement can sit on a lock/slow plan. Session-scoped via
+# libpq startup options (verified the Supabase pooler passes it through) — affects only OUR
+# processes, not the shared role. 120s >> any legitimate worker statement.
+os.environ.setdefault("PGOPTIONS", "-c statement_timeout=120000")
+
 
 def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
@@ -37,6 +46,27 @@ def require(key: str) -> str:
             f"Missing required env var: {key}. Copy .env.example to .env and fill it in."
         )
     return value
+
+
+# Free/personal email providers. We send cold outreach to CORPORATE mailboxes ONLY — Maildoso's
+# strong recommendation, because personal-inbox sends from cold domains draw spam complaints and
+# tank sender reputation. Used to gate both Apollo email reveal and the SMTP sender.
+FREE_EMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "rocketmail.com", "yahoo.co.uk",
+    "hotmail.com", "hotmail.co.uk", "outlook.com", "outlook.co.uk", "live.com", "msn.com",
+    "aol.com", "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com", "pm.me",
+    "gmx.com", "gmx.net", "mail.com", "zoho.com", "yandex.com", "yandex.ru", "hey.com",
+    "fastmail.com", "tutanota.com", "hushmail.com",
+    "comcast.net", "verizon.net", "att.net", "sbcglobal.net", "cox.net", "charter.net",
+    "bellsouth.net", "earthlink.net", "pacbell.net", "frontier.com", "roadrunner.com", "optonline.net",
+})
+
+
+def is_corporate_email(email: str | None) -> bool:
+    """True only for a business/corporate address (not a free/personal provider)."""
+    if not email or "@" not in email:
+        return False
+    return email.rsplit("@", 1)[1].strip().lower() not in FREE_EMAIL_DOMAINS
 
 
 class Config:
@@ -70,3 +100,11 @@ class Config:
     landing_url: str = _env("LANDING_URL", "https://your-domain.com")
     calcom_url: str = _env("CALCOM_URL", "https://cal.com/your-handle")
     sender_first_name: str = _env("SENDER_FIRST_NAME", "Chance")  # fills {{my_first_name}} in drafts
+
+    # X / Twitter viral-post discovery (twitterapi.io) — finds high-engagement AI tweets to
+    # react to in LinkedIn posts. Optional: if unset, the tweet-reaction generator is skipped.
+    xsearch_api_key: str = _env("XSEARCH_API_KEY")
+
+    # Newsletter ("The Agent Brief") — sent via Resend to opted-in subscribers (NOT cold boxes).
+    # Set NEWSLETTER_FROM to a verified Resend sending domain, e.g. "The Agent Brief <brief@contentdrip.ai>".
+    newsletter_from: str = _env("NEWSLETTER_FROM", "The Agent Brief <brief@contentdrip.ai>")

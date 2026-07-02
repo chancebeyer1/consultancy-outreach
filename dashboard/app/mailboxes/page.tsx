@@ -1,5 +1,6 @@
 import clsx from "clsx";
 
+import { PageHeader } from "@/components/PageHeader";
 import { getMailboxes, type MailboxRow } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -19,13 +20,10 @@ export default async function MailboxesPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6">
-      <header className="mb-8 border-b border-neutral-800 pb-5">
-        <h1 className="text-2xl font-semibold tracking-tight">Mailboxes</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Maildoso sending fleet — status, daily volume, and health. Sends rotate evenly
-          across boxes, warmup-ramped. Credentials are backend-only and never shown here.
-        </p>
-      </header>
+      <PageHeader
+        title="Mailboxes"
+        description="Maildoso sending fleet — status, daily volume, and health. Sends rotate evenly across boxes, warmup-ramped. Credentials stay backend-only."
+      />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
         <Kpi label="Boxes" value={String(total)} />

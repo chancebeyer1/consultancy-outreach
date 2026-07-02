@@ -70,6 +70,10 @@ def call(
         system=_system_blocks(prefix, extra=instruction),
         messages=[{"role": "user", "content": user_payload}],
     )
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        # Truncated output. For JSON callers this guarantees a parse failure downstream — make the
+        # real cause visible in logs instead of a cryptic "Expecting value: line 1 column 1".
+        print(f"WARNING claude.call truncated at max_tokens={max_tokens} (model={model}) — raise the cap")
     return "".join(block.text for block in response.content if block.type == "text").strip()
 
 
@@ -97,4 +101,21 @@ def call_json(
         if text.endswith("```"):
             text = text.rsplit("```", 1)[0]
         text = text.strip()
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Some prompts lead the model to narrate its choice before the JSON ("Looking at the
+        # candidates, the X story is sharpest... {json}"). Recover by decoding the first embedded
+        # JSON value — raw_decode parses one value and ignores any surrounding prose.
+        for i, ch in enumerate(text):
+            if ch in "{[":
+                try:
+                    return json.JSONDecoder().raw_decode(text[i:])[0]
+                except json.JSONDecodeError:
+                    continue
+        if text and not text.rstrip().endswith(("}", "]")):
+            raise ValueError(
+                f"model output looks TRUNCATED (doesn't end in }} or ]; max_tokens={max_tokens}) — "
+                f"raise max_tokens for this call. Tail: …{text[-80:]!r}"
+            )
+        raise

@@ -20,7 +20,9 @@ export default function LoginPage() {
       const supabase = browserClient();
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      router.push("/");
+      // Honor ?next= set by the middleware redirect; fall back to the dashboard home.
+      const next = new URLSearchParams(window.location.search).get("next");
+      router.push(next && next.startsWith("/") ? next : "/");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed");

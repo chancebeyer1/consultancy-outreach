@@ -10,6 +10,10 @@ name = "Mortgage Discovery Sprint"
 slug = "mortgage-discovery-sprint"
 is_default = false
 
+# Killed 2026-07: 0 replies on 229 sends — dead ICP/angle. Paused so the hourly
+# dispatcher stops sourcing/sending; history stays in the dashboard.
+status = "paused"
+
 # Auto-send: approved first-touch openers go out without manual review (fit-gated >=60).
 auto_send = true
 
