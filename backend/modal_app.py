@@ -1104,6 +1104,33 @@ def dispatch_comments_cron() -> dict:
     return _logged("cron_dispatch_comments", res)
 
 
+@app.function(secrets=secrets, timeout=180)
+def ramp_caps_cron() -> dict:
+    """Auto-ramp per-account LinkedIn invite caps (workers/ramp.py).
+
+    Self-gating: each profile changes at most once per ~20h (li_cap_updated_at), so
+    running hourly just gives the ladder a chance to step when the account has earned
+    it — or to step DOWN fast when pending invites pile up.
+    """
+    from workers.ramp import auto_ramp
+
+    try:
+        res = auto_ramp()
+    except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_ramp_caps", res)
+
+
+@app.function(secrets=secrets, timeout=180)
+def ramp_caps_now(dry_run: bool = True) -> dict:
+    """On-demand ramp evaluation. `modal run modal_app.py::ramp_caps_now` (dry-run by default)."""
+    from workers.ramp import auto_ramp
+
+    return auto_ramp(dry_run=dry_run)
+
+
 @app.function(secrets=secrets, timeout=120)
 def dispatch_comments_now(dry_run: bool = False, force: bool = False) -> dict:
     """On-demand pacer tick. `--dry-run` previews the next comment; `--force` posts one immediately,
@@ -1179,6 +1206,7 @@ def hourly_dispatcher() -> dict:
         ("replenish_queue", replenish_queue_cron, 1500),
         ("send_approved", send_approved_cron, 600),
         ("dispatch_comments", dispatch_comments_cron, 600),
+        ("ramp_caps", ramp_caps_cron, 180),
     )
     results: dict = {}
     for name, fn, cap in jobs:
