@@ -19,8 +19,9 @@ status = "paused"
 
 owner_email = "tannerbuyhomes@gmail.com"
 
-# Every sphere message gets his eyes before it sends. These are people he knows —
-# a wrong note here costs a friendship, not a stranger's ignore.
-auto_send = false
+# Auto-approve like everything else (no draft-review surface exists). These are
+# people he KNOWS — the offer.md rules are strict for that reason, and the
+# campaign stays paused until his CSV import is reviewed.
+auto_send = true
 
 channels = ["linkedin_connect", "linkedin_dm"]

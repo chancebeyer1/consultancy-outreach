@@ -16,8 +16,9 @@ status = "active"
 
 owner_email = "tannerbuyhomes@gmail.com"
 
-# Manual review while he learns the tool; flip after the first approved batches.
-auto_send = false
+# No draft-review surface exists anymore — first-touch notes auto-approve on
+# ingest (fit-gated >=60) and send within his account's caps.
+auto_send = true
 
 # LinkedIn-only; his account is fresh to automation so caps start low
 # (profiles.li_daily_cap is set at onboarding).
