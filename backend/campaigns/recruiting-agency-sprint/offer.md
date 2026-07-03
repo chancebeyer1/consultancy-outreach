@@ -2,7 +2,8 @@
 
 **Research-led discovery, NOT a pitch.** Recruiters are pitched constantly and they pitch for
 a living, so anything salesy gets ignored instantly. The first touch leads with real
-curiosity about how they run their desk and asks for 15 minutes to learn. The offer surfaces
+curiosity about how they run their desk and asks ONE question answerable in a single
+line — the 15-minute call is earned after they engage. The offer surfaces
 only if they ask or after they reply.
 
 ## What we actually do (only when it comes up)
@@ -29,7 +30,8 @@ than almost any buyer, because the work is so clearly automatable.
 1. **Connection note** — who I am in one line + the specific thing I noticed (their niche, a
    role they posted, a placement win). No ask beyond connecting.
 2. **First DM (post-accept)** — one plain line on what I'm researching (how agencies run
-   sourcing/screening/outreach), then a low-pressure **15-minute learning ask**. No product,
+   sourcing/screening/outreach), then **ONE research question answerable in a single line
+   by reply** + a promise to share what other desk owners say. No product,
    no link.
 3. **Only if they engage** — share what I'm finding, and *if they ask*, the one case-study
    line.
@@ -37,6 +39,7 @@ than almost any buyer, because the work is so clearly automatable.
 ## Rules
 
 - Don't out-pitch a recruiter. Lead with curiosity about their desk.
-- One ask maximum. The 15-minute *learning* call is the goal of the DM.
+- One ask maximum. The one-line-answerable question is the goal of the DM; the 15-minute
+  call is offered only once they've replied.
 - No links in the cold DM.
 - Reference something real — their niche, a posted role, a placement, their content.

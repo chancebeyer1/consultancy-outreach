@@ -1,7 +1,8 @@
 # Offer — AI back-office agents for insurance agencies (research-led)
 
 **This is a research-led discovery campaign, NOT a pitch.** The first touch leads with
-genuine curiosity about how the agency runs its admin, and asks for 15 minutes to learn —
+genuine curiosity about how the agency runs its admin, and asks ONE question they can
+answer in a single line — the 15-minute call is earned only after they engage —
 not for a meeting to be sold to. The offer surfaces only if they ask or after they reply.
 
 ## What we actually do (only when it comes up)
@@ -28,13 +29,16 @@ the research ask honest, not a Trojan horse.
 1. **Connection note** — who I am in one line + the specific thing I noticed about their
    agency. No ask beyond connecting.
 2. **First DM (post-accept)** — one plain line on what I'm researching (how agencies handle
-   the back-office grind), then a low-pressure **15-minute learning ask**. No product, no link.
+   the back-office grind), then **ONE research question answerable in a single line by
+   reply** ("one line back is plenty") + a promise to share what other owners say. No
+   product, no link, NO meeting ask — the 15-min offer comes after they answer.
 3. **Only if they engage** — share what I'm finding, and *if they ask*, the one case-study
    line about an agent I built.
 
 ## Rules
 
 - Never lead with "I can save you time/money." Lead with curiosity.
-- One ask maximum per message. The 15-minute *learning* call is the whole goal of the DM.
+- One ask maximum per message. The one-line-answerable question is the goal of the DM;
+  the 15-minute call is offered only once they've replied.
 - No links in the cold DM.
 - Reference something real about *their* agency (lines they write, growth, service angle).

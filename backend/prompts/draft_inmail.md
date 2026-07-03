@@ -21,9 +21,11 @@ The Offer in the system prompt sets the angle. Two modes:
 ```
 [one line: who you are, plainly — "I build AI systems" etc.]
 [the hook — the specific thing about them/their work you noticed]
-[one plain line on what you're researching — NO product, NO claims, NO link]
-[soft 15-min learning ask — this is the whole point]
+[one plain line naming the specific thing you're mapping — NO product, NO claims, NO link]
+[THE research question — ONE specific question answerable in a single line by reply;
+ "one line back is plenty" + you'll share what you're hearing from others you ask]
 ```
+No meeting ask cold — the 15-min offer is earned after they reply.
 
 *Pitch offers* (default):
 ```
@@ -35,17 +37,18 @@ The Offer in the system prompt sets the angle. Two modes:
 ## Examples (target voice — research/discovery flavor)
 
 ✅
-> hi {{first_name}}, I build AI systems and I'm digging into how independent brokers
-> handle the back-office grind, pre-approvals, doc chasing, status updates. saw you're
-> running your own book at {{company}} and figured you'd know exactly where it eats
-> time. not selling anything, genuinely trying to learn. could I borrow 15 min to hear
-> how you run it? happy to share what I find across everyone I talk to.
+> hi {{first_name}}, I build AI systems and this month I'm mapping how independent
+> brokers actually handle the back-office grind, pre-approvals, doc chasing, status
+> updates. you run your own book at {{company}} so you'd know exactly where it eats
+> time. one question, one-line answer is plenty: what's the single task that eats the
+> most hours in your week? I'll send you what the other brokers I ask are saying.
 
 ✅
-> {{first_name}}, came across your profile while researching how independent LOs handle
-> the operational side solo. I build AI tooling and I'm trying to understand where the
-> real time sinks are, doc collection, comparison sheets, status comms. would value 15
-> min of your take. no pitch, just learning from people actually doing it.
+> {{first_name}}, I build AI tooling and I'm collecting real answers from independent
+> LOs on where the operational time actually goes, doc collection, comparison sheets,
+> status comms. straight question while I have you: do you still assemble comparison
+> sheets by hand? reply in one line and I'll trade you the running tally from everyone
+> else I've asked.
 
 ## Rules
 
@@ -53,8 +56,14 @@ The Offer in the system prompt sets the angle. Two modes:
 - **Let the Offer set what you reference about yourself** — for research/discovery
   offers, one plain line on what you're learning (no product, no claims, no link); for
   pitch offers, one case-study sentence.
-- Soft asks only. For research/discovery offers the 15-minute *learning* ask is the
-  entire purpose — make it.
+- Soft asks only. For research/discovery offers the reply-able research question IS
+  the ask — never a cold meeting request.
+- **Anti-template**: never "not selling anything" / "not pitching" / "no pitch" (the
+  disclaimer is the tell — a message without a pitch doesn't need one), never "came
+  across your profile", never unnamed social proof, never flattery without a specific.
+- **Never invent findings, counts, or quotes** — promising to share what you hear is
+  fine; claiming you already heard it is fabrication. (The "running tally" in the
+  example is a promise to trade, not a claimed result.)
 - The examples are mortgage/research flavored; they illustrate *structure and voice*,
   not the domain — match the active Offer.
 - Match register from their recent posts.

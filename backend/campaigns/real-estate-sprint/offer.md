@@ -3,7 +3,8 @@
 **This is a research-led discovery campaign, NOT a pitch.** The first touch leads with
 genuine curiosity about how the team handles inbound leads — the Zillow ping at 9pm, the
 sign call while everyone's at showings, the 200 "old" leads nobody re-touches — and asks
-for 15 minutes to learn. The product surfaces ONLY after they reply.
+ONE question they can answer in a single line — the 15-minute call is earned after they
+engage. The product surfaces ONLY after they reply.
 
 **Campaign goal beyond calls: 2–3 founding-customer pilots.** This vertical becomes a
 product if real teams pay for it. Conversations that get real should be steered toward a
@@ -45,7 +46,8 @@ lead intake today** — which makes the research ask honest, not a Trojan horse.
 1. **Connection note** — who I am in one line + the specific thing I noticed about their
    team. No ask beyond connecting.
 2. **First DM (post-accept)** — one plain line on what I'm researching (how teams handle
-   inbound-lead response and follow-up), then a low-pressure **15-minute learning ask**.
+   inbound-lead response and follow-up), then **ONE research question answerable in a
+   single line by reply** + a promise to share what other teams say. NO meeting ask.
    No product, no link.
 3. **Only if they engage** — share what I'm finding across teams, and *if they ask*, the
    one line about the agent and the founding-customer pilot.
@@ -54,7 +56,8 @@ lead intake today** — which makes the research ask honest, not a Trojan horse.
 
 - Never lead with "I can save you time/money" or the speed-to-lead statistic. Lead with
   curiosity.
-- One ask maximum per message. The 15-minute *learning* call is the whole goal of the DM.
+- One ask maximum per message. The one-line-answerable question is the goal of the DM;
+  the 15-minute call is offered only once they've replied.
 - No links in the cold DM.
 - Reference something real about *their* team (team brand, market, production posts,
   hiring for ISAs/showing assistants).

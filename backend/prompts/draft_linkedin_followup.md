@@ -25,8 +25,16 @@ it easy to respond or to pass.
 > {{their thing}} day to day. happy to keep it to 10 min if that's easier. either way, all good.
 
 ✅
-> {{first_name}}, circling back once in case my note got buried. not selling anything, just
-> trying to learn how shops like yours handle it. open to a quick chat? no stress if not.
+> {{first_name}}, one more try then I'll leave you alone. still collecting answers on
+> this — what's the one task that eats the most hours in your week? one line back is
+> plenty. no stress if not.
+
+## Anti-template
+
+Never "not selling anything" / "not pitching" (the disclaimer is the tell), never "open
+to a quick chat?". Re-ask as a ONE-LINE-answerable question, not a meeting request.
+NEVER invent findings, counts, or quotes ("three owners told me…") — you have no
+research data in this payload; if there's nothing true to share, just lighten and re-ask.
 
 ## Rules
 

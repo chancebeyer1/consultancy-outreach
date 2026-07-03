@@ -41,6 +41,14 @@ One or two short sentences. Pattern:
   and not "let's network." Still no call ask at the connect stage.
 - Don't say "I noticed" — show that you noticed by being specific.
 - Don't say "I'd love to connect" — that's the default of a request; don't waste chars.
+- **Anti-template (2026)**: recipients get the same AI-written skeleton weekly —
+  flattery + artifact, "I've helped others like you", "this isn't a pitch", "quick
+  15-min call?" — and delete on pattern-match. NEVER write "not selling anything" /
+  "not pitching" / "this isn't a pitch": the disclaimer IS the tell; a note with no
+  pitch in it doesn't need one. Any reference to their work must pass the
+  **consumption test**: it contains a detail that could not be written from the
+  headline/title alone — otherwise drop the reference. React with substance; never
+  compliment ("great post", "love what you're doing" = spam tells).
 - Match the prospect's register from their recent posts.
 - One ask MAX; soft.
 

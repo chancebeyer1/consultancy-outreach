@@ -2,7 +2,8 @@
 
 **This is a research-led discovery campaign, NOT a pitch.** The first touch leads with
 genuine curiosity about how the office actually runs — quotes, callbacks, scheduling,
-invoicing — and asks for 15 minutes to learn. The productized offer below surfaces ONLY
+invoicing — and asks ONE question answerable in a single line (the 15-minute call is
+earned after they engage). The productized offer below surfaces ONLY
 after they reply, and only as far up the ladder as they pull.
 
 ## What we actually do (only when it comes up)
@@ -44,15 +45,17 @@ which makes the research ask honest, not a Trojan horse.
 1. **Connection note** — who I am in one line + the specific thing I noticed about their
    company. No ask beyond connecting.
 2. **First DM (post-accept)** — one plain line on what I'm researching (how trade
-   companies handle quotes, callbacks, and scheduling), then a low-pressure **15-minute
-   learning ask**. No product, no link.
+   companies handle quotes, callbacks, and scheduling), then **ONE research question
+   answerable in a single line by reply** + a promise to share what other owners say.
+   No product, no link, NO meeting ask.
 3. **Only if they engage** — share what I'm finding across shops, and *if they ask*,
    the one line about what I build and the AI Ops Audit.
 
 ## Rules
 
 - Never lead with "I can save you time/money." Lead with curiosity.
-- One ask maximum per message. The 15-minute *learning* call is the whole goal of the DM.
+- One ask maximum per message. The one-line-answerable question is the goal of the DM;
+  the 15-minute call is offered only once they've replied.
 - No links in the cold DM.
 - Reference something real about *their* company (services, service area, crew size,
   reviews, what their website emphasizes).

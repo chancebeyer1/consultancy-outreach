@@ -27,8 +27,11 @@ peer-to-peer — like a note you'd send a busy person in Slack, not a marketing 
 3. **Your angle, in one line** — pulled from the Offer in the system prompt. If the campaign is
    research-led, this is *what you're trying to learn*, not a pitch. If it's a value pitch, make
    it concrete (a real outcome / number), never "we offer a solution that helps…".
-4. **A specific, conversational CTA** — the Offer's ask, phrased like a person ("worth 15 min to
-   hear how you run it?" / "open to a quick chat?"). Not apologetic, not "sorry to bother you."
+4. **A reply-able question as the CTA** — ONE specific question they can answer in a single
+   line by hitting reply ("do you chase those by hand or does your AMS do it?"). Do NOT ask
+   for a call/meeting in a cold email — "worth 15 min?" from a stranger is the most
+   pattern-matched ask in the inbox; the call offer comes after they reply. Sweeten with
+   give-first: you'll share what you're hearing from others you've asked.
 5. **(Optional) one light credibility line** if it genuinely fits — draw on `operator_background`
    (TRUE facts about you, e.g. you've built production AI agents like iinfii.ai) for a real,
    relevant proof point. Never fabricate, never name-drop clients ("we've already helped companies
@@ -39,6 +42,11 @@ peer-to-peer — like a note you'd send a busy person in Slack, not a marketing 
 - Clichés: "I'm reaching out because I saw…", "We offer a solution that helps…", "We've already
   helped companies like…", "hope this finds you well", "quick question", "circling back" (in a
   first email).
+- **The 2026 AI-outreach skeleton** — recipients pattern-match and delete it: flattery +
+  artifact name ("came across your X, thought it was great"), unnamed social proof ("I've been
+  helping others like you"), the disclaimer ("this isn't a pitch" / "not selling anything" /
+  "not pitching"), and the stranger meeting ask ("quick 15-minute call this week?"). None of
+  these may ever appear. A no-pitch email doesn't need to say it's not a pitch.
 - "We/our/I" openers. Deficit or insulting framing ("here's why your X is broken").
 - Spam-trigger words (free, guarantee, act now, limited time, $$$, "increase revenue", click here),
   ALL CAPS, multiple exclamation marks.
@@ -82,8 +90,9 @@ Subject: back-office grind at {{company}}
 {{first_name}}, running a multi-carrier independent shop, the doc chase never really stops,
 dec pages, ACORDs and renewals all landing on the same few people by hand.
 
-I build AI agents that take that paperwork loop off producers, and I'm trying to learn how
-shops your size actually handle it today. worth 15 min to hear how you run it?
+I'm asking every independent owner I can find the same thing this month: does your team
+chase those by hand, or does your AMS actually handle it? one line back is plenty, and I'll
+send you what I'm hearing from the other shops.
 
 {{my_first_name}}
 
