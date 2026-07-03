@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/PageHeader";
+import { requireAdmin } from "@/lib/auth";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
 import { CommentsClient, type CommentItem } from "./CommentsClient";
@@ -6,6 +7,7 @@ import { CommentsClient, type CommentItem } from "./CommentsClient";
 export const dynamic = "force-dynamic";
 
 export default async function CommentsPage() {
+  await requireAdmin();
   let items: CommentItem[] = [];
   if (dataSource === "supabase") {
     const admin = serverAdminClient();

@@ -1,21 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { requireApiAdmin } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 // Generation (news fetch / X search + Claude + image render) runs 20-50s on Modal; without this
 // the Vercel function times out and the call looks like a config failure. Matches the audit route.
 export const maxDuration = 60;
-
-// Content actions publish to your LinkedIn, so require a signed-in user.
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return { admin: serverAdminClient() };
-}
 
 // Call the secured Modal endpoint (instant publish + build-in-public generation). Returns
 // {ok} — when the token/URL aren't configured it's a no-op the callers fall back from.
@@ -57,9 +48,10 @@ function generationError(r: WebhookResult): string | null {
 }
 
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  // Content actions publish to the owner's LinkedIn — admin only.
+  const gate = await requireApiAdmin();
   if (gate.error) return gate.error;
-  const admin = gate.admin!;
+  const admin = serverAdminClient();
 
   let payload: { id?: string; action?: string; body?: string; text?: string; format?: string; tool?: string };
   try {

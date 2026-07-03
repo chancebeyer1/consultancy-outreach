@@ -3,6 +3,7 @@
 //   - file:     latest JSONL produced by backend/scripts/run_pipeline.py
 //   - supabase: live DB (Phase 2)
 
+import type { Scope } from "./auth";
 import { loadDraftReviewRowsFromFile } from "./jsonl-source";
 import { MOCK_CAMPAIGNS, MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
 import { loadReplyRowsFromFile } from "./replies-source";
@@ -28,16 +29,28 @@ import type {
   Trigger,
 } from "./types";
 
+// Per-user scoping: readers take an optional `scope` (the caller's profile).
+// Admins — and mock/file mode's null — get no filter; a non-admin scope
+// restricts every reader to rows they own, either directly (user_id column) or
+// through the lead → user relationship. RLS is being added as belt-and-braces,
+// but service-role reads bypass it, so the explicit filter here is the gate.
+function scopeUserId(scope: Scope): string | null {
+  return scope && !scope.isAdmin ? scope.id : null;
+}
+
 // `campaignId` scopes the result to one campaign. `undefined`/empty = all
 // campaigns. File mode has no campaign metadata, so the filter is a no-op there.
-export async function getDraftReviewRows(campaignId?: string): Promise<DraftReviewRow[]> {
+export async function getDraftReviewRows(
+  campaignId?: string,
+  scope?: Scope,
+): Promise<DraftReviewRow[]> {
   if (dataSource === "mock") {
     return filterByCampaign(MOCK_DRAFT_ROWS, campaignId, (r) => r.lead.campaign_id);
   }
   if (dataSource === "file") {
     return loadDraftReviewRowsFromFile();
   }
-  return loadDraftReviewRowsFromSupabase(campaignId);
+  return loadDraftReviewRowsFromSupabase(campaignId, scope);
 }
 
 function filterByCampaign<T>(
@@ -78,19 +91,23 @@ const MOCK_MAILBOXES: MailboxRow[] = [
   { id: "m3", email: "chance.beyer@dripwithai.com", provider: "maildoso", domain: "dripwithai.com", status: "active", daily_cap: 25, warmup_stage: 2, ramp_started_at: null, bounce_count: 1, last_send_at: null, last_error: null, sent_today: 4 },
 ];
 
-export async function getMailboxes(): Promise<MailboxRow[]> {
+export async function getMailboxes(scope?: Scope): Promise<MailboxRow[]> {
   if (dataSource !== "supabase") return MOCK_MAILBOXES;
 
   const admin = serverAdminClient();
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const uid = scopeUserId(scope);
+  let boxesQ = admin
+    .from("mailboxes")
+    .select(
+      "id, email, provider, domain, status, daily_cap, warmup_stage, ramp_started_at, bounce_count, last_send_at, last_error",
+    )
+    .order("status", { ascending: true })
+    .order("email", { ascending: true });
+  if (uid) boxesQ = boxesQ.eq("user_id", uid);
   const [boxesRes, sendsRes] = await Promise.all([
-    admin
-      .from("mailboxes")
-      .select(
-        "id, email, provider, domain, status, daily_cap, warmup_stage, ramp_started_at, bounce_count, last_send_at, last_error",
-      )
-      .order("status", { ascending: true })
-      .order("email", { ascending: true }),
+    boxesQ,
+    // Unscoped on purpose: the map below only counts sends for boxes we fetched.
     admin.from("sends").select("mailbox_id").gte("sent_at", since).not("mailbox_id", "is", null),
   ]);
   if (boxesRes.error) throw boxesRes.error;
@@ -131,18 +148,25 @@ const MOCK_INBOX: InboxMessage[] = [
   { id: "i2", mailbox_email: "c.beyer@dripwithai.com", from_email: "dan@advancedlocal.com", from_name: "Dan", subject: "Out of office", body: "I'm away until Monday.", lead_id: null, campaign_id: null, is_auto: true, direction: "in", suggested_reply: null, received_at: new Date(Date.now() - 7200_000).toISOString() },
 ];
 
-export async function getInboxMessages(campaignId?: string): Promise<InboxMessage[]> {
+export async function getInboxMessages(campaignId?: string, scope?: Scope): Promise<InboxMessage[]> {
   if (dataSource !== "supabase") return MOCK_INBOX;
   const admin = serverAdminClient();
+  const uid = scopeUserId(scope);
+  // Non-admins only see messages tied to their own leads (the inner join drops
+  // unmatched messages — those can't be attributed to a user).
   let q = admin
     .from("inbox_messages")
-    .select("id, mailbox_email, from_email, from_name, subject, body, lead_id, campaign_id, is_auto, direction, suggested_reply, received_at")
+    .select(
+      "id, mailbox_email, from_email, from_name, subject, body, lead_id, campaign_id, is_auto, direction, suggested_reply, received_at" +
+        (uid ? ", leads!inner(user_id)" : ""),
+    )
     .order("received_at", { ascending: false, nullsFirst: false })
     .limit(500);
+  if (uid) q = q.eq("leads.user_id", uid);
   if (campaignId) q = q.eq("campaign_id", campaignId);
   const { data, error } = await q;
   if (error) throw error;
-  return (data ?? []) as InboxMessage[];
+  return (data ?? []) as unknown as InboxMessage[];
 }
 
 // ---------------------------------------------------------------------------
@@ -168,14 +192,28 @@ const MOCK_ACTIVITY: ActivityRow[] = [
   { id: "a3", created_at: new Date(Date.now() - 3_600_000).toISOString(), actor: "system", action: "reply_received", source: "worker", channel: "email", summary: "Reply from Crystal D.", campaign_id: null, lead_id: null, meta: {} },
 ];
 
-export async function getActivity(limit = 200): Promise<ActivityRow[]> {
+export async function getActivity(limit = 200, scope?: Scope): Promise<ActivityRow[]> {
   if (dataSource !== "supabase") return MOCK_ACTIVITY;
   const admin = serverAdminClient();
-  const { data, error } = await admin
+  let q = admin
     .from("activity_log")
     .select("id, created_at, actor, action, source, channel, summary, campaign_id, lead_id, meta")
     .order("created_at", { ascending: false })
     .limit(limit);
+  // Non-admins only see activity on their own campaigns. Rows without a
+  // campaign_id (global cron runs) are system-wide — admin-only by design.
+  const uid = scopeUserId(scope);
+  if (uid) {
+    const { data: camps, error: campErr } = await admin
+      .from("campaigns")
+      .select("id")
+      .eq("user_id", uid);
+    if (campErr) throw campErr;
+    const ids = ((camps ?? []) as Array<{ id: string }>).map((c) => c.id);
+    if (ids.length === 0) return [];
+    q = q.in("campaign_id", ids);
+  }
+  const { data, error } = await q;
   if (error) throw error;
   return (data ?? []) as ActivityRow[];
 }
@@ -184,7 +222,7 @@ export async function getActivity(limit = 200): Promise<ActivityRow[]> {
 // Campaigns — list for the selector + /campaigns management surface
 // ---------------------------------------------------------------------------
 
-export async function getCampaigns(): Promise<Campaign[]> {
+export async function getCampaigns(scope?: Scope): Promise<Campaign[]> {
   if (dataSource === "mock") {
     return MOCK_CAMPAIGNS;
   }
@@ -193,11 +231,14 @@ export async function getCampaigns(): Promise<Campaign[]> {
     return [];
   }
   const supabase = await serverClient();
-  const { data, error } = await supabase
+  let q = supabase
     .from("campaigns")
     .select("*")
     .order("is_default", { ascending: false })
     .order("name", { ascending: true });
+  const uid = scopeUserId(scope);
+  if (uid) q = q.eq("user_id", uid);
+  const { data, error } = await q;
   if (error) throw error;
   return (data ?? []) as unknown as Campaign[];
 }
@@ -206,7 +247,7 @@ export async function getCampaigns(): Promise<Campaign[]> {
 // Leads — /leads table (every lead, filterable by campaign + derived status)
 // ---------------------------------------------------------------------------
 
-export async function getLeadRows(campaignId?: string): Promise<LeadRow[]> {
+export async function getLeadRows(campaignId?: string, scope?: Scope): Promise<LeadRow[]> {
   if (dataSource === "mock") {
     const kindOf = (ch?: string | null): LeadChannelKind[] =>
       ch?.startsWith("email") ? ["email"] : ["linkedin"];
@@ -234,7 +275,7 @@ export async function getLeadRows(campaignId?: string): Promise<LeadRow[]> {
   if (dataSource === "file") {
     return [];
   }
-  return loadLeadRowsFromSupabase(campaignId);
+  return loadLeadRowsFromSupabase(campaignId, scope);
 }
 
 // Supabase returns 400 ("Bad Request") when a request URL gets too long, which happens once an
@@ -255,8 +296,9 @@ async function inChunks(
   return { data: out, error: null };
 }
 
-async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]> {
+async function loadLeadRowsFromSupabase(campaignId?: string, scope?: Scope): Promise<LeadRow[]> {
   const supabase = await serverClient();
+  const uid = scopeUserId(scope);
 
   // Supabase caps a single response at 1000 rows, so page through with .range() to load them ALL —
   // otherwise the total + filter chips silently under-count (they're computed client-side here).
@@ -268,6 +310,7 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
       .select("*")
       .order("updated_at", { ascending: false })
       .range(from, from + PAGE - 1);
+    if (uid) q = q.eq("user_id", uid);
     if (campaignId) q = q.eq("campaign_id", campaignId);
     const { data, error } = await q;
     if (error) throw error;
@@ -374,7 +417,7 @@ async function loadLeadRowsFromSupabase(campaignId?: string): Promise<LeadRow[]>
 // Sequences — /sequences view (contacted leads + their outbound timeline)
 // ---------------------------------------------------------------------------
 
-export async function getSequenceRows(campaignId?: string): Promise<SequenceRow[]> {
+export async function getSequenceRows(campaignId?: string, scope?: Scope): Promise<SequenceRow[]> {
   if (dataSource === "mock") {
     return MOCK_REPLY_ROWS.filter((r) => !campaignId || r.lead.campaign_id === campaignId).map(
       (r) => ({
@@ -388,7 +431,7 @@ export async function getSequenceRows(campaignId?: string): Promise<SequenceRow[
   if (dataSource === "file") {
     return [];
   }
-  return loadSequenceRowsFromSupabase(campaignId);
+  return loadSequenceRowsFromSupabase(campaignId, scope);
 }
 
 function describeNext(steps: { channel: Channel }[], hasReply: boolean): string {
@@ -406,16 +449,20 @@ function describeNext(steps: { channel: Channel }[], hasReply: boolean): string 
   return "In sequence";
 }
 
-async function loadSequenceRowsFromSupabase(campaignId?: string): Promise<SequenceRow[]> {
+async function loadSequenceRowsFromSupabase(campaignId?: string, scope?: Scope): Promise<SequenceRow[]> {
   const supabase = await serverClient();
+  const uid = scopeUserId(scope);
 
   // Sent drafts identify which leads are in a sequence + the channel of each step.
-  const { data: sentDrafts, error: sdErr } = await supabase
+  // Non-admin: only drafts whose lead belongs to the user (drafts carry no user_id).
+  let sdQ = supabase
     .from("drafts")
-    .select("id, lead_id, channel")
+    .select("id, lead_id, channel" + (uid ? ", leads!inner(user_id)" : ""))
     .eq("status", "sent");
+  if (uid) sdQ = sdQ.eq("leads.user_id", uid);
+  const { data: sentDrafts, error: sdErr } = await sdQ;
   if (sdErr) throw sdErr;
-  const sd = (sentDrafts ?? []) as Array<{ id: string; lead_id: string; channel: Channel }>;
+  const sd = (sentDrafts ?? []) as unknown as Array<{ id: string; lead_id: string; channel: Channel }>;
   if (sd.length === 0) return [];
 
   const leadIds = Array.from(new Set(sd.map((d) => d.lead_id)));
@@ -532,15 +579,22 @@ type SupabaseDraftRow = {
   decided_at: string | null;
 };
 
-async function loadDraftReviewRowsFromSupabase(campaignId?: string): Promise<DraftReviewRow[]> {
+async function loadDraftReviewRowsFromSupabase(
+  campaignId?: string,
+  scope?: Scope,
+): Promise<DraftReviewRow[]> {
   const supabase = await serverClient();
+  const uid = scopeUserId(scope);
 
   // 1. All pending drafts (single source of which leads to display).
-  const { data: drafts, error: draftsErr } = await supabase
+  //    Non-admin: only drafts whose lead belongs to the user.
+  let draftsQ = supabase
     .from("drafts")
-    .select("*")
+    .select(uid ? "*, leads!inner(user_id)" : "*")
     .eq("status", "draft")
     .order("generated_at", { ascending: false });
+  if (uid) draftsQ = draftsQ.eq("leads.user_id", uid);
+  const { data: drafts, error: draftsErr } = await draftsQ;
   if (draftsErr) throw draftsErr;
   if (!drafts || drafts.length === 0) return [];
 
@@ -628,14 +682,14 @@ async function loadDraftReviewRowsFromSupabase(campaignId?: string): Promise<Dra
 // Replies — /replies page
 // ---------------------------------------------------------------------------
 
-export async function getReplyRows(campaignId?: string): Promise<ReplyReviewRow[]> {
+export async function getReplyRows(campaignId?: string, scope?: Scope): Promise<ReplyReviewRow[]> {
   if (dataSource === "mock") {
     return filterByCampaign(MOCK_REPLY_ROWS, campaignId, (r) => r.lead.campaign_id);
   }
   if (dataSource === "file") {
     return loadReplyRowsFromFile();
   }
-  return loadReplyRowsFromSupabase(campaignId);
+  return loadReplyRowsFromSupabase(campaignId, scope);
 }
 
 type SupabaseReplyRow = {
@@ -652,16 +706,23 @@ type SupabaseReplyRow = {
   received_at: string;
 };
 
-async function loadReplyRowsFromSupabase(campaignId?: string): Promise<ReplyReviewRow[]> {
+async function loadReplyRowsFromSupabase(
+  campaignId?: string,
+  scope?: Scope,
+): Promise<ReplyReviewRow[]> {
   const supabase = await serverClient();
+  const uid = scopeUserId(scope);
 
-  // Unhandled replies first, ordered by recency.
-  const { data: replies, error: repliesErr } = await supabase
+  // Unhandled replies first, ordered by recency. Non-admin: only replies whose
+  // lead belongs to the user (orphan replies are dropped below anyway).
+  let repliesQ = supabase
     .from("replies")
-    .select("*")
+    .select(uid ? "*, leads!inner(user_id)" : "*")
     .order("handled_at", { ascending: true, nullsFirst: true })
     .order("received_at", { ascending: false })
     .limit(200);
+  if (uid) repliesQ = repliesQ.eq("leads.user_id", uid);
+  const { data: replies, error: repliesErr } = await repliesQ;
   if (repliesErr) throw repliesErr;
   if (!replies || replies.length === 0) return [];
 
@@ -773,12 +834,15 @@ export type DealDetail = {
   } | null;
 };
 
-export async function getDealDetail(id: string): Promise<DealDetail | null> {
+export async function getDealDetail(id: string, scope?: Scope): Promise<DealDetail | null> {
   if (dataSource !== "supabase") return null;
   const admin = serverAdminClient();
 
   const { data: deal } = await admin.from("deals").select("*").eq("id", id).maybeSingle();
   if (!deal) return null;
+  // Non-admin: a deal that isn't theirs might as well not exist.
+  const uid = scopeUserId(scope);
+  if (uid && (deal as { user_id?: string | null }).user_id !== uid) return null;
 
   const [leadRes, msgRes, notesRes, campRes, auditRes] = await Promise.all([
     deal.lead_id

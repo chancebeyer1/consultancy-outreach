@@ -1,5 +1,6 @@
 import clsx from "clsx";
 
+import { requireAdmin } from "../../lib/auth";
 import { PageHeader } from "../../components/PageHeader";
 import { getSelectedCampaignId } from "../../lib/campaign-filter";
 import { getSequenceRows } from "../../lib/queries";
@@ -15,6 +16,7 @@ const CHANNEL_LABEL: Record<string, string> = {
 };
 
 export default async function SequencesPage() {
+  await requireAdmin();
   const campaignId = await getSelectedCampaignId();
   const rows = await getSequenceRows(campaignId);
 

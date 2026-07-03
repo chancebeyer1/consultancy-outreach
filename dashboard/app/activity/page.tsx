@@ -1,6 +1,7 @@
 import clsx from "clsx";
 
 import { PageHeader } from "@/components/PageHeader";
+import { requireAdmin } from "@/lib/auth";
 import { getActivity, getCampaigns, type ActivityRow } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,7 @@ const LABELS: Record<string, string> = {
 };
 
 export default async function ActivityPage() {
+  await requireAdmin();
   const [rows, campaigns] = await Promise.all([getActivity(300), getCampaigns()]);
   const campaignName = new Map(campaigns.map((c) => [c.id, c.name]));
 

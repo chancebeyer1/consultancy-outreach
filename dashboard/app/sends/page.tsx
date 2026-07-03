@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/PageHeader";
+import { requireAdmin } from "@/lib/auth";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
 import { SendsClient, type ScheduledRow, type SentRow } from "./SendsClient";
@@ -6,6 +7,7 @@ import { SendsClient, type ScheduledRow, type SentRow } from "./SendsClient";
 export const dynamic = "force-dynamic";
 
 export default async function SendsPage() {
+  await requireAdmin();
   let scheduled: ScheduledRow[] = [];
   let sent: SentRow[] = [];
 

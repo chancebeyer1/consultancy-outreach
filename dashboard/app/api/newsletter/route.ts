@@ -1,17 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { requireApiAdmin } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
-
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return { admin: serverAdminClient() };
-}
 
 // Call the secured Modal endpoint; returns {ok, data} so callers can read the worker's result.
 async function callWebhook(payload: object): Promise<{ ok: boolean; data: Record<string, unknown> }> {
@@ -32,9 +24,10 @@ async function callWebhook(payload: object): Promise<{ ok: boolean; data: Record
 }
 
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  // Newsletter is the owner's audience — admin only.
+  const gate = await requireApiAdmin();
   if (gate.error) return gate.error;
-  const admin = gate.admin!;
+  const admin = serverAdminClient();
 
   let p: { action?: string; id?: string; subject?: string; body?: string };
   try {

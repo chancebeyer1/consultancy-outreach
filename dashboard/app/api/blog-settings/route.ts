@@ -1,17 +1,15 @@
 import { NextResponse } from "next/server";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { requireApiAdmin } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
 // Flip the auto-blog toggle. The daily Modal cron reads app_settings.auto_blog and publishes one
-// AI-news SEO post per day when it's on. Requires a signed-in operator.
+// AI-news SEO post per day when it's on. Global app setting — admin only.
 export async function POST(req: Request) {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "not signed in" }, { status: 401 });
+  const gate = await requireApiAdmin();
+  if (gate.error) return gate.error;
 
   let body: { enabled?: boolean };
   try {

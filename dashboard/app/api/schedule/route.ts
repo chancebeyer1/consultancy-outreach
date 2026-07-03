@@ -1,24 +1,17 @@
 import { NextResponse } from "next/server";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { leadOwnedBy, requireApiUser } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
-
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return { admin: serverAdminClient() };
-}
 
 // Schedule a reply to auto-send on a future date ("reconnect in the fall"). The hourly send cron
 // picks up due rows. Marks the reply handled so it leaves the active queue.
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  const gate = await requireApiUser();
   if (gate.error) return gate.error;
-  const admin = gate.admin!;
+  const profile = gate.profile;
+  const admin = serverAdminClient();
 
   let p: { action?: string; id?: string; replyId?: string; dueAt?: string; body?: string };
   try {
@@ -30,6 +23,17 @@ export async function POST(req: Request) {
   // Cancel a pending scheduled send (before the cron fires it).
   if (p.action === "cancel") {
     if (!p.id) return NextResponse.json({ error: "missing id" }, { status: 400 });
+    // Non-admins may only cancel sends scheduled for their own leads.
+    if (!profile.isAdmin) {
+      const { data: row } = await admin
+        .from("scheduled_replies")
+        .select("lead_id")
+        .eq("id", p.id)
+        .maybeSingle();
+      if (!row || !(await leadOwnedBy(row.lead_id as string | null, profile.id))) {
+        return NextResponse.json({ error: "not your scheduled send" }, { status: 403 });
+      }
+    }
     const { error, count } = await admin
       .from("scheduled_replies")
       .update({ status: "cancelled" }, { count: "exact" })
@@ -54,6 +58,11 @@ export async function POST(req: Request) {
     .eq("id", p.replyId)
     .single();
   if (!reply) return NextResponse.json({ error: "reply not found" }, { status: 404 });
+
+  // Non-admins may only schedule follow-ups for their own leads.
+  if (!profile.isAdmin && !(await leadOwnedBy(reply.lead_id, profile.id))) {
+    return NextResponse.json({ error: "not your reply" }, { status: 403 });
+  }
 
   const { data: lead } = await admin.from("leads").select("provider_id").eq("id", reply.lead_id).single();
 

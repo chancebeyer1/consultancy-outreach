@@ -1,11 +1,13 @@
 import clsx from "clsx";
 
 import { PageHeader } from "@/components/PageHeader";
+import { requireAdmin } from "@/lib/auth";
 import { getMailboxes, type MailboxRow } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function MailboxesPage() {
+  await requireAdmin();
   const boxes = await getMailboxes();
 
   const total = boxes.length;

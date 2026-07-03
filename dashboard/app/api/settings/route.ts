@@ -1,23 +1,16 @@
 import { NextResponse } from "next/server";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { requireApiAdmin } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return { admin: serverAdminClient() };
-}
-
 // Save the operator profile the AI uses as grounding when drafting replies + outreach.
+// Global app setting — admin only.
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  const gate = await requireApiAdmin();
   if (gate.error) return gate.error;
-  const admin = gate.admin!;
+  const admin = serverAdminClient();
 
   let p: { operatorBio?: string };
   try {

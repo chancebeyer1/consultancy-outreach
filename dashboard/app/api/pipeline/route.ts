@@ -1,18 +1,18 @@
 import { NextResponse } from "next/server";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { requireApiUser } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
 const STAGES = ["interested", "call_booked", "proposal_sent", "won", "lost"];
 
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return { admin: serverAdminClient() };
+type Admin = ReturnType<typeof serverAdminClient>;
+
+// Ownership check for non-admin writes: a deal is theirs iff deals.user_id matches.
+async function dealOwnedBy(admin: Admin, dealId: string, userId: string): Promise<boolean> {
+  const { data } = await admin.from("deals").select("user_id").eq("id", dealId).maybeSingle();
+  return (data as { user_id?: string | null } | null)?.user_id === userId;
 }
 
 // Trigger the secured Modal endpoint (deal research). No-op if not configured.
@@ -33,9 +33,10 @@ async function callWebhook(payload: object): Promise<{ ok: boolean }> {
 }
 
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  const gate = await requireApiUser();
   if (gate.error) return gate.error;
-  const admin = gate.admin!;
+  const profile = gate.profile;
+  const admin = serverAdminClient();
 
   let p: {
     action?: string;
@@ -55,6 +56,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
+  // Every action below except `create` targets an existing deal (directly or via
+  // a note) — non-admins must own that deal.
+  if (!profile.isAdmin && p.action !== "create") {
+    let dealId = p.id ?? null;
+    if (p.action === "delete_note" && p.note_id) {
+      const { data: note } = await admin
+        .from("deal_notes")
+        .select("deal_id")
+        .eq("id", p.note_id)
+        .maybeSingle();
+      dealId = (note as { deal_id?: string } | null)?.deal_id ?? null;
+    }
+    if (!dealId || !(await dealOwnedBy(admin, dealId, profile.id))) {
+      return NextResponse.json({ error: "not your deal" }, { status: 403 });
+    }
+  }
+
   if (p.action === "create") {
     const { error } = await admin.from("deals").insert({
       contact_name: p.contact_name?.trim() || null,
@@ -63,6 +81,8 @@ export async function POST(req: Request) {
       notes: p.notes?.trim() || null,
       stage: "interested",
       source: "manual",
+      // Deals a non-admin creates belong to them; admin-created stay unowned (global).
+      ...(profile.isAdmin ? {} : { user_id: profile.id }),
     });
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     return NextResponse.json({ ok: true });

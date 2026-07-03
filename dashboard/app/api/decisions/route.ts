@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { leadOwnedBy, requireApiUser } from "@/lib/auth";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
 const ROOT =
@@ -77,6 +78,23 @@ export async function POST(request: Request) {
   const payload = (await request.json()) as unknown;
   if (!isValid(payload)) {
     return NextResponse.json({ error: "invalid payload" }, { status: 400 });
+  }
+
+  // supabase mode: only a signed-in user may decide drafts, and a non-admin may
+  // only decide drafts on their own leads. (file mode is the offline local flow.)
+  if (dataSource === "supabase") {
+    const gate = await requireApiUser();
+    if (gate.error) return gate.error;
+    if (!gate.profile.isAdmin) {
+      const { data: draft } = await serverAdminClient()
+        .from("drafts")
+        .select("lead_id")
+        .eq("id", payload.draft_id)
+        .maybeSingle();
+      if (!draft || !(await leadOwnedBy(draft.lead_id as string, gate.profile.id))) {
+        return NextResponse.json({ error: "not your draft" }, { status: 403 });
+      }
+    }
   }
 
   // file mode appends to runs/decisions.jsonl for send_approvals.py; supabase mode

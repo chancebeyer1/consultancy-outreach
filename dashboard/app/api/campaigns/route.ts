@@ -12,6 +12,7 @@
 
 import { NextResponse } from "next/server";
 
+import { getCurrentProfile, requireApiUser, type CurrentProfile } from "@/lib/auth";
 import { getCampaigns } from "@/lib/queries";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
@@ -69,7 +70,13 @@ function normalize(p: CampaignPayload): Record<string, unknown> {
 
 export async function GET() {
   try {
-    const campaigns = await getCampaigns();
+    // Scoped to the caller: non-admins only see their own campaigns.
+    let profile: CurrentProfile | null = null;
+    if (dataSource === "supabase") {
+      profile = await getCurrentProfile();
+      if (!profile) return NextResponse.json({ error: "not signed in" }, { status: 401 });
+    }
+    const campaigns = await getCampaigns(profile);
     return NextResponse.json({ campaigns, source: dataSource });
   } catch (err) {
     return NextResponse.json(
@@ -87,6 +94,10 @@ export async function POST(request: Request) {
     );
   }
 
+  const gate = await requireApiUser();
+  if (gate.error) return gate.error;
+  const profile = gate.profile;
+
   const payload = (await request.json()) as unknown;
   if (!isValid(payload)) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
@@ -99,9 +110,22 @@ export async function POST(request: Request) {
     let id = payload.id ?? null;
 
     if (id) {
+      // Non-admins may only edit campaigns they own.
+      if (!profile.isAdmin) {
+        const { data: existing } = await supabase
+          .from("campaigns")
+          .select("user_id")
+          .eq("id", id)
+          .maybeSingle();
+        if ((existing as { user_id?: string | null } | null)?.user_id !== profile.id) {
+          return NextResponse.json({ error: "not your campaign" }, { status: 403 });
+        }
+      }
       const { error } = await supabase.from("campaigns").update(row).eq("id", id);
       if (error) throw error;
     } else {
+      // New campaigns created by a non-admin belong to them.
+      if (!profile.isAdmin) row.user_id = profile.id;
       const { data, error } = await supabase
         .from("campaigns")
         .insert(row)
@@ -113,13 +137,16 @@ export async function POST(request: Request) {
 
     // Enforce single default: if this campaign is the default, clear the flag
     // on every other row (two statements avoid a transient double-true that
-    // would trip the campaigns_one_default_idx unique index).
+    // would trip the campaigns_one_default_idx unique index). Non-admins only
+    // clear the flag within their own campaigns.
     if (row.is_default && id) {
-      const { error } = await supabase
+      let clearQ = supabase
         .from("campaigns")
         .update({ is_default: false })
         .neq("id", id)
         .eq("is_default", true);
+      if (!profile.isAdmin) clearQ = clearQ.eq("user_id", profile.id);
+      const { error } = await clearQ;
       if (error) throw error;
     }
 

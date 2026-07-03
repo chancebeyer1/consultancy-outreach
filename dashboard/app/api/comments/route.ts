@@ -1,23 +1,15 @@
 import { NextResponse } from "next/server";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { requireApiAdmin } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
-// Comment actions change what auto-posts to your LinkedIn — require a signed-in user.
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return { admin: serverAdminClient() };
-}
-
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  // Comment actions change what auto-posts to the owner's LinkedIn — admin only.
+  const gate = await requireApiAdmin();
   if (gate.error) return gate.error;
-  const admin = gate.admin!;
+  const admin = serverAdminClient();
 
   let payload: { id?: string; action?: string; body?: string };
   try {

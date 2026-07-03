@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 
-import { serverAdminClient, serverClient } from "@/lib/supabase";
+import { leadOwnedBy, requireApiUser } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 // SMTP send needs the Node runtime (not Edge).
 export const runtime = "nodejs";
@@ -10,15 +11,6 @@ const LINKEDIN_REPLY_URL =
   "https://chanceb323--consultancy-outreach-linkedin-reply.modal.run";
 
 type Admin = ReturnType<typeof serverAdminClient>;
-
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return { admin: serverAdminClient() };
-}
 
 function reSubject(s: string | null): string {
   const subj = (s || "").trim();
@@ -156,9 +148,10 @@ async function sendLinkedInReply(
 }
 
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  const gate = await requireApiUser();
   if (gate.error) return gate.error;
-  const admin = gate.admin!;
+  const profile = gate.profile;
+  const admin = serverAdminClient();
 
   let payload: { inboxMessageId?: string; replyId?: string; body?: string };
   try {
@@ -177,6 +170,11 @@ export async function POST(req: Request) {
       .eq("id", payload.replyId)
       .single();
     if (!reply) return NextResponse.json({ error: "reply not found" }, { status: 404 });
+
+    // Non-admins may only reply to their own leads.
+    if (!profile.isAdmin && !(await leadOwnedBy(reply.lead_id, profile.id))) {
+      return NextResponse.json({ error: "not your reply" }, { status: 403 });
+    }
 
     const isLinkedIn = String(reply.channel || "").startsWith("linkedin");
     let result: SendResult;
@@ -219,6 +217,17 @@ export async function POST(req: Request) {
 
   // Path B: reply to a specific inbox message (from /inbox) — unchanged behavior.
   if (payload.inboxMessageId) {
+    // Non-admins may only answer messages matched to their own leads.
+    if (!profile.isAdmin) {
+      const { data: msg } = await admin
+        .from("inbox_messages")
+        .select("lead_id")
+        .eq("id", payload.inboxMessageId)
+        .maybeSingle();
+      if (!msg || !(await leadOwnedBy(msg.lead_id as string | null, profile.id))) {
+        return NextResponse.json({ error: "not your message" }, { status: 403 });
+      }
+    }
     const result = await sendEmailReply(admin, payload.inboxMessageId, body);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
     return NextResponse.json({ ok: true, messageId: result.messageId, to: result.to });

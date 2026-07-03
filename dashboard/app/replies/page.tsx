@@ -1,3 +1,4 @@
+import { getCurrentProfile } from "@/lib/auth";
 import { getSelectedCampaignId } from "@/lib/campaign-filter";
 import { getReplyRows } from "@/lib/queries";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
@@ -7,19 +8,29 @@ import { RepliesClient, type ScheduledRow } from "./_components/RepliesClient";
 export const dynamic = "force-dynamic";
 
 export default async function RepliesPage() {
-  const campaignId = await getSelectedCampaignId();
-  const rows = await getReplyRows(campaignId);
+  const [campaignId, profile] = await Promise.all([getSelectedCampaignId(), getCurrentProfile()]);
+  const rows = await getReplyRows(campaignId, profile);
 
   // Pending scheduled sends ("reconnect in the fall") — shown so they can be cancelled before firing.
   let scheduled: ScheduledRow[] = [];
   if (dataSource === "supabase") {
     const admin = serverAdminClient();
-    const { data } = await admin
+    // Non-admin: only scheduled sends for their own leads (via the lead join).
+    const uid = profile && !profile.isAdmin ? profile.id : null;
+    let q = admin
       .from("scheduled_replies")
-      .select("id, channel, due_at, body, lead_id")
+      .select("id, channel, due_at, body, lead_id" + (uid ? ", leads!inner(user_id)" : ""))
       .eq("status", "pending")
       .order("due_at", { ascending: true });
-    const pending = data ?? [];
+    if (uid) q = q.eq("leads.user_id", uid);
+    const { data } = await q;
+    const pending = (data ?? []) as unknown as Array<{
+      id: string;
+      channel: string;
+      due_at: string;
+      body: string;
+      lead_id: string | null;
+    }>;
     const leadIds = Array.from(new Set(pending.map((r) => r.lead_id as string).filter(Boolean)));
     const nameById = new Map<string, string | null>();
     if (leadIds.length) {

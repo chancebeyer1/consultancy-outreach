@@ -1,26 +1,19 @@
 import { NextResponse } from "next/server";
 
-import { serverClient } from "@/lib/supabase";
+import { leadOwnedBy, requireApiUser } from "@/lib/auth";
+import { serverAdminClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
 const REGENERATE_URL =
   "https://chanceb323--consultancy-outreach-regenerate-reply.modal.run";
 
-async function requireUser() {
-  const supabase = await serverClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: "not signed in" }, { status: 401 }) };
-  return {};
-}
-
 // Re-draft the suggested reply following an operator instruction (proxies the Modal endpoint,
 // which has the Claude + campaign context). Returns { suggested_reply }.
 export async function POST(req: Request) {
-  const gate = await requireUser();
+  const gate = await requireApiUser();
   if (gate.error) return gate.error;
+  const profile = gate.profile;
 
   let payload: { replyId?: string; instruction?: string };
   try {
@@ -32,6 +25,18 @@ export async function POST(req: Request) {
   const instruction = (payload.instruction || "").trim();
   if (!replyId || !instruction) {
     return NextResponse.json({ error: "replyId + instruction required" }, { status: 400 });
+  }
+
+  // Non-admins may only regenerate suggestions for replies on their own leads.
+  if (!profile.isAdmin) {
+    const { data: reply } = await serverAdminClient()
+      .from("replies")
+      .select("lead_id")
+      .eq("id", replyId)
+      .maybeSingle();
+    if (!reply || !(await leadOwnedBy(reply.lead_id as string | null, profile.id))) {
+      return NextResponse.json({ error: "not your reply" }, { status: 403 });
+    }
   }
 
   const token = process.env.CONTENT_WEBHOOK_TOKEN;

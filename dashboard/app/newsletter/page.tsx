@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/PageHeader";
+import { requireAdmin } from "@/lib/auth";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
 import { NewsletterClient, type Issue } from "./NewsletterClient";
@@ -6,6 +7,7 @@ import { NewsletterClient, type Issue } from "./NewsletterClient";
 export const dynamic = "force-dynamic";
 
 export default async function NewsletterPage() {
+  await requireAdmin();
   let issues: Issue[] = [];
   let subscribers = 0;
   if (dataSource === "supabase") {

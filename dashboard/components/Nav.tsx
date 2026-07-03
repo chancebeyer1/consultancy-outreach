@@ -4,9 +4,10 @@ import { cookies } from "next/headers";
 import { AuthStatus } from "./AuthStatus";
 import { CampaignSelector } from "./CampaignSelector";
 import { NavLinks } from "./NavLinks";
+import { getCurrentProfile } from "../lib/auth";
 import { CAMPAIGN_COOKIE } from "../lib/campaign-filter";
 import { getCampaigns } from "../lib/queries";
-import { dataSource, serverAdminClient, serverClient } from "../lib/supabase";
+import { dataSource } from "../lib/supabase";
 
 const links = [
   { href: "/content", label: "Content" },
@@ -23,6 +24,13 @@ const links = [
   { href: "/activity", label: "Activity" },
 ];
 
+// Simplified surface for non-admin teammates: just their leads and their
+// replies (/drafts and /inbox redirect into these two).
+const memberLinks = [
+  { href: "/leads", label: "Leads" },
+  { href: "/replies", label: "Replies" },
+];
+
 const sourceColor = {
   mock: "text-amber-400",
   file: "text-sky-400",
@@ -30,31 +38,19 @@ const sourceColor = {
 } as const;
 
 export async function Nav() {
-  const [campaigns, cookieStore] = await Promise.all([getCampaigns(), cookies()]);
+  const [profile, cookieStore] = await Promise.all([getCurrentProfile(), cookies()]);
   const selected = cookieStore.get(CAMPAIGN_COOKIE)?.value ?? "all";
 
-  let userEmail: string | null = null;
-  let isAdmin = false;
-  if (dataSource === "supabase") {
-    try {
-      const supabase = await serverClient();
-      const { data } = await supabase.auth.getUser();
-      userEmail = data.user?.email ?? null;
-      if (data.user) {
-        const { data: me } = await serverAdminClient()
-          .from("profiles")
-          .select("is_admin")
-          .eq("id", data.user.id)
-          .single();
-        isAdmin = Boolean(me?.is_admin);
-      }
-    } catch {
-      userEmail = null;
-    }
-  }
+  // Campaigns are scoped to the signed-in user (non-admins only see their own).
+  const campaigns = await getCampaigns(profile);
 
-  // Admins get the Team (invite/onboarding) link; members don't.
-  const navLinks = isAdmin ? [...links, { href: "/team", label: "Team" }] : links;
+  const userEmail = profile?.email ?? null;
+  // Mock/file mode has no auth — treat the local operator as admin (full nav).
+  const isAdmin = dataSource !== "supabase" || Boolean(profile?.isAdmin);
+
+  // Admins get the full nav + the Team (invite/onboarding) link; members get
+  // the simplified two-tab surface.
+  const navLinks = isAdmin ? [...links, { href: "/team", label: "Team" }] : memberLinks;
 
   return (
     <header className="sticky top-0 z-30 border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md">

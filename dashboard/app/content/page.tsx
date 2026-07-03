@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/PageHeader";
+import { requireAdmin } from "@/lib/auth";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
 import { ContentClient, type ContentPost } from "./ContentClient";
@@ -8,6 +9,7 @@ export const dynamic = "force-dynamic";
 export type BlogStats = { count: number; last: string | null; slug: string | null };
 
 export default async function ContentPage() {
+  await requireAdmin();
   let posts: ContentPost[] = [];
   let autoBlog = false;
   let blogStats: BlogStats = { count: 0, last: null, slug: null };

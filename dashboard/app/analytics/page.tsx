@@ -2,10 +2,12 @@ import clsx from "clsx";
 
 import { PageHeader } from "@/components/PageHeader";
 import { getAnalytics, type AnalyticsRow, type Experiment, type VariantStat } from "@/lib/analytics";
+import { requireAdmin } from "@/lib/auth";
 import { getSelectedCampaignId } from "@/lib/campaign-filter";
 import { dataSource } from "@/lib/supabase";
 
 export default async function AnalyticsPage() {
+  await requireAdmin();
   const campaignId = await getSelectedCampaignId();
   const a = await getAnalytics(campaignId);
 
