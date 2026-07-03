@@ -41,6 +41,22 @@ export async function Nav() {
   const [profile, cookieStore] = await Promise.all([getCurrentProfile(), cookies()]);
   const selected = cookieStore.get(CAMPAIGN_COOKIE)?.value ?? "all";
 
+  // Signed out (supabase mode, e.g. rendering /login): brand-only header — no
+  // tabs, no campaign selector (fetching campaigns here would leak names to
+  // logged-out visitors, and tabs would all bounce to /login anyway).
+  if (dataSource === "supabase" && !profile) {
+    return (
+      <header className="sticky top-0 z-30 border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-7xl items-center px-4 sm:px-6">
+          <span className="flex shrink-0 items-center gap-2 font-mono text-sm font-bold tracking-wide text-white">
+            <span className="h-2 w-2 rounded-full bg-sky-400" />
+            OUTREACH
+          </span>
+        </div>
+      </header>
+    );
+  }
+
   // Campaigns are scoped to the signed-in user (non-admins only see their own).
   const campaigns = await getCampaigns(profile);
 

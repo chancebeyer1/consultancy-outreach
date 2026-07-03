@@ -1,12 +1,10 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { browserClient } from "@/lib/supabase-browser";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,12 +19,13 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       // Honor ?next= set by the middleware redirect; fall back to the dashboard home.
+      // HARD navigation on purpose: router.push would serve the client router's
+      // cached pre-auth entry for "/" (the redirect back to /login), stranding the
+      // user on this page. A full load re-runs middleware with the fresh session.
       const next = new URLSearchParams(window.location.search).get("next");
-      router.push(next && next.startsWith("/") ? next : "/");
-      router.refresh();
+      window.location.assign(next && next.startsWith("/") ? next : "/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
-    } finally {
       setBusy(false);
     }
   }

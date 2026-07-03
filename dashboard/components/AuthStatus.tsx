@@ -1,12 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 import { browserClient } from "@/lib/supabase-browser";
 
 export function AuthStatus({ email }: { email: string | null }) {
-  const router = useRouter();
   if (!email) {
     return (
       <a href="/login" className="text-xs text-neutral-400 hover:text-white">
@@ -16,8 +14,9 @@ export function AuthStatus({ email }: { email: string | null }) {
   }
   async function signOut() {
     await browserClient().auth.signOut();
-    router.push("/login");
-    router.refresh();
+    // Hard navigation: router.push would keep serving the cached signed-in Nav
+    // (full admin tab bar) on /login. A full load renders the signed-out header.
+    window.location.assign("/login");
   }
   return (
     <div className="flex items-center gap-2">
