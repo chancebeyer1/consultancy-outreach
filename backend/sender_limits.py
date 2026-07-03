@@ -17,11 +17,13 @@ Both callers ask `quota(channel)` how many more they may send right now, and tre
 `is_invite_limit_error(exc)` as a hard stop (pause the run; don't keep hammering a
 limit that won't clear until the window rolls over).
 
-Caps are LinkedIn-side limits for ONE connected account. LinkedIn's invitation
-limit is fundamentally WEEKLY; the daily caps just smooth the curve so a single day
-can't spike. The numbers below are tuned for a **Sales Navigator / Premium**
-account — LOWER them for a free/basic account (free invites can be as low as
-~5/month).
+Caps are LinkedIn-side limits for ONE connected account, and `quota()` scopes
+LinkedIn channels per account (pass the lead owner's `account_id`; None → the
+global env account). A profile's li_daily_cap / li_weekly_cap override the numbers
+below for that account. LinkedIn's invitation limit is fundamentally WEEKLY; the
+daily caps just smooth the curve so a single day can't spike. The numbers below are
+tuned for a **Sales Navigator / Premium** account — LOWER them for a free/basic
+account (free invites can be as low as ~5/month).
 """
 
 from __future__ import annotations
@@ -60,6 +62,17 @@ WEEKLY_CAPS: dict[str, int] = {
 DEFAULT_DAILY_CAP = 50
 SENT_LEDGER = BACKEND_DIR / "runs" / "sent.jsonl"
 _ACTIVE_SEND_STATUSES = ("queued", "sent", "delivered")
+
+# LinkedIn limits bind per CONNECTED ACCOUNT (each user's own LinkedIn), so these
+# channels' quotas are scoped by the lead owner's unipile_account_id. Email stays
+# global — the mailbox fleet (email_sender's per-box warmup ramp) is the limiter there.
+_LINKEDIN_CHANNELS = frozenset({
+    "linkedin_connect",
+    "linkedin_inmail",
+    "linkedin_dm",
+    "linkedin_followup_1",
+    "linkedin_followup_2",
+})
 
 
 @dataclass(frozen=True)
@@ -125,12 +138,14 @@ def _ids_from_ledger(channel: str, since: datetime) -> set[str]:
     return ids
 
 
-def _ids_from_db(channel: str, since: datetime) -> set[str]:
+def _ids_from_db(channel: str, since: datetime, account_id: str | None = None) -> set[str]:
     """draft_ids sent for `channel` since `since`, from the Postgres `sends` table.
 
-    Returns empty if no DATABASE_URL is configured (local/file mode) or on any DB
-    error — the guard must never block a send because the DB hiccuped; it falls
-    back to whatever the local ledger reported.
+    With `account_id`, only sends whose lead maps to that connected account count
+    (lead owner's profiles.unipile_account_id; unowned leads map to the global env
+    account). Returns empty if no DATABASE_URL is configured (local/file mode) or
+    on any DB error — the guard must never block a send because the DB hiccuped;
+    it falls back to whatever the local ledger reported.
     """
     url = Config.database_url
     if not url:
@@ -142,43 +157,105 @@ def _ids_from_db(channel: str, since: datetime) -> set[str]:
     try:
         with psycopg.connect(url) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    select s.draft_id
-                    from sends s
-                    join drafts d on d.id = s.draft_id
-                    where d.channel = %s
-                      and s.sent_at >= %s
-                      and s.status = any(%s)
-                    """,
-                    (channel, since, list(_ACTIVE_SEND_STATUSES)),
-                )
+                if account_id:
+                    cur.execute(
+                        """
+                        select s.draft_id
+                        from sends s
+                        join drafts d on d.id = s.draft_id
+                        join leads l on l.id = d.lead_id
+                        left join profiles p on p.id = l.user_id
+                        where d.channel = %s
+                          and s.sent_at >= %s
+                          and s.status = any(%s)
+                          and coalesce(p.unipile_account_id, %s) = %s
+                        """,
+                        (channel, since, list(_ACTIVE_SEND_STATUSES),
+                         Config.unipile_linkedin_account_id or "", account_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        select s.draft_id
+                        from sends s
+                        join drafts d on d.id = s.draft_id
+                        where d.channel = %s
+                          and s.sent_at >= %s
+                          and s.status = any(%s)
+                        """,
+                        (channel, since, list(_ACTIVE_SEND_STATUSES)),
+                    )
                 return {str(row[0]) for row in cur.fetchall()}
     except Exception:
         return set()
 
 
-def _count_sent(channel: str, since: datetime) -> int:
-    # Union de-dupes a draft that was recorded in both stores.
-    return len(_ids_from_ledger(channel, since) | _ids_from_db(channel, since))
+def _count_sent(channel: str, since: datetime, account_id: str | None = None) -> int:
+    # Union de-dupes a draft that was recorded in both stores. The local JSONL ledger
+    # has no account link — its sends were all made by the operator's global account,
+    # so it only counts toward that account's quota.
+    db_ids = _ids_from_db(channel, since, account_id)
+    if account_id and account_id != Config.unipile_linkedin_account_id:
+        return len(db_ids)
+    return len(_ids_from_ledger(channel, since) | db_ids)
 
 
-def quota(channel: str, *, now: datetime | None = None) -> Quota:
+def _account_caps(account_id: str) -> tuple[int | None, int | None]:
+    """Per-profile LinkedIn cap overrides (li_daily_cap, li_weekly_cap) for the given
+    connected account. (None, None) when unset, no matching profile, or on any DB
+    error — the global config caps then apply."""
+    url = Config.database_url
+    if not url:
+        return (None, None)
+    try:
+        import psycopg
+    except ImportError:
+        return (None, None)
+    try:
+        with psycopg.connect(url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select li_daily_cap, li_weekly_cap from profiles "
+                    "where unipile_account_id = %s limit 1",
+                    (account_id,),
+                )
+                row = cur.fetchone()
+                return (row[0], row[1]) if row else (None, None)
+    except Exception:
+        return (None, None)
+
+
+def quota(channel: str, *, account_id: str | None = None, now: datetime | None = None) -> Quota:
     """Headroom for `channel` given the trailing 24h + 7d send history.
 
     `allowed` is the smaller of the daily and weekly remaining counts, floored at
     0, so a caller can safely send up to that many right now.
+
+    LinkedIn limits bind per connected ACCOUNT, so for LinkedIn channels pass the
+    sending account's `account_id` (None → the global env account): sends are then
+    counted only for leads owned by that account, and the profile's li_daily_cap /
+    li_weekly_cap override the global caps when set. Email channels ignore
+    `account_id` (mailbox-based limits live in email_sender).
     """
     now = now or _utcnow()
     daily_cap = DAILY_CAPS.get(channel, DEFAULT_DAILY_CAP)
-    daily_sent = _count_sent(channel, now - timedelta(hours=24))
+    weekly_cap = WEEKLY_CAPS.get(channel)
+    acct: str | None = None
+    if channel in _LINKEDIN_CHANNELS:
+        acct = account_id or Config.unipile_linkedin_account_id or None
+        if acct:
+            li_daily, li_weekly = _account_caps(acct)
+            if li_daily is not None:
+                daily_cap = int(li_daily)
+            if li_weekly is not None and weekly_cap is not None:
+                weekly_cap = int(li_weekly)
+    daily_sent = _count_sent(channel, now - timedelta(hours=24), acct)
     daily_left = daily_cap - daily_sent
 
-    weekly_cap = WEEKLY_CAPS.get(channel)
     if weekly_cap is None:
         allowed, binding, weekly_sent = daily_left, "daily", None
     else:
-        weekly_sent = _count_sent(channel, now - timedelta(days=7))
+        weekly_sent = _count_sent(channel, now - timedelta(days=7), acct)
         weekly_left = weekly_cap - weekly_sent
         if daily_left <= weekly_left:
             allowed, binding = daily_left, "daily"

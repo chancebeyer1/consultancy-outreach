@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import time
 from pathlib import Path
 
 from campaigns_loader import load_campaign
@@ -41,7 +42,8 @@ def _connect():
 
 
 def _load_campaigns() -> list:
-    """Fetch all active campaigns from Postgres."""
+    """Fetch all active campaigns from Postgres, plus the owner's Unipile account id
+    (campaigns.user_id → profiles.unipile_account_id; None → the global env account)."""
     try:
         import psycopg
     except ImportError as e:
@@ -51,11 +53,14 @@ def _load_campaigns() -> list:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "select id, slug, search_url, search_params from campaigns "
-                "where status = 'active' and (search_url is not null or search_params is not null)"
+                "select c.id, c.slug, c.search_url, c.search_params, p.unipile_account_id "
+                "from campaigns c "
+                "left join profiles p on p.id = c.user_id "
+                "where c.status = 'active' and (c.search_url is not null or c.search_params is not null)"
             )
             return [
-                {"id": row[0], "slug": row[1], "search_url": row[2], "search_params": row[3]}
+                {"id": row[0], "slug": row[1], "search_url": row[2], "search_params": row[3],
+                 "account_id": row[4]}
                 for row in cur.fetchall()
             ]
     finally:
@@ -116,17 +121,44 @@ def _save_to_ledger(campaign_slug: str, urls: list[str]) -> None:
             f.write(json.dumps({"linkedin_url": url, "sourced_at": datetime.datetime.utcnow().isoformat()}) + "\n")
 
 
+def _alert_search_failure(slug: str, exc: Exception) -> None:
+    """Email the operator when a campaign's people search breaks. A search error here
+    otherwise only lands in summary["skipped"] (a list scan_result never inspects), so a
+    permanent failure — e.g. Unipile 403 feature_not_subscribed on Sales Navigator
+    searches — would silently starve the campaign's queue. Never raises."""
+    try:
+        from alerts import alert
+
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403):
+            summary = f"{slug}: search_people {status} — sourcing broken, campaign queue will starve"
+            detail = (
+                f"{exc}\n\nA {status} does not recover on its own: check the Unipile plan/feature "
+                "gate (e.g. Sales Navigator search requires the feature on the Unipile plan) or "
+                "convert the campaign's search.json to classic format and re-run sync_campaigns."
+            )
+        else:
+            summary = f"{slug}: search_people failed ({type(exc).__name__})"
+            detail = str(exc)
+        alert("replenish", summary, detail)
+    except Exception as e:  # noqa: BLE001 — alerting must never break the run
+        print("replenish search-failure alert failed:", str(e)[:200])
+
+
 def _pull_fresh_leads(
     limit: int,
     seen: set[str],
     *,
+    slug: str = "",
     search_url: str | None = None,
     search_params: dict | None = None,
+    account_id: str | None = None,
     max_pages: int = 20,
 ) -> list[dict]:
     """Page the Unipile people search, deduping against `seen`, until we have `limit`
     fresh leads. Prefers structured `search_params` over a raw `search_url`. search_people
     returns {"items": [already-normalized], "cursor"}, so we paginate via the cursor.
+    `account_id` is the campaign OWNER's connected account (None → the global account).
 
     Unipile's cursor is ephemeral (can't persist across runs like Apollo's page number), so
     each run re-scans from the top and skips anyone already in the DB. max_pages is set deep
@@ -138,10 +170,11 @@ def _pull_fresh_leads(
     while len(fresh) < limit and pages < max_pages:
         try:
             if search_params:
-                page = unipile.search_people(params=search_params, cursor=cursor)
+                page = unipile.search_people(params=search_params, cursor=cursor, account_id=account_id)
             else:
-                page = unipile.search_people(search_url=search_url, cursor=cursor)
+                page = unipile.search_people(search_url=search_url, cursor=cursor, account_id=account_id)
         except Exception as e:  # noqa: BLE001
+            _alert_search_failure(slug, e)
             return fresh if fresh else {"error": f"search failed: {e}", "fetched": 0}
         for item in page.get("items", []):
             url = item.get("linkedin_url")
@@ -158,9 +191,11 @@ def _pull_fresh_leads(
 
 
 def _process_lead(
-    url: str, campaign, skip_score: bool = False, company_domain: str | None = None, lead: dict | None = None
+    url: str, campaign, skip_score: bool = False, company_domain: str | None = None,
+    lead: dict | None = None, account_id: str | None = None,
 ) -> dict | None:
-    """Enrich → score → draft one lead for the campaign. Returns None on error."""
+    """Enrich → score → draft one lead for the campaign. Returns None on error.
+    `account_id` routes the LinkedIn enrichment through the campaign owner's account."""
     import datetime
     from typing import Any
 
@@ -171,7 +206,7 @@ def _process_lead(
         "campaign_slug": campaign.slug,
     }
     try:
-        enrichment = enrich.enrich(url, company_domain=company_domain, lead=lead)
+        enrichment = enrich.enrich(url, company_domain=company_domain, lead=lead, account_id=account_id)
         record["enrichment"] = enrichment
 
         if not skip_score:
@@ -361,8 +396,19 @@ def _ingest_records(records: list[dict]) -> dict:
     }
 
 
-def replenish_all_campaigns(dry_run: bool = False) -> dict:
-    """Main entry point: check all campaigns and auto-replenish as needed."""
+def replenish_all_campaigns(dry_run: bool = False, time_budget_s: float | None = None) -> dict:
+    """Main entry point: check all campaigns and auto-replenish as needed.
+
+    `time_budget_s` soft-caps the run: once exceeded, the current campaign ingests
+    whatever it already processed and the remaining campaigns are deferred to the next
+    tick. Without it, several low queues at once (each lead costs ~30-60s of
+    enrich/score/draft) can outlive the dispatcher's per-job watchdog, which abandons
+    the thread mid-campaign and throws away all un-ingested work."""
+    started = time.monotonic()
+
+    def _out_of_time() -> bool:
+        return time_budget_s is not None and time.monotonic() - started > time_budget_s
+
     campaigns = _load_campaigns()
     if not campaigns:
         return {"campaigns": 0, "replenished": 0}
@@ -383,6 +429,13 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
                 campaign_slug = camp_info["slug"]
                 search_url = camp_info["search_url"]
                 search_params = camp_info["search_params"]
+                account_id = camp_info["account_id"]  # owner's account; None → global
+
+                if _out_of_time():
+                    summary["skipped"].append(
+                        {"slug": campaign_slug, "reason": "time budget exhausted; deferred to next tick"}
+                    )
+                    continue
 
                 # 1. Count messageable queue
                 queue_count = _messageable_count(cur, campaign_id)
@@ -403,7 +456,8 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
                 # 3. Pull fresh leads (skip the sourced ledger AND everyone in the DB)
                 seen = _load_sourced_ledger(campaign_slug) | existing_urls
                 fresh_leads = _pull_fresh_leads(
-                    PULL_LIMIT, seen, search_url=search_url, search_params=search_params
+                    PULL_LIMIT, seen, slug=campaign_slug, search_url=search_url,
+                    search_params=search_params, account_id=account_id,
                 )
 
                 if isinstance(fresh_leads, dict) and "error" in fresh_leads:
@@ -418,9 +472,14 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
                 records = []
                 urls_to_ledger = []
                 for lead_info in fresh_leads:
+                    if _out_of_time():
+                        break  # ingest what's done below; unprocessed leads re-source next tick
                     url = lead_info.get("linkedin_url")
                     if url:
-                        rec = _process_lead(url, campaign, company_domain=lead_info.get("company_domain"), lead=lead_info)
+                        rec = _process_lead(
+                            url, campaign, company_domain=lead_info.get("company_domain"),
+                            lead=lead_info, account_id=account_id,
+                        )
                         if rec:
                             records.append(rec)
                             if rec.get("status") == "ok":
@@ -459,4 +518,5 @@ def replenish_all_campaigns(dry_run: bool = False) -> dict:
     finally:
         conn.close()
 
+    summary["elapsed_s"] = round(time.monotonic() - started, 1)
     return summary

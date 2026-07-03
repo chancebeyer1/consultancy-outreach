@@ -141,13 +141,16 @@ def fetch_profile(
 
 
 @_RETRY
-def fetch_recent_posts(linkedin_url: str, count: int = 10) -> list[dict[str, Any]]:
+def fetch_recent_posts(
+    linkedin_url: str, count: int = 10, *, account_id: str | None = None
+) -> list[dict[str, Any]]:
     """Recent posts/activity.  GET /users/{identifier}/posts?account_id=…
 
-    Returns [] on 404 (profile has no surfaced activity).
+    Returns [] on 404 (profile has no surfaced activity). `account_id` defaults to
+    the global connected account (multi-user passes the lead owner's).
     """
     ident = public_identifier(linkedin_url)
-    params = {"account_id": _li_account(), "limit": count}
+    params = {"account_id": account_id or _li_account(), "limit": count}
     with httpx.Client(timeout=60.0) as c:
         r = c.get(f"{_base()}/users/{ident}/posts", headers=_headers(), params=params)
         if r.status_code == 404:
@@ -301,15 +304,17 @@ def search_posts(keywords: str, *, account_id: str | None = None, cursor: str | 
 
 
 @_RETRY
-def search_parameters(param_type: str, keywords: str, *, limit: int = 10) -> list[dict[str, Any]]:
+def search_parameters(
+    param_type: str, keywords: str, *, limit: int = 10, account_id: str | None = None
+) -> list[dict[str, Any]]:
     """Resolve Sales-Navigator filter IDs by keyword.  GET /linkedin/search/parameters
 
     `param_type` is the filter to resolve — e.g. "INDUSTRY", "LOCATION", "COMPANY",
     "SCHOOL". Returns [{"id", "title"}, …]. Used to turn human names ("Insurance",
     "United States") into the numeric ids the structured people-search body needs
-    for its `industry` / `location` filters.
+    for its `industry` / `location` filters. `account_id` defaults to the global account.
     """
-    q = {"account_id": _li_account(), "type": param_type, "keywords": keywords, "limit": limit}
+    q = {"account_id": account_id or _li_account(), "type": param_type, "keywords": keywords, "limit": limit}
     with httpx.Client(timeout=30.0) as c:
         r = c.get(f"{_base()}/linkedin/search/parameters", headers=_headers(), params=q)
         r.raise_for_status()
@@ -491,13 +496,13 @@ def send_linkedin_inmail(
 
 
 @_RETRY
-def inmail_balance() -> dict[str, Any]:
+def inmail_balance(*, account_id: str | None = None) -> dict[str, Any]:
     """Remaining InMail credits per tier.  GET /linkedin/inmail_balance
 
     Returns {premium, recruiter, sales_navigator} — credit counts or null when
-    that tier isn't active on the account.
+    that tier isn't active on the account. `account_id` defaults to the global account.
     """
-    params = {"account_id": _li_account()}
+    params = {"account_id": account_id or _li_account()}
     with httpx.Client(timeout=30.0) as c:
         r = c.get(f"{_base()}/linkedin/inmail_balance", headers=_headers(), params=params)
         r.raise_for_status()
@@ -505,9 +510,15 @@ def inmail_balance() -> dict[str, Any]:
 
 
 @_RETRY
-def send_chat_message(chat_id: str, text: str) -> dict[str, Any]:
-    """Reply in an existing chat.  POST /chats/{chat_id}/messages (multipart)."""
-    fields = _form({"account_id": _li_account(), "text": text})
+def send_chat_message(
+    chat_id: str, text: str, *, account_id: str | None = None
+) -> dict[str, Any]:
+    """Reply in an existing chat.  POST /chats/{chat_id}/messages (multipart).
+
+    `account_id` must be the account the chat lives on (defaults to the global
+    account; multi-user passes the lead owner's).
+    """
+    fields = _form({"account_id": account_id or _li_account(), "text": text})
     with httpx.Client(timeout=60.0) as c:
         r = c.post(f"{_base()}/chats/{chat_id}/messages", headers=_headers(), files=fields)
         r.raise_for_status()
@@ -588,14 +599,17 @@ def send_email(
 # ---------------------------------------------------------------------------
 
 @_RETRY
-def list_chats(*, unread_only: bool = True, limit: int = 100) -> list[dict[str, Any]]:
+def list_chats(
+    *, unread_only: bool = True, limit: int = 100, account_id: str | None = None
+) -> list[dict[str, Any]]:
     """LinkedIn chats.  GET /chats?account_id=&account_type=LINKEDIN&unread=
 
     Each chat: {id, account_id, account_type, provider_id, name, timestamp,
-    unread_count, …}.
+    unread_count, …}. `account_id` selects whose inbox to list (defaults to the
+    global account).
     """
     params: dict[str, Any] = {
-        "account_id": _li_account(),
+        "account_id": account_id or _li_account(),
         "account_type": "LINKEDIN",
         "limit": limit,
     }
@@ -624,13 +638,16 @@ def list_chat_messages(chat_id: str, *, limit: int = 100) -> list[dict[str, Any]
 
 
 @_RETRY
-def list_emails(*, role: str = "inbox", limit: int = 100) -> list[dict[str, Any]]:
+def list_emails(
+    *, role: str = "inbox", limit: int = 100, account_id: str | None = None
+) -> list[dict[str, Any]]:
     """GET /emails?account_id=&role=inbox
 
     Each email: {id, from_attendee:{identifier,display_name}, subject, body,
-    body_plain, date, read_date (null ⇒ unread), …}.
+    body_plain, date, read_date (null ⇒ unread), …}. `account_id` selects which
+    connected mailbox to list (defaults to the global email account).
     """
-    params = {"account_id": _email_account(), "role": role, "limit": limit}
+    params = {"account_id": account_id or _email_account(), "role": role, "limit": limit}
     with httpx.Client(timeout=30.0) as c:
         r = c.get(f"{_base()}/emails", headers=_headers(), params=params)
         r.raise_for_status()

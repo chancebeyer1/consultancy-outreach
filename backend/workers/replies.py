@@ -127,14 +127,16 @@ def _linkedin_replies(
     unread_only: bool,
     known_provider_ids: set[str] = frozenset(),
     known_urls: set[str] = frozenset(),
+    account_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Scan LinkedIn chats; classify inbound messages from leads we contacted.
 
     Chats whose sender isn't a known lead are skipped BEFORE any LLM call or extra
-    API fetch — so the operator's normal inbox costs nothing.
+    API fetch — so the operator's normal inbox costs nothing. `account_id` selects
+    whose LinkedIn inbox to scan (None → the global env account).
     """
     records: list[dict[str, Any]] = []
-    chats = unipile.list_chats(unread_only=unread_only, limit=limit)
+    chats = unipile.list_chats(unread_only=unread_only, limit=limit, account_id=account_id)
     for chat in chats:
         chat_id = str(chat.get("id") or chat.get("chat_id") or "")
         if not chat_id:
@@ -175,10 +177,13 @@ def _linkedin_replies(
     return records
 
 
-def _email_replies(seen: set[str], limit: int, unread_only: bool) -> list[dict[str, Any]]:
-    """Scan the email inbox; classify inbound emails we haven't seen."""
+def _email_replies(
+    seen: set[str], limit: int, unread_only: bool, email_account_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Scan the email inbox; classify inbound emails we haven't seen. `email_account_id`
+    selects which connected mailbox to scan (None → the global env mailbox)."""
     records: list[dict[str, Any]] = []
-    emails = unipile.list_emails(role="inbox", limit=limit)
+    emails = unipile.list_emails(role="inbox", limit=limit, account_id=email_account_id)
     for email in emails:
         if unread_only and email.get("read_date"):
             continue
@@ -206,6 +211,9 @@ def fetch_and_classify_new_replies(
     limit: int = 100,
     only_with_unread: bool = True,
     campaign_id: str | None = None,  # noqa: ARG001 — kept for caller back-compat (Unipile has no campaigns)
+    account_id: str | None = None,
+    email_account_id: str | None = None,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Poll Unipile (LinkedIn + email); classify inbound messages we haven't seen.
 
@@ -218,6 +226,14 @@ def fetch_and_classify_new_replies(
     campaign_id:
         Unused (Unipile has no campaign concept); accepted so existing callers
         don't break.
+    account_id, email_account_id:
+        Which connected LinkedIn account / mailbox to poll. Both None → the global
+        env accounts (today's single-user behavior). In per-account mode
+        (account_id set), email is only polled when email_account_id is explicit —
+        otherwise every account's pass would re-scan the one global mailbox.
+    user_id:
+        Scope lead matching to this owner's leads (plus unowned ones). None → all
+        leads, the current behavior.
 
     Returns
     -------
@@ -228,11 +244,14 @@ def fetch_and_classify_new_replies(
     # people we've actually contacted — not the operator's whole inbox.
     from workers.replies_db import known_lead_keys
 
-    known_provider_ids, known_urls = known_lead_keys()
+    known_provider_ids, known_urls = known_lead_keys(user_id=user_id)
 
     records: list[dict[str, Any]] = []
-    records.extend(_linkedin_replies(seen, limit, only_with_unread, known_provider_ids, known_urls))
+    records.extend(
+        _linkedin_replies(seen, limit, only_with_unread, known_provider_ids, known_urls, account_id)
+    )
     # Email is optional — only poll the inbox when a mailbox is connected in Unipile.
-    if Config.unipile_email_account_id:
-        records.extend(_email_replies(seen, limit, only_with_unread))
+    email_acct = email_account_id or (Config.unipile_email_account_id if account_id is None else None)
+    if email_acct:
+        records.extend(_email_replies(seen, limit, only_with_unread, email_account_id=email_acct))
     return records

@@ -23,7 +23,7 @@ import psycopg
 
 from campaigns_loader import load_campaign
 from clients import smtp_email
-from config import require
+from config import Config, require
 from workers import email_sender, reply_triage
 
 # Subject/sender markers for machine-generated mail we never alert on.
@@ -348,9 +348,26 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 except Exception:  # noqa: BLE001
                     pass
 
-    # 3. Alert on every (human, matched) reply, sent from a Maildoso box.
+    # 3. Alert on every (human, matched) reply, sent from a Maildoso box. Multi-user: the
+    # lead OWNER (leads.user_id → profiles.email) gets the ping, and the admin NOTIFY_EMAIL
+    # always does too (deduped when they're the same; owner lookup is best-effort).
     notified = 0
     if notify_alerts and not dry_run:
+        owner_emails: dict[str, str] = {}
+        lead_ids = [r["lead_id"] for r in new_replies if r.get("lead_id")]
+        if lead_ids:
+            try:
+                with _connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "select l.id, p.email from leads l "
+                            "join profiles p on p.id = l.user_id "
+                            "where l.id = any(%s::uuid[]) and p.email is not null",
+                            (lead_ids,),
+                        )
+                        owner_emails = {str(lid): em for lid, em in cur.fetchall()}
+            except Exception:  # noqa: BLE001 — owner lookup failing must not kill the alerts
+                owner_emails = {}
         for r in new_replies:
             body = (
                 f"From: {r['from_email']}\n"
@@ -359,11 +376,19 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 f"{r['body'][:1500]}\n\n"
                 f"— open the unibox to reply."
             )
-            try:
-                if email_sender.notify(subject=f"New reply from {r['lead_name'] or r['from_email']}", body=body).get("sent"):
-                    notified += 1
-            except Exception as e:  # noqa: BLE001
-                errors.append({"notify": r["from_email"], "error": str(e)[:160]})
+            pinged: set[str] = set()
+            for dest in (owner_emails.get(r.get("lead_id") or ""), Config.notify_email or None):
+                if not dest or dest.lower() in pinged:
+                    continue
+                pinged.add(dest.lower())
+                try:
+                    if email_sender.notify(
+                        subject=f"New reply from {r['lead_name'] or r['from_email']}",
+                        body=body, to_email=dest,
+                    ).get("sent"):
+                        notified += 1
+                except Exception as e:  # noqa: BLE001
+                    errors.append({"notify": r["from_email"], "error": str(e)[:160]})
 
     return {
         "boxes_polled": len(boxes),

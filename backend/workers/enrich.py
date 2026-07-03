@@ -108,14 +108,16 @@ def _company_name(profile: dict[str, Any]) -> str | None:
 
 
 def enrich(
-    linkedin_url: str, company_domain: str | None = None, lead: dict[str, Any] | None = None
+    linkedin_url: str, company_domain: str | None = None, lead: dict[str, Any] | None = None,
+    account_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the full enrichment pipeline for one LinkedIn URL.
 
     Returns a dict with: profile (normalized), recent_posts, company_signals (incl. the company
     website text — the richest hook source for owner-operators who don't post). Any field that
     fails or is unavailable is set to None / empty. `lead` is the optional source row (Apollo
-    fields) used as a profile fallback when Unipile can't fetch.
+    fields) used as a profile fallback when Unipile can't fetch. `account_id` routes the LinkedIn
+    lookups through the lead OWNER's connected account (None → the global env account).
     """
     out: dict[str, Any] = {
         "linkedin_url": linkedin_url,
@@ -128,14 +130,14 @@ def enrich(
     #    NOT kill the lead: the company website is the primary hook source now, so on failure we fall
     #    back to a minimal profile from the source lead fields and carry on.
     try:
-        out["profile"] = _normalize_profile(unipile.fetch_profile(linkedin_url))
+        out["profile"] = _normalize_profile(unipile.fetch_profile(linkedin_url, account_id=account_id))
     except Exception as e:  # noqa: BLE001
         out["profile_error"] = str(e)[:200]
         out["profile"] = _profile_from_lead(lead)
 
     # 2. Recent posts (nice-to-have; owner/operator ICPs rarely post, and the endpoint often 422s)
     try:
-        out["recent_posts"] = unipile.fetch_recent_posts(linkedin_url, count=10)
+        out["recent_posts"] = unipile.fetch_recent_posts(linkedin_url, count=10, account_id=account_id)
     except Exception as e:  # noqa: BLE001
         out["recent_posts_error"] = str(e)
 

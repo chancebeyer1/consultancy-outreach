@@ -106,6 +106,9 @@ def _read_campaign_dir(folder: Path) -> dict | None:
         "inmail_min_fit": meta.get("inmail_min_fit"),
         "is_default": bool(meta.get("is_default", False)),
         "status": meta.get("status") or "active",
+        # Multi-user: owner_email → profiles.email → campaigns.user_id at sync time.
+        # Omitted → user_id is left untouched (rows keep their backfilled owner).
+        "owner_email": meta.get("owner_email"),
     }
 
 
@@ -198,6 +201,25 @@ def main(
                             (c["slug"], *vals(c), False),
                         )
                         inserted += 1
+
+                # Ownership: campaigns declaring owner_email get user_id from that
+                # profile; unresolved emails warn loudly (campaign stays unowned →
+                # invisible to the intended non-admin user until fixed).
+                for c in campaigns:
+                    if not c["owner_email"]:
+                        continue
+                    cur.execute(
+                        "update campaigns set user_id = "
+                        "(select id from profiles where email = %s) where slug = %s "
+                        "returning user_id",
+                        (c["owner_email"], c["slug"]),
+                    )
+                    row = cur.fetchone()
+                    if not row or row[0] is None:
+                        console.print(
+                            f"[yellow]owner_email '{c['owner_email']}' on "
+                            f"'{c['slug']}' matches no profile — user_id set NULL.[/yellow]"
+                        )
 
                 # Enforce exactly one default (partial unique index). Clear first,
                 # then set — two statements so the index never sees two trues.

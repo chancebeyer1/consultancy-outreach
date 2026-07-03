@@ -419,15 +419,17 @@ def send_approved_first_touch(
     blocked_no_recipient: list[str] = []
     failed: list[dict[str, Any]] = []
     fell_back: list[str] = []
-    remaining: dict[str, int] = {}
+    # LinkedIn quotas bind per connected account, so headroom is keyed (channel, account).
+    remaining: dict[tuple[str, str | None], int] = {}
     blocked_fairness: list[str] = []
     blocked_cooldown: list[str] = []
     connects_sent = 0  # per-run pacing for connection requests (avoid one daily burst)
 
-    def _has_quota(channel: str) -> bool:
-        if channel not in remaining:
-            remaining[channel] = quota(channel).allowed
-        return remaining[channel] > 0
+    def _has_quota(channel: str, account_id: str | None) -> bool:
+        key = (channel, account_id)
+        if key not in remaining:
+            remaining[key] = quota(channel, account_id=account_id).allowed
+        return remaining[key] > 0
 
     # Cross-run cooldown: after a LinkedIn 422 "temporary provider limit" we back off
     # for hours so the every-47-min cron stops re-poking LinkedIn (which prolongs the
@@ -534,7 +536,7 @@ def send_approved_first_touch(
             blocked_cooldown.append(str(lead_id))
             continue
 
-        if not _has_quota(send_channel):
+        if not _has_quota(send_channel, acct):
             blocked_quota.append(str(lead_id))
             continue
 
@@ -552,7 +554,7 @@ def send_approved_first_touch(
                 sent_channel=send_channel if fell else None,
                 sent_body=send_body if fell else None,
             )
-            remaining[send_channel] -= 1
+            remaining[(send_channel, acct)] -= 1
             cam_run[(campaign_id, send_channel)] = cam_run.get((campaign_id, send_channel), 0) + 1
             if send_channel == "linkedin_connect":
                 connects_sent += 1
@@ -572,7 +574,7 @@ def send_approved_first_touch(
             if is_invite_limit_error(e):
                 # LinkedIn temporary provider limit — stop this channel for this run
                 # AND for the next several hours (so the cron stops re-poking it).
-                remaining[send_channel] = 0
+                remaining[(send_channel, acct)] = 0
                 cooled[send_channel] = True
                 cooldown_trip(send_channel, reason=str(e)[:280])
                 blocked_cooldown.append(str(lead_id))
@@ -634,7 +636,8 @@ def _send_accepted_dms(*, dry_run: bool = False, limit: int | None = None) -> di
     sent: list[str] = []
     blocked: list[str] = []
     failed: list[dict[str, Any]] = []
-    remaining: dict[str, int] = {}
+    # DM quota is per connected account (the lead owner's), so key headroom by account.
+    remaining: dict[str | None, int] = {}
 
     for draft_id, lead_id, body, edited_body, url, acct in rows:
         if not url:
@@ -642,9 +645,9 @@ def _send_accepted_dms(*, dry_run: bool = False, limit: int | None = None) -> di
         if dry_run:
             sent.append(str(lead_id))
             continue
-        if "linkedin_dm" not in remaining:
-            remaining["linkedin_dm"] = quota("linkedin_dm").allowed
-        if remaining["linkedin_dm"] <= 0:
+        if acct not in remaining:
+            remaining[acct] = quota("linkedin_dm", account_id=acct).allowed
+        if remaining[acct] <= 0:
             blocked.append(str(lead_id))
             continue
         try:
@@ -653,7 +656,7 @@ def _send_accepted_dms(*, dry_run: bool = False, limit: int | None = None) -> di
                 {"id": str(draft_id), "body": edited_body or body}, "linkedin_dm",
             )
             _record_send(str(draft_id), resp)
-            remaining["linkedin_dm"] -= 1
+            remaining[acct] -= 1
             sent.append(str(lead_id))
         except Exception as e:  # noqa: BLE001
             failed.append({"lead_id": str(lead_id), "error": str(e)[:160]})
@@ -780,14 +783,16 @@ def progress_sequences(
         }
 
     # Per-channel rolling-window budget, shared with scripts/send_approvals.py via
-    # sender_limits. Computed once per channel from the trailing 24h/7d send history,
-    # then decremented as we send so a single cron tick can't blow past the cap.
-    remaining: dict[str, int] = {}
+    # sender_limits. Computed once per (channel, account) from the trailing 24h/7d send
+    # history — LinkedIn caps bind per connected account — then decremented as we send
+    # so a single cron tick can't blow past the cap.
+    remaining: dict[tuple[str, str | None], int] = {}
 
-    def _has_quota(channel: str) -> bool:
-        if channel not in remaining:
-            remaining[channel] = quota(channel).allowed
-        return remaining[channel] > 0
+    def _has_quota(channel: str, account_id: str | None) -> bool:
+        key = (channel, account_id)
+        if key not in remaining:
+            remaining[key] = quota(channel, account_id=account_id).allowed
+        return remaining[key] > 0
 
     # One DB session for the read-side; writes still spawn their own
     # connections so each send commits independently.
@@ -842,14 +847,15 @@ def progress_sequences(
                 continue
 
             # Rolling-window safety cap (Unipile doesn't enforce LinkedIn's limits).
-            if not _has_quota(a.next_channel):
+            acct = lead.get("account_id")
+            if not _has_quota(a.next_channel, acct):
                 blocked_quota.append(a.lead_id)
                 continue
 
             try:
                 response = _send_via_unipile(lead, draft, a.next_channel)
                 _record_send(draft["id"], response)
-                remaining[a.next_channel] -= 1
+                remaining[(a.next_channel, acct)] -= 1
                 pushed.append(
                     {"lead_id": a.lead_id, "channel": a.next_channel, "draft_id": draft["id"]}
                 )
@@ -857,7 +863,7 @@ def progress_sequences(
                 if is_invite_limit_error(e):
                     # LinkedIn's weekly invite ceiling — stop attempting this channel
                     # for the rest of the tick; it won't clear until the window rolls.
-                    remaining[a.next_channel] = 0
+                    remaining[(a.next_channel, acct)] = 0
                     blocked_quota.append(a.lead_id)
                     continue
                 failed.append({"lead_id": a.lead_id, "error": str(e)})

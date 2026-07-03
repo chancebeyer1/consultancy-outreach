@@ -1,0 +1,26 @@
+# RE Sphere Reactivation — the brother's campaign #2: warm re-touches to people who
+# already know him (past clients, friends, contacts). Referrals-from-sphere is the #1
+# lead source for agents; this just works it systematically. NO sourcing config on
+# purpose — leads come from his contact CSV via run_pipeline / manual import, never
+# from cold search. Voice/style overrides shared with re-referral-partners.
+#
+# PAUSED until his contact CSV arrives:
+#   1. import it: uv run python -m scripts.run_pipeline contacts.csv --campaign re-sphere-reactivation
+#   2. flip status to "active" and re-sync
+#
+# Email channel: intentionally OFF until his own mailbox (e.g. Gmail) is connected in
+# Unipile and added to `mailboxes` with his user_id — sphere email must come from HIS
+# real address, never the cold-outreach boxes. Then add "email" to channels.
+
+name = "RE Sphere Reactivation"
+slug = "re-sphere-reactivation"
+is_default = false
+status = "paused"
+
+owner_email = "tannerbuyhomes@gmail.com"
+
+# Every sphere message gets his eyes before it sends. These are people he knows —
+# a wrong note here costs a friendship, not a stranger's ignore.
+auto_send = false
+
+channels = ["linkedin_connect", "linkedin_dm"]

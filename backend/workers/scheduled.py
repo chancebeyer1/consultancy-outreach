@@ -64,9 +64,11 @@ def send_due_scheduled(*, dry_run: bool = False, limit: int = 50) -> dict[str, A
             cur.execute(
                 """
                 select s.id, s.channel, s.chat_id, s.provider_id, s.body,
-                       l.email, l.linkedin_url, l.provider_id
+                       l.email, l.linkedin_url, l.provider_id,
+                       p.unipile_account_id
                 from scheduled_replies s
                 join leads l on l.id = s.lead_id
+                left join profiles p on p.id = l.user_id
                 where s.status = 'pending' and s.due_at <= now()
                 order by s.due_at asc
                 limit %s
@@ -78,20 +80,21 @@ def send_due_scheduled(*, dry_run: bool = False, limit: int = 50) -> dict[str, A
         conn.close()
 
     sent = failed = 0
-    for sid, channel, chat_id, provider_id, body, email, linkedin_url, lead_pid in rows:
+    for sid, channel, chat_id, provider_id, body, email, linkedin_url, lead_pid, acct in rows:
         if dry_run:
             continue
         try:
             if str(channel or "").startswith("linkedin"):
+                # acct = lead owner's connected account (multi-user); None → env global
                 if chat_id:
-                    unipile.send_chat_message(chat_id, body)
+                    unipile.send_chat_message(chat_id, body, account_id=acct)
                 else:
                     pid = provider_id or lead_pid
                     if not pid and linkedin_url:
-                        pid = unipile.resolve_provider_id(linkedin_url)
+                        pid = unipile.resolve_provider_id(linkedin_url, account_id=acct)
                     if not pid:
                         raise RuntimeError("no LinkedIn send target")
-                    unipile.send_linkedin_message(pid, body)
+                    unipile.send_linkedin_message(pid, body, account_id=acct)
             else:
                 if not email:
                     raise RuntimeError("lead has no email")

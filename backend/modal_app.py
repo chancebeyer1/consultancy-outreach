@@ -185,7 +185,7 @@ def progress_sequences_cron() -> dict:
 
 @app.function(
     secrets=secrets,
-    timeout=1200,
+    timeout=1500,  # matches the dispatcher's per-job cap for this bulk job
     retries=1,
 )
 def replenish_queue_cron() -> dict:
@@ -201,7 +201,9 @@ def replenish_queue_cron() -> dict:
     """
     from workers.replenish import replenish_all_campaigns
 
-    linkedin = replenish_all_campaigns(dry_run=False)
+    # Soft cap: several low queues at once (~30-60s of enrich/score/draft per lead) must not
+    # outlive the dispatcher's per-job watchdog — remaining campaigns defer to the next tick.
+    linkedin = replenish_all_campaigns(dry_run=False, time_budget_s=600)
     # Same tick also sources EMAIL leads from Apollo (search -> score -> reveal -> verify ->
     # draft) for campaigns with apollo_params. Wrapped so a failure never aborts LinkedIn.
     try:
@@ -510,6 +512,45 @@ def content_webhook(request_body: dict, x_content_token: str | None = None) -> d
 
 @app.function(secrets=secrets, timeout=45)
 @modal.fastapi_endpoint(method="POST")
+def _lead_account(provider_id: str | None = None, chat_id: str | None = None) -> str | None:
+    """The lead owner's Unipile LinkedIn account, resolved via leads.provider_id or a
+    reply's chat_id. None → caller falls back to the env-global account. Best-effort:
+    any lookup failure returns None rather than blocking a human-initiated reply."""
+    try:
+        import psycopg
+
+        from config import Config
+
+        if not Config.database_url:
+            return None
+        with psycopg.connect(Config.database_url) as conn:
+            with conn.cursor() as cur:
+                if provider_id:
+                    cur.execute(
+                        "select p.unipile_account_id from leads l "
+                        "join profiles p on p.id = l.user_id "
+                        "where l.provider_id = %s and p.unipile_account_id is not null limit 1",
+                        (provider_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return row[0]
+                if chat_id:
+                    cur.execute(
+                        "select p.unipile_account_id from replies r "
+                        "join leads l on l.id = r.lead_id "
+                        "join profiles p on p.id = l.user_id "
+                        "where r.chat_id = %s and p.unipile_account_id is not null limit 1",
+                        (chat_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return row[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def linkedin_thread(request_body: dict) -> dict:
     """Read-only: fetch a LinkedIn conversation thread for the dashboard Replies page.
 
@@ -529,10 +570,11 @@ def linkedin_thread(request_body: dict) -> dict:
 
     chat_id = request_body.get("chat_id")
     provider_id = request_body.get("provider_id")
+    account_id = _lead_account(provider_id=provider_id, chat_id=chat_id)
     if not chat_id and provider_id:
         # The member id lives in attendee_provider_id; a chat's own provider_id is a different
-        # "2-…" id, so match the attendee first.
-        for chat in unipile.list_chats(unread_only=False, limit=100):
+        # "2-…" id, so match the attendee first — on the lead OWNER's account.
+        for chat in unipile.list_chats(unread_only=False, limit=100, account_id=account_id):
             if provider_id in (chat.get("attendee_provider_id"), chat.get("provider_id")):
                 chat_id = str(chat.get("id") or chat.get("chat_id") or "")
                 break
@@ -575,15 +617,17 @@ def linkedin_reply(request_body: dict) -> dict:
     chat_id = request_body.get("chat_id")
     provider_id = request_body.get("provider_id")
     linkedin_url = request_body.get("linkedin_url")
+    # Send from the lead OWNER's connected account (multi-user); None → env global.
+    account_id = _lead_account(provider_id=provider_id, chat_id=chat_id)
     try:
         if chat_id:
-            resp = unipile.send_chat_message(chat_id, text)
+            resp = unipile.send_chat_message(chat_id, text, account_id=account_id)
         else:
             if not provider_id and linkedin_url:
-                provider_id = unipile.resolve_provider_id(linkedin_url)
+                provider_id = unipile.resolve_provider_id(linkedin_url, account_id=account_id)
             if not provider_id:
                 raise HTTPException(status_code=400, detail="no chat_id / provider_id / linkedin_url")
-            resp = unipile.send_linkedin_message(provider_id, text)
+            resp = unipile.send_linkedin_message(provider_id, text, account_id=account_id)
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
@@ -1124,17 +1168,21 @@ def hourly_dispatcher() -> dict:
     via `_logged`. The comment pacer runs last and self-gates on timing, so most
     ticks it's a no-op.
     """
+    # replenish_queue is the one legitimately-bulk job (sourcing + enrich/score/draft for
+    # every low campaign queue, plus the Apollo email leg) — it gets a higher cap; its
+    # LinkedIn leg additionally self-limits via time_budget_s so slow ticks defer work
+    # instead of being abandoned mid-campaign.
     jobs = (
-        ("pull_replies", pull_replies_cron),
-        ("detect_connections", detect_connections_cron),
-        ("progress_sequences", progress_sequences_cron),
-        ("replenish_queue", replenish_queue_cron),
-        ("send_approved", send_approved_cron),
-        ("dispatch_comments", dispatch_comments_cron),
+        ("pull_replies", pull_replies_cron, 600),
+        ("detect_connections", detect_connections_cron, 600),
+        ("progress_sequences", progress_sequences_cron, 600),
+        ("replenish_queue", replenish_queue_cron, 1500),
+        ("send_approved", send_approved_cron, 600),
+        ("dispatch_comments", dispatch_comments_cron, 600),
     )
     results: dict = {}
-    for name, fn in jobs:
-        results[name] = _run_job(name, fn)
+    for name, fn, cap in jobs:
+        results[name] = _run_job(name, fn, timeout=cap)
     return _logged("cron_dispatcher", results)
 
 
@@ -1149,22 +1197,85 @@ def pull_replies_now(limit: int = 100, include_read: bool = False) -> dict:
     return _pull_replies_impl(limit=limit, only_with_unread=not include_read)
 
 
+def _reply_accounts() -> list[dict]:
+    """The connected LinkedIn accounts to pull replies for, one entry each.
+
+    One entry per distinct profiles.unipile_account_id, plus the env-global account
+    exactly once (deduped when a profile already carries it — the owner's does).
+    user_id scopes lead matching to that owner (None → all leads); the global email
+    mailbox rides with the env-global LinkedIn account so it's polled exactly once.
+    """
+    from config import Config
+
+    targets: list[dict] = []
+    seen_accounts: set[str] = set()
+    rows: list = []
+    if Config.database_url:
+        try:
+            import psycopg
+
+            with psycopg.connect(Config.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select id, unipile_account_id, unipile_email_account_id "
+                        "from profiles where unipile_account_id is not null"
+                    )
+                    rows = cur.fetchall()
+        except Exception:  # noqa: BLE001 — a profiles hiccup must not stop the global pull
+            rows = []
+    for uid, acct, email_acct in rows:
+        if acct in seen_accounts:
+            continue
+        seen_accounts.add(acct)
+        targets.append({"user_id": str(uid), "account_id": acct, "email_account_id": email_acct})
+
+    global_acct = Config.unipile_linkedin_account_id
+    if global_acct and global_acct not in seen_accounts:
+        targets.append({"user_id": None, "account_id": global_acct, "email_account_id": None})
+    # The env mailbox belongs to the operator's (env-global) LinkedIn account.
+    for t in targets:
+        if t["account_id"] == global_acct and not t["email_account_id"]:
+            t["email_account_id"] = Config.unipile_email_account_id or None
+    if not targets:  # no profiles + no env account id — legacy single-account behavior
+        targets.append({"user_id": None, "account_id": None, "email_account_id": None})
+    return targets
+
+
 def _pull_replies_impl(*, limit: int, only_with_unread: bool) -> dict:
-    """Shared body — runs inside the Modal container, so backend/* is on path."""
+    """Shared body — runs inside the Modal container, so backend/* is on path.
+
+    Loops every connected account (see _reply_accounts) so each user's LinkedIn
+    inbox + mailbox is pulled with lead matching scoped to their own leads. One
+    account erroring doesn't block the others.
+    """
     from workers.replies import fetch_and_classify_new_replies
     from workers.replies_db import existing_external_ids, insert_replies
 
     seen = existing_external_ids(limit=5000)
-    new_records = fetch_and_classify_new_replies(
-        seen_message_ids=seen,
-        limit=limit,
-        only_with_unread=only_with_unread,
-    )
+    new_records: list[dict] = []
+    per_account: dict[str, int | str] = {}
+    for t in _reply_accounts():
+        key = t["account_id"] or "global"
+        try:
+            recs = fetch_and_classify_new_replies(
+                seen_message_ids=seen,
+                limit=limit,
+                only_with_unread=only_with_unread,
+                account_id=t["account_id"],
+                email_account_id=t["email_account_id"],
+                user_id=t["user_id"],
+            )
+        except Exception as e:  # noqa: BLE001 — one broken account must not starve the rest
+            per_account[key] = f"error: {str(e)[:160]}"
+            continue
+        seen |= {r["message_id"] for r in recs if r.get("message_id")}
+        new_records.extend(recs)
+        per_account[key] = len(recs)
     if not new_records:
-        return {"new_records": 0, "inserted": 0}
+        return {"new_records": 0, "inserted": 0, "per_account": per_account}
 
     counts = insert_replies(new_records)
-    return {"new_records": len(new_records), **counts}
+    return {"new_records": len(new_records), "per_account": per_account, **counts}
 
 
 # ---------------------------------------------------------------------------
@@ -1283,8 +1394,32 @@ def unipile_webhook(request_body: dict, x_unipile_secret: str | None = None) -> 
             return {"ok": True, "skipped": "empty body"}
         sender = request_body.get("sender") or {}
         provider_id = sender.get("attendee_provider_id") or sender.get("provider_id")
+        # Multi-account: the payload's account_id says WHOSE connected account received
+        # the message — scope lead matching to that owner's leads. An unknown/unmapped
+        # account_id logs and falls back to global matching (never drop a message).
+        acct = request_body.get("account_id")
+        user_id: str | None = None
+        if acct:
+            try:
+                import psycopg
+
+                from config import Config
+
+                if Config.database_url:
+                    with psycopg.connect(Config.database_url) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "select id from profiles where unipile_account_id = %s limit 1",
+                                (str(acct),),
+                            )
+                            row = cur.fetchone()
+                            user_id = str(row[0]) if row else None
+                if user_id is None and str(acct) != Config.unipile_linkedin_account_id:
+                    print(f"unipile_webhook: unknown account_id {str(acct)[:40]!r} — global lead matching")
+            except Exception:  # noqa: BLE001 — routing lookup must never drop a message
+                user_id = None
         # Skip messages from people we haven't contacted — no LLM call on inbox noise.
-        if provider_id and not is_known_lead(provider_id=provider_id):
+        if provider_id and not is_known_lead(provider_id=provider_id, user_id=user_id):
             return {"ok": True, "skipped": "not a tracked lead"}
         record = classify_message(
             channel="linkedin_dm",

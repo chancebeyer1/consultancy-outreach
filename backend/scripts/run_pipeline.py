@@ -115,15 +115,45 @@ VALID_TRIGGERS = {
 }
 
 
+def _campaign_account_id(campaign: Campaign) -> str | None:
+    """The campaign OWNER's Unipile LinkedIn account id (campaigns.user_id → profiles).
+
+    Best-effort: returns None (→ the global env account) when there's no DATABASE_URL,
+    psycopg isn't installed, or the campaign has no owner / connected account — so the
+    local CLI keeps working without a DB.
+    """
+    from config import Config
+
+    if not Config.database_url:
+        return None
+    try:
+        import psycopg
+
+        with psycopg.connect(Config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select p.unipile_account_id from campaigns c "
+                    "join profiles p on p.id = c.user_id "
+                    "where c.slug = %s limit 1",
+                    (campaign.slug,),
+                )
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
+    except Exception:  # noqa: BLE001 — owner lookup must never block a local run
+        return None
+
+
 def _process_one(
     url: str,
     *,
     skip_score: bool,
     trigger: str = "list",
     campaign: Campaign | None = None,
+    account_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline for one URL. Catches its own exceptions so
-    one failed lead doesn't kill the whole run."""
+    one failed lead doesn't kill the whole run. `account_id` routes LinkedIn
+    enrichment through the campaign owner's connected account (None → global)."""
     record: dict[str, Any] = {
         "linkedin_url": url,
         "processed_at": datetime.datetime.utcnow().isoformat() + "Z",
@@ -131,7 +161,7 @@ def _process_one(
         "campaign_slug": campaign.slug if campaign else None,
     }
     try:
-        enrichment = enrich.enrich(url)
+        enrichment = enrich.enrich(url, account_id=account_id)
         record["enrichment"] = enrichment
 
         if not skip_score:
@@ -278,6 +308,9 @@ def main(
     console.print(
         f"[dim]Campaign: [bold]{active_campaign.name}[/bold] ({active_campaign.slug})[/dim]"
     )
+    # Resolve the campaign owner's connected account once; every enrichment in the run
+    # goes through it (None → the global env account, i.e. today's behavior).
+    account_id = _campaign_account_id(active_campaign)
 
     out_path = out or Path("runs") / f"{datetime.date.today().isoformat()}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -316,6 +349,7 @@ def main(
                     skip_score=skip_score,
                     trigger=trigger,
                     campaign=active_campaign,
+                    account_id=account_id,
                 ): u
                 for u in urls
             }
