@@ -28,6 +28,11 @@ One or two short sentences. Pattern:
 
 ## Rules
 
+- **The campaign Style guide wins on structure.** If the Style guide in the system
+  prompt prescribes a different note shape (e.g. greeting-first with the prospect's
+  name) or redefines what the A/B variant angles mean, follow the Style guide over
+  the structure/variant guidance in this file. Hard constraints (char cap, no link,
+  no call ask) always apply.
 - Lead with the specific hook. The first 6 words are everything.
 - The examples above are AI-consultancy flavored; they illustrate *structure and
   voice*, not the domain — match the active ICP/Offer in the system prompt.

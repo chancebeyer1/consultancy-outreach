@@ -51,6 +51,7 @@ class Campaign:
     channels: tuple[str, ...] | None = None  # initial draft channels; None → all (connect/dm/email)
     auto_send: bool = False  # true → first-touch connect note auto-approves on ingest
     inmail_min_fit: int | None = None  # fit >= this → InMail instead of connect; None → off
+    user_id: str | None = None  # campaign OWNER (profiles.id); drafts speak as this user
 
 
 # ---------------------------------------------------------------------------
@@ -121,14 +122,15 @@ def _load_from_files(slug: str | None) -> Campaign:
 
 _COLUMNS = (
     "id, slug, name, icp_md, offer_md, style_md, voice_md, "
-    "landing_url, calcom_url, is_default, status, search_url, channels, auto_send, inmail_min_fit"
+    "landing_url, calcom_url, is_default, status, search_url, channels, auto_send, "
+    "inmail_min_fit, user_id"
 )
 
 
 def _row_to_campaign(row: tuple) -> Campaign:
     (cid, slug, name, icp_md, offer_md, style_md, voice_md,
      landing_url, calcom_url, is_default, status, search_url, channels, auto_send,
-     inmail_min_fit) = row
+     inmail_min_fit, user_id) = row
     return Campaign(
         slug=slug,
         name=name,
@@ -145,6 +147,7 @@ def _row_to_campaign(row: tuple) -> Campaign:
         channels=tuple(channels) if channels else None,
         auto_send=bool(auto_send),
         inmail_min_fit=inmail_min_fit,
+        user_id=str(user_id) if user_id else None,
     )
 
 

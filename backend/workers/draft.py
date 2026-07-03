@@ -178,6 +178,26 @@ def _compact_for_hooks(enrichment: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _sender_identity(campaign: "Campaign | None") -> tuple[str, str]:
+    """(first_name, background) the draft speaks as — the campaign OWNER, not the
+    global operator. Owned campaign → profiles.name + per-user bio (operator_bio
+    handles the admin-fallback rules). Unowned/None → env sender + global bio."""
+    if campaign and campaign.user_id:
+        try:
+            import psycopg
+
+            from config import require
+
+            with psycopg.connect(require("DATABASE_URL")) as c, c.cursor() as cur:
+                cur.execute("select name from profiles where id = %s", (campaign.user_id,))
+                row = cur.fetchone()
+            first = (row[0] or "").split()[0] if row and row[0] else Config.sender_first_name
+            return first, operator_bio(campaign.user_id)
+        except Exception:  # noqa: BLE001 — identity lookup must never block drafting
+            pass
+    return Config.sender_first_name, operator_bio()
+
+
 def draft_for_channel(
     channel: str,
     enrichment: dict[str, Any],
@@ -206,13 +226,14 @@ def draft_for_channel(
     profile = enrichment.get("profile") or {}
     first_name = (profile.get("first_name") or "").strip()
     landing_url = campaign.landing_url if campaign else Config.landing_url
+    sender_first, sender_background = _sender_identity(campaign)
     payload = {
         "prospect_first_name": first_name,
         "prospect_full_name": profile.get("full_name"),
         "prospect_headline": profile.get("headline"),
         "prospect_company": enrichment.get("company"),
-        "my_first_name": Config.sender_first_name,  # sign-off name; never invent one
-        "operator_background": operator_bio(),  # TRUE facts about the sender — proof, not invention
+        "my_first_name": sender_first,  # sign-off name; never invent one
+        "operator_background": sender_background,  # TRUE facts about the sender — proof, not invention
         "landing_url": landing_url,
         "chosen_hook": {
             "type": hook.type if hook else None,
@@ -234,7 +255,7 @@ def draft_for_channel(
     )
     # Fill name placeholders so no literal {{...}} ever ships (sender name, and prospect
     # first name as a safety net if the model echoes the template instead of the value).
-    raw = raw.replace("{{my_first_name}}", Config.sender_first_name)
+    raw = raw.replace("{{my_first_name}}", sender_first)
     if first_name:
         raw = raw.replace("{{first_name}}", first_name)
     return _humanize(raw)
