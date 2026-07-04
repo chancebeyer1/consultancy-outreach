@@ -814,7 +814,7 @@ def notify_test() -> dict:
     return res
 
 
-@app.function(secrets=secrets, timeout=3600)
+@app.function(secrets=secrets, timeout=6 * 3600)  # ~30-60s/lead x several hundred leads — 1h wasn't enough (died twice)
 def backfill_site_enrichment(limit: int = 0) -> dict:
     """One-off: site-enrich in-flight leads (sent, not-replied, has-domain, not yet site-enriched)
     so their follow-ups use sharp company-website hooks. Runs in Modal so it survives to completion.
@@ -1003,30 +1003,53 @@ def send_approved_cron() -> dict:
     cap. The DB-driven counterpart to scripts/send_approvals.py, so first contact runs
     on Modal without the operator's machine. Follow-ups stay with progress_sequences.
     """
+    import time as _time
+
     from workers.email_sender import send_email_first_touch, send_email_followups
     from workers.sequence_send import send_approved_first_touch
 
+    # Every leg is wall-clock-bounded so the job ALWAYS returns inside the dispatcher's
+    # watchdog: the email legs each get a hard time budget (deferred work rides the next
+    # hourly tick — which also smooths the overnight quota-rollover bursts that used to
+    # drain 90+ emails in one go and trip the 600s watchdog, 2026-07-03/04). Per-leg
+    # elapsed seconds land in the meta so a slow leg is diagnosable at a glance.
+    timings: dict[str, float] = {}
+
+    def _timed(name: str, fn):
+        t0 = _time.monotonic()
+        try:
+            return fn()
+        finally:
+            timings[name] = round(_time.monotonic() - t0, 1)
+
+    # Once/day, withdraw stale (21+ day, dead) pending invites to free pending-invite ceiling
+    # headroom BEFORE the connect guard runs — otherwise a pile of dead invites blocks fresh
+    # connects. Date-guarded, so it's a cheap no-op the rest of the day.
+    try:
+        withdrew = _timed("withdraw_stale", _maybe_withdraw_stale)
+    except Exception as e:  # noqa: BLE001
+        withdrew = {"error": str(e)}
     # Pace connects (<=4 per hourly tick) so the daily cap spreads out instead of one
     # burst; InMail/email aren't paced — they send on their own daily caps + credits.
-    linkedin = send_approved_first_touch(connect_per_run=4)
+    linkedin = _timed("linkedin", lambda: send_approved_first_touch(connect_per_run=4))
     # Same tick sends EMAIL via Maildoso (rotated + ramped). FOLLOW-UPS RUN FIRST, then new
     # openers take whatever is left of the shared daily cap — replies come from touches 2-4, so
     # working the existing pipeline before adding cold openers is the highest-leverage ordering
     # (previously openers ran first and starved the follow-ups). Each is wrapped so an email-side
     # failure never aborts the rest.
     try:
-        email_followups = send_email_followups()
+        email_followups = _timed("email_followups", lambda: send_email_followups(time_budget_s=150))
     except Exception as e:  # noqa: BLE001
         email_followups = {"error": str(e)}
     try:
-        email = send_email_first_touch()
+        email = _timed("email", lambda: send_email_first_touch(time_budget_s=150))
     except Exception as e:  # noqa: BLE001
         email = {"error": str(e)}
     # Publish any LinkedIn posts the operator approved in the dashboard (via Unipile).
     try:
         from workers.content import publish_approved
 
-        posts = publish_approved()
+        posts = _timed("posts", publish_approved)
     except Exception as e:  # noqa: BLE001
         posts = {"error": str(e)}
     # Auto-send scheduled follow-up replies that have come due ("reconnect in the fall"). Runs on
@@ -1034,16 +1057,55 @@ def send_approved_cron() -> dict:
     try:
         from workers.scheduled import send_due_scheduled
 
-        scheduled = send_due_scheduled()
+        scheduled = _timed("scheduled", send_due_scheduled)
     except Exception as e:  # noqa: BLE001
         scheduled = {"error": str(e)}
     return _logged(
         "cron_send",
         {
             "linkedin": linkedin, "email": email, "email_followups": email_followups,
-            "posts": posts, "scheduled": scheduled,
+            "posts": posts, "scheduled": scheduled, "withdraw_stale": withdrew, "timings": timings,
         },
     )
+
+
+def _maybe_withdraw_stale() -> dict:
+    """Once per day, withdraw stale pending LinkedIn invites (frees the ceiling). Date-guarded in
+    app_settings so it fires exactly once across the hourly ticks."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    today = datetime.now(UTC).date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_invite_withdraw'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_invite_withdraw', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    from workers.sequence_send import withdraw_stale_invites
+
+    return withdraw_stale_invites(max_per_run=25)
+
+
+@app.function(secrets=secrets, timeout=300)
+def withdraw_stale_now(older_than_days: int = 21, max_per_run: int = 25, dry_run: bool = False) -> dict:
+    """On-demand stale-invite withdrawal (frees pending-invite headroom).
+
+        modal run modal_app.py::withdraw_stale_now --dry-run                 # preview
+        modal run modal_app.py::withdraw_stale_now --older-than-days 28      # live, conservative
+    """
+    from workers.sequence_send import withdraw_stale_invites
+
+    return withdraw_stale_invites(older_than_days=older_than_days, max_per_run=max_per_run, dry_run=dry_run)
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -1144,7 +1206,7 @@ def dispatch_comments_now(dry_run: bool = False, force: bool = False) -> dict:
     return dispatch_due_comments(dry_run=dry_run, force=force)
 
 
-def _run_job(name: str, fn, timeout: int = 600) -> str:
+def _run_job(name: str, fn, timeout: int = 600, stragglers: list | None = None) -> str:
     """Run one dispatcher job under a hard wall-clock cap.
 
     The jobs run via `.local()`, so Modal's per-function timeouts do NOT apply — one hung call (a
@@ -1152,7 +1214,11 @@ def _run_job(name: str, fn, timeout: int = 600) -> str:
     whole dispatcher timeout (the 2026-07 incident: an intermittent `cron_send` stall hung ~80 min
     and killed the tick). Running each job in a daemon thread and joining with a timeout means a
     hang is abandoned after `timeout` seconds; the remaining jobs still run and the next hourly tick
-    retries it. Normal jobs finish in seconds, so this only ever trips on a real hang."""
+    retries it. Normal jobs finish in seconds, so this only ever trips on a real hang.
+
+    An abandoned thread keeps running while the later jobs proceed; `stragglers` collects it so
+    the dispatcher can grace-join at the very end — giving an un-stuck leg time to finish its
+    in-flight send record instead of being killed mid-write by container teardown."""
     import threading
 
     box: dict = {}
@@ -1169,6 +1235,8 @@ def _run_job(name: str, fn, timeout: int = 600) -> str:
     t.start()
     t.join(timeout)
     if t.is_alive():
+        if stragglers is not None:
+            stragglers.append(t)
         _logged(f"cron_dispatcher_{name}", {"error": f"job hung >{timeout}s, abandoned this tick"})
         return "timed_out"
     if "e" in box:
@@ -1209,8 +1277,14 @@ def hourly_dispatcher() -> dict:
         ("ramp_caps", ramp_caps_cron, 180),
     )
     results: dict = {}
+    stragglers: list = []
     for name, fn, cap in jobs:
-        results[name] = _run_job(name, fn, timeout=cap)
+        results[name] = _run_job(name, fn, timeout=cap, stragglers=stragglers)
+    # Grace-join abandoned threads before returning: once the dispatcher returns, Modal tears
+    # the container down and an un-stuck leg would die mid-write. 60s covers an in-flight
+    # SMTP send + its DB record; a truly-hung thread just burns the grace and dies as before.
+    for t in stragglers:
+        t.join(60)
     return _logged("cron_dispatcher", results)
 
 
@@ -1367,6 +1441,92 @@ def health() -> dict:
 # as a header (e.g. X-Unipile-Secret) and put the same value in
 # UNIPILE_WEBHOOK_SECRET; the receiver rejects mismatches. If the secret is
 # unset, the check is skipped (rotate the URL on any leak).
+
+
+@app.function(secrets=secrets, timeout=150)
+def handle_meta_lead_bg(leadgen_id: str, form_id: str | None = None) -> dict:
+    """Spawned per Meta lead: fetch + ingest it, then send the instant SMS/email response.
+
+    Runs off the webhook's request thread so Meta gets a fast 200 (it retries slow/failed
+    deliveries, which would otherwise double-send our response)."""
+    from workers.inbound import ingest_meta_lead, respond_to_inbound_lead
+
+    try:
+        lead_id = ingest_meta_lead(leadgen_id, form_id)
+        if not lead_id:
+            return _logged("inbound_meta_lead", {"leadgen_id": leadgen_id, "skipped": "dupe/unroutable"})
+        res = respond_to_inbound_lead(lead_id)
+    except Exception:  # noqa: BLE001
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500], "leadgen_id": leadgen_id}
+    return _logged("inbound_meta_lead", res)
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.asgi_app()
+def meta_leads_webhook():
+    """Meta Lead Ads webhook — GET verifies the subscription, POST ingests leadgen events.
+
+    Advantage+ runs the ads; this turns each submitted lead form into a pipeline lead + an
+    instant SMS/email response. In the Meta app dashboard, point Webhooks (Page → `leadgen`
+    field) at this URL and set the Verify Token to META_VERIFY_TOKEN. POST bodies are
+    HMAC-verified against META_APP_SECRET (X-Hub-Signature-256). One URL serves both methods,
+    which is why this is an ASGI app.
+
+    Built on raw Starlette (not FastAPI): Meta's verify params are dotted (hub.mode) and the
+    POST HMAC needs the EXACT raw body — Starlette hands the handler the request object
+    positionally, so there's no FastAPI dependency-injection guessing over `Request`.
+    """
+    import hashlib
+    import hmac
+    import json as _json
+
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse, PlainTextResponse
+    from starlette.routing import Route
+
+    from config import Config
+
+    async def verify(request):
+        p = request.query_params
+        if (
+            p.get("hub.mode") == "subscribe"
+            and Config.meta_verify_token
+            and p.get("hub.verify_token") == Config.meta_verify_token
+        ):
+            return PlainTextResponse(p.get("hub.challenge", ""))
+        return PlainTextResponse("forbidden", status_code=403)
+
+    async def ingest(request):
+        raw = await request.body()
+        if Config.meta_app_secret:
+            expected = "sha256=" + hmac.new(
+                Config.meta_app_secret.encode(), raw, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(request.headers.get("x-hub-signature-256", ""), expected):
+                return PlainTextResponse("bad signature", status_code=403)
+        try:
+            body = _json.loads(raw or b"{}")
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"ok": True, "skipped": "unparseable"})
+
+        spawned = 0
+        for entry in body.get("entry", []) or []:
+            for change in entry.get("changes", []) or []:
+                if change.get("field") != "leadgen":
+                    continue
+                val = change.get("value") or {}
+                lg = val.get("leadgen_id")
+                if lg:
+                    handle_meta_lead_bg.spawn(str(lg), val.get("form_id"))
+                    spawned += 1
+        return JSONResponse({"ok": True, "spawned": spawned})
+
+    return Starlette(routes=[
+        Route("/", verify, methods=["GET"]),
+        Route("/", ingest, methods=["POST"]),
+    ])
 
 
 @app.function(secrets=secrets, timeout=60)

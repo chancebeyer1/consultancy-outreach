@@ -186,8 +186,17 @@ def _record_send(draft_id: str, message_id: str, mailbox_id: str) -> None:
                 pass
 
 
-def send_email_first_touch(*, dry_run: bool = False, limit: int | None = None) -> dict[str, Any]:
-    """Send approved first-touch `email` drafts to verified-deliverable leads."""
+def send_email_first_touch(
+    *, dry_run: bool = False, limit: int | None = None, time_budget_s: float | None = None,
+) -> dict[str, Any]:
+    """Send approved first-touch `email` drafts to verified-deliverable leads.
+
+    `time_budget_s` bounds the run's wall clock: each send costs ~5-10s (SMTP round-trip +
+    human jitter), and when the trailing-24h quota window rolls off overnight a single tick
+    can otherwise try to drain 90+ sends in one go — blowing the dispatcher's per-job
+    watchdog (the 2026-07-03/04 send_approved timeouts). Once the budget is spent the rest
+    is DEFERRED to the next hourly tick, which also smooths bursts (better deliverability).
+    """
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -227,13 +236,18 @@ def send_email_first_touch(*, dry_run: bool = False, limit: int | None = None) -
     blocked_fairness: list[str] = []
     blocked_no_box: list[str] = []
     failed: list[dict] = []
+    deferred = 0
+    deadline = (time.monotonic() + time_budget_s) if time_budget_s else None
 
     email_left = quota("email").allowed
     cam_window = campaign_daily_sent("email")
     cam_run: dict[str, int] = {}
     used: dict[str, int] = {}
 
-    for draft_id, lead_id, body, edited_body, email, name, company, campaign_id in rows:
+    for i, (draft_id, lead_id, body, edited_body, email, name, company, campaign_id) in enumerate(rows):
+        if deadline is not None and time.monotonic() > deadline:
+            deferred = len(rows) - i
+            break
         cid = str(campaign_id) if campaign_id else None
         subject, send_body = _split_subject(edited_body or body)
 
@@ -283,6 +297,7 @@ def send_email_first_touch(*, dry_run: bool = False, limit: int | None = None) -
         "blocked_fairness": len(blocked_fairness),
         "blocked_no_box": len(blocked_no_box),
         "failed": len(failed),
+        "deferred": deferred,
         "boxes_available": len(boxes),
         "details": {"pushed": pushed, "failed": failed},
         "dry_run": dry_run,
@@ -433,13 +448,19 @@ def _ensure_followup_draft(
     return draft_id, fu_body
 
 
-def send_email_followups(*, dry_run: bool = False, limit: int | None = None) -> dict[str, Any]:
+def send_email_followups(
+    *, dry_run: bool = False, limit: int | None = None, time_budget_s: float | None = None,
+) -> dict[str, Any]:
     """Send threaded email follow-ups (FU1/FU2) due for leads who haven't replied.
 
     Each follow-up goes out on the original thread (In-Reply-To + 'Re:' subject), from the
     SAME box that sent the opener, under the same per-box warmup cap, global cap and
     per-campaign fair share as first touch. Auto-stops on reply (no replies row) or bounce
     (email_status='bounced'); a paused/at-cap box simply defers to a later tick.
+
+    `time_budget_s`: same watchdog-safety bound as first touch — and heavier per send here,
+    because each follow-up also drafts its body via Claude (~3-8s) before the SMTP call.
+    Remaining due items simply stay due and go out next tick.
     """
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -457,13 +478,18 @@ def send_email_followups(*, dry_run: bool = False, limit: int | None = None) -> 
     blocked_quota: list[str] = []
     blocked_fairness: list[str] = []
     failed: list[dict] = []
+    deferred = 0
+    deadline = (time.monotonic() + time_budget_s) if time_budget_s else None
 
     email_left = quota("email").allowed
     cam_window = campaign_daily_sent("email")
     cam_run: dict[str, int] = {}
     used: dict[str, int] = {}
 
-    for item in due:
+    for i, item in enumerate(due):
+        if deadline is not None and time.monotonic() > deadline:
+            deferred = len(due) - i
+            break
         cid = item["campaign_id"]
         box = box_by_id.get(item["box_id"] or "")
         # Threading + domain consistency require the box that sent the opener. If it's paused
@@ -527,6 +553,7 @@ def send_email_followups(*, dry_run: bool = False, limit: int | None = None) -> 
         "blocked_quota": len(blocked_quota),
         "blocked_fairness": len(blocked_fairness),
         "failed": len(failed),
+        "deferred": deferred,
         "details": {"pushed": pushed, "failed": failed},
         "dry_run": dry_run,
     }

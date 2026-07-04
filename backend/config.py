@@ -108,3 +108,19 @@ class Config:
     # Newsletter ("The Agent Brief") — sent via Resend to opted-in subscribers (NOT cold boxes).
     # Set NEWSLETTER_FROM to a verified Resend sending domain, e.g. "The Agent Brief <brief@contentdrip.ai>".
     newsletter_from: str = _env("NEWSLETTER_FROM", "The Agent Brief <brief@contentdrip.ai>")
+
+    # Meta lead ads — INBOUND paid leads. Advantage+ runs the ads (creative + A/B); we only
+    # ingest the leads their forms collect. The webhook (meta_leads_webhook) verifies with
+    # META_VERIFY_TOKEN, checks the X-Hub-Signature-256 HMAC with META_APP_SECRET, and fetches
+    # each lead's full field set from the Graph API with META_PAGE_ACCESS_TOKEN (a long-lived
+    # Page token with leads_retrieval). All optional: unset → the webhook 503s gracefully.
+    meta_verify_token: str = _env("META_VERIFY_TOKEN")
+    meta_app_secret: str = _env("META_APP_SECRET")
+    meta_page_access_token: str = _env("META_PAGE_ACCESS_TOKEN")
+
+    # Twilio — SMS instant-response to inbound leads (they gave a phone on the form and expect
+    # fast contact; SMS out-converts email for hand-raisers). Optional: unset → SMS is skipped
+    # and inbound response falls back to email only.
+    twilio_account_sid: str = _env("TWILIO_ACCOUNT_SID")
+    twilio_auth_token: str = _env("TWILIO_AUTH_TOKEN")
+    twilio_from_number: str = _env("TWILIO_FROM_NUMBER")  # E.164, e.g. +13105551234

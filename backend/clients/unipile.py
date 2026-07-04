@@ -21,6 +21,7 @@ LinkedIn chat + email endpoints take multipart/form-data; invite takes JSON.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -355,7 +356,7 @@ def list_relations(
 
 
 def list_sent_invitations(
-    *, account_id: str | None = None, max_pages: int = 40
+    *, account_id: str | None = None, max_pages: int = 40, budget_s: float | None = None
 ) -> list[dict[str, Any]]:
     """All OUTSTANDING (pending/unaccepted) sent invitations.  GET /users/invite/sent
 
@@ -369,8 +370,15 @@ def list_sent_invitations(
     acct = account_id or _li_account()
     out: list[dict[str, Any]] = []
     cursor: str | None = None
+    # `budget_s` caps the WALL CLOCK of the whole pagination walk: 40 pages x 60s timeout each
+    # is unbounded-in-practice when Unipile is slow/502ing, and callers on a watchdog (the
+    # send-run pending-invite guard) hung on exactly that. Hitting the budget returns a
+    # PARTIAL list — callers that need an exact count must pass budget_s=None.
+    deadline = (time.monotonic() + budget_s) if budget_s else None
     with httpx.Client(timeout=60.0) as c:
         for _ in range(max_pages):
+            if deadline is not None and time.monotonic() > deadline:
+                break
             params: dict[str, Any] = {"account_id": acct, "limit": 100}
             if cursor:
                 params["cursor"] = cursor
@@ -398,6 +406,24 @@ def list_sent_invitations(
             if not cursor:
                 break
     return out
+
+
+@_RETRY
+def cancel_invitation(invitation_id: str, *, account_id: str | None = None) -> dict[str, Any]:
+    """Withdraw a pending sent invitation.  DELETE /users/invite/sent/{id}?account_id=
+
+    Frees headroom under LinkedIn's pending-invite ceiling (a pile of old unaccepted invites
+    blocks new ones). NOTE: LinkedIn imposes a ~3-week lockout before you can re-invite the same
+    person, so only withdraw invites old enough to be effectively dead. 200 = withdrawn; a 404
+    means it's already gone (accepted or expired) — the caller treats that as success.
+    """
+    q = {"account_id": account_id or _li_account()}
+    with httpx.Client(timeout=30.0) as c:
+        r = c.delete(f"{_base()}/users/invite/sent/{invitation_id}", headers=_headers(), params=q)
+        if r.status_code == 404:
+            return {"ok": True, "already_gone": True}
+        r.raise_for_status()
+        return r.json() if r.content else {"ok": True}
 
 
 # ---------------------------------------------------------------------------

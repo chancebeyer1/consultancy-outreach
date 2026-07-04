@@ -21,7 +21,8 @@ progression (connect + DM follow-ups) works fully.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from clients import unipile
@@ -33,6 +34,11 @@ from workers.sequence import determine_next_action
 # LinkedIn throttles new invites once too many sit unaccepted (422 cannot_resend_yet).
 # Our send-rate quota can't see pending count, so pre-empt the wall at this ceiling.
 PENDING_INVITE_CEILING = 150
+
+# An invite unaccepted this long is effectively dead (research: nearly all accepts land within the
+# first weeks). Withdrawing it frees ceiling headroom so fresh connects keep flowing. The ~3-week
+# re-invite lockout LinkedIn imposes on a withdrawn invite is moot for a lead this cold.
+STALE_INVITE_DAYS = 21
 
 LINKEDIN_CHANNELS = {
     "linkedin_connect",
@@ -299,6 +305,125 @@ def _to_connect_note(body: str, limit: int = 280) -> str:
     return (head[:idx] if idx > 60 else head).strip()
 
 
+PENDING_CACHE_TTL_H = 6.0    # how long a pending-invite count stays trusted
+PENDING_FETCH_BUDGET_S = 90  # wall-clock cap on the live pagination walk
+
+
+def _pending_invites_count() -> int | None:
+    """Pending-invite count for the ceiling guard — cached in app_settings for 6h.
+
+    The live count pages the full sent-invite list through Unipile (up to 40 requests), which
+    hung send runs for 10+ minutes when Unipile was slow/502ing (the 2026-07 send_approved
+    watchdog timeouts). Pending counts move slowly (invites accept/expire over days), so a 6h
+    cache loses nothing. The live fetch is wall-clock-bounded; on a partial walk or any error
+    return None — the guard FAILS OPEN because the 422 handler already trips the same cooldown
+    the moment LinkedIn actually pushes back.
+    """
+    import json as _json
+
+    now = datetime.now(UTC)
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select value from app_settings where key = 'pending_invites'")
+            row = cur.fetchone()
+            if row and isinstance(row[0], dict):
+                try:
+                    at = datetime.fromisoformat(str(row[0].get("at")))
+                    if (now - at).total_seconds() < PENDING_CACHE_TTL_H * 3600:
+                        return int(row[0]["n"])
+                except (KeyError, TypeError, ValueError):
+                    pass  # malformed cache — refresh below
+
+        t0 = time.monotonic()
+        items = unipile.list_sent_invitations(budget_s=PENDING_FETCH_BUDGET_S)
+        if time.monotonic() - t0 >= PENDING_FETCH_BUDGET_S:
+            return None  # partial walk — an undercount must not be trusted as "under ceiling"
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into app_settings (key, value, updated_at) values ('pending_invites', %s::jsonb, now()) "
+                "on conflict (key) do update set value = excluded.value, updated_at = now()",
+                (_json.dumps({"n": len(items), "at": now.isoformat()}),),
+            )
+            conn.commit()
+        return len(items)
+    finally:
+        conn.close()
+
+
+def _invalidate_pending_cache() -> None:
+    """Force the next pending-invite guard to re-read live — we just changed the count."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("delete from app_settings where key = 'pending_invites'")
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        conn.close()
+
+
+def withdraw_stale_invites(
+    *,
+    older_than_days: int = STALE_INVITE_DAYS,
+    max_per_run: int = 25,
+    dry_run: bool = False,
+    account_id: str | None = None,
+) -> dict[str, Any]:
+    """Withdraw pending invites older than `older_than_days` to free pending-invite headroom.
+
+    We hit the pending-invite ceiling (self-guarded at PENDING_INVITE_CEILING) well before the
+    send-rate cap, and a pile of old unaccepted invites — including the operator's own pre-system
+    manual ones — just sits there blocking new connects. This withdraws only clearly-dead invites
+    (oldest first, capped per run so it's gentle on the account), which is the single unlock for
+    sustained LinkedIn connect throughput given every accepted connection converts at ~30% on the DM.
+    """
+    try:
+        pending = unipile.list_sent_invitations(account_id=account_id, budget_s=90)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"list failed: {str(e)[:140]}"}
+
+    cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
+    stale: list[tuple[datetime, dict]] = []
+    for inv in pending:
+        raw = inv.get("sent_at")
+        if not raw or not inv.get("id"):
+            continue
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if ts < cutoff:
+            stale.append((ts, inv))
+    stale.sort(key=lambda x: x[0])  # oldest first
+
+    withdrawn: list[dict] = []
+    failed: list[dict] = []
+    for _, inv in stale[:max_per_run]:
+        if dry_run:
+            withdrawn.append({"id": inv.get("id"), "name": inv.get("name"), "sent_at": inv.get("sent_at")})
+            continue
+        try:
+            unipile.cancel_invitation(str(inv["id"]), account_id=account_id)
+            withdrawn.append({"id": inv.get("id"), "name": inv.get("name"), "sent_at": inv.get("sent_at")})
+        except Exception as e:  # noqa: BLE001
+            failed.append({"id": inv.get("id"), "error": str(e)[:120]})
+
+    if withdrawn and not dry_run:
+        _invalidate_pending_cache()
+
+    return {
+        "pending_total": len(pending),
+        "stale_found": len(stale),
+        "withdrawn": len(withdrawn),
+        "failed": len(failed),
+        "dry_run": dry_run,
+        "details": {"withdrawn": withdrawn[:25], "failed": failed[:10]},
+    }
+
+
 def _record_send(
     draft_id: str,
     response: dict[str, Any],
@@ -318,10 +443,12 @@ def _record_send(
     try:
         with conn:
             with conn.cursor() as cur:
+                # status='sent': this runs AFTER the Unipile call succeeded (external_id in
+                # hand) — 'queued' was a misnomer that made analytics undercount LinkedIn.
                 cur.execute(
                     """
                     insert into sends (draft_id, provider, external_id, sent_at, status)
-                    values (%s, 'unipile', %s, %s, 'queued')
+                    values (%s, 'unipile', %s, %s, 'sent')
                     """,
                     (draft_id, external_id, now),
                 )
@@ -476,8 +603,8 @@ def send_approved_first_touch(
         and not _in_cooldown("linkedin_connect")
     ):
         try:
-            pending = len(unipile.list_sent_invitations())
-            if pending >= PENDING_INVITE_CEILING:
+            pending = _pending_invites_count()
+            if pending is not None and pending >= PENDING_INVITE_CEILING:
                 cooldown_trip(
                     "linkedin_connect",
                     hours=12.0,
