@@ -252,11 +252,56 @@ def replenish_queue_cron() -> dict:
         bids = _maybe_sweep_opportunities()
     except Exception as e:  # noqa: BLE001
         bids = {"error": str(e)}
+    # And — Monday mornings — the weekly "state of the machine" report (funnel, experiments,
+    # system health, needs-you list). One email replaces the ad-hoc "how's it going" audit.
+    try:
+        weekly = _maybe_weekly_report()
+    except Exception as e:  # noqa: BLE001
+        weekly = {"error": str(e)}
     return _logged(
         "cron_replenish",
         {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
-         "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids},
+         "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids,
+         "weekly_report": weekly},
     )
+
+
+def _maybe_weekly_report() -> dict:
+    """Send the weekly machine report once, Monday at/after 14:00 UTC. Date-guarded in
+    app_settings so it fires exactly once across the hourly ticks."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.weekday() != 0 or now.hour < 14:
+        return {"skipped": "off-schedule"}
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_weekly_report'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already sent today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_weekly_report', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    from workers.weekly_report import generate_weekly_report
+
+    return generate_weekly_report()
+
+
+@app.function(secrets=secrets, timeout=300)
+def weekly_report_now(dry_run: bool = False) -> dict:
+    """On-demand weekly report. `modal run modal_app.py::weekly_report_now --dry-run`."""
+    from workers.weekly_report import generate_weekly_report
+
+    return generate_weekly_report(dry_run=dry_run)
 
 
 def _maybe_generate_newsletter() -> dict:
@@ -886,6 +931,21 @@ def audit_run(request_body: dict) -> dict:
         name=request_body.get("name"),
         company=request_body.get("company"),
         ip=request_body.get("ip"),
+    )
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def concierge_chat(request_body: dict) -> dict:
+    """Public site concierge — called server-side by the Agentry site's /api/concierge proxy.
+    Open by design (like audit/roast); cost bounded by per-session turn caps + small max_tokens.
+    Body: {"session_id": "...", "page": "/", "messages": [{"role","content"}, ...]}."""
+    from workers.concierge import chat
+
+    return chat(
+        session_id=str(request_body.get("session_id") or ""),
+        page=request_body.get("page"),
+        messages=request_body.get("messages") or [],
     )
 
 
