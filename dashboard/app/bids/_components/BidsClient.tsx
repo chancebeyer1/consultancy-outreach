@@ -36,11 +36,13 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const [rows, setRows] = useState<BidReviewRow[]>(initialRows);
   const [sourceFilter, setSourceFilter] = useState<OpportunitySource | "all">("all");
 
+  // Derive chips from LIVE rows (not initialRows) so a fully-dispositioned source's chip
+  // disappears instead of lingering at "(0)".
   const sources = useMemo(() => {
     const s = new Set<OpportunitySource>();
-    initialRows.forEach((r) => s.add(r.opportunity.source));
+    rows.forEach((r) => s.add(r.opportunity.source));
     return Array.from(s);
-  }, [initialRows]);
+  }, [rows]);
 
   const visible = useMemo(
     () => (sourceFilter === "all" ? rows : rows.filter((r) => r.opportunity.source === sourceFilter)),
@@ -48,7 +50,18 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   );
 
   function removeRow(oppId: string) {
-    setRows((prev) => prev.filter((r) => r.opportunity.id !== oppId));
+    setRows((prev) => {
+      const next = prev.filter((r) => r.opportunity.id !== oppId);
+      // If the active source just emptied, fall back to "all" — otherwise the page shows
+      // the global empty state while other sources still have rows.
+      if (
+        sourceFilter !== "all" &&
+        !next.some((r) => r.opportunity.source === sourceFilter)
+      ) {
+        setSourceFilter("all");
+      }
+      return next;
+    });
   }
 
   return (
@@ -68,7 +81,7 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
         </FilterChip>
         {sources.map((s) => (
           <FilterChip key={s} active={sourceFilter === s} onClick={() => setSourceFilter(s)}>
-            {SOURCE_META[s].label} ({rows.filter((r) => r.opportunity.source === s).length})
+            {SOURCE_META[s]?.label ?? s} ({rows.filter((r) => r.opportunity.source === s).length})
           </FilterChip>
         ))}
       </div>
@@ -115,14 +128,22 @@ function FilterChip({
 
 function BidCard({ row, onDone }: { row: BidReviewRow; onDone: (id: string) => void }) {
   const { opportunity: o, bid } = row;
-  const meta = SOURCE_META[o.source];
+  // Fallback: opportunities.source is free text in the DB — an unknown value (new source
+  // shipped in the worker before the UI) must not crash the whole page.
+  const meta = SOURCE_META[o.source] ?? {
+    label: o.source,
+    cls: "bg-neutral-500/15 text-neutral-300 ring-neutral-500/30",
+  };
   const dl = deadlineLabel(o.deadline);
   const flags = o.fit_flags ?? {};
 
   const [body, setBody] = useState(bid?.edited_body ?? bid?.body ?? "");
+  // Baseline the dirty check against the last SAVED body (state), not the immutable prop —
+  // otherwise the Save button never flips back to "Saved" after a successful save.
+  const [savedBody, setSavedBody] = useState(bid?.edited_body ?? bid?.body ?? "");
   const [busy, setBusy] = useState<Action | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const dirty = bid ? body !== (bid.edited_body ?? bid.body) : false;
+  const dirty = bid ? body !== savedBody : false;
 
   async function act(action: Action) {
     setBusy(action);
@@ -142,6 +163,7 @@ function BidCard({ row, onDone }: { row: BidReviewRow; onDone: (id: string) => v
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (action === "save") {
         setNote(data.persisted === false ? `saved (${data.reason ?? "no-op"})` : "saved");
+        setSavedBody(body);
       } else {
         onDone(o.id); // approve / reject / submit / pass all clear the row
       }

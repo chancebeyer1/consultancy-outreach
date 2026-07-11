@@ -96,11 +96,10 @@ export async function POST(request: Request) {
   try {
     const patch = bidPatch(payload.action, payload);
     if (patch) {
-      // Update by bid_id when provided, else by opportunity_id (one bid per opp).
-      let q = admin.from("bids").update(patch);
-      q = payload.bid_id
-        ? q.eq("id", payload.bid_id)
-        : q.eq("opportunity_id", payload.opportunity_id);
+      // Always scope by the owner-checked opportunity_id — bid_id alone would let a caller
+      // who owns opportunity A pass the gate yet write to a bid on someone else's opportunity.
+      let q = admin.from("bids").update(patch).eq("opportunity_id", payload.opportunity_id);
+      if (payload.bid_id) q = q.eq("id", payload.bid_id);
       const { error } = await q;
       if (error) throw error;
     }

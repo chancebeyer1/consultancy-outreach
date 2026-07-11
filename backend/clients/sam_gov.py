@@ -26,12 +26,19 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import Config
 
-_BASE = "https://api.sam.gov/prod/opportunities/v2/search"
+# Current official docs list production WITHOUT the /prod/ stage segment; the legacy
+# /prod/ form still resolves in the wild. Try documented first, fall back on 404.
+_BASES = (
+    "https://api.sam.gov/opportunities/v2/search",
+    "https://api.sam.gov/prod/opportunities/v2/search",
+)
 
 # NAICS codes that map to software / AI / IT services work.
 DEFAULT_NAICS = ("541511", "541512", "541519", "518210")
 # Live-opportunity notice types (skip 'a' awards / 'r' sources-sought unless you want them).
-DEFAULT_PTYPES = "o,k,p"
+# MUST be sent as repeated query params (ptype=o&ptype=k&ptype=p) — the API defines ptype as
+# collectionFormat: multi; a comma-joined string reads as one bogus code and matches nothing.
+DEFAULT_PTYPES = ("o", "k", "p")
 
 
 def _mmddyyyy(d: datetime) -> str:
@@ -40,21 +47,30 @@ def _mmddyyyy(d: datetime) -> str:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=20))
 def _search_one(naics: str, *, posted_from: str, posted_to: str, limit: int) -> list[dict[str, Any]]:
-    """One page of results for a single NAICS code. Raises on non-2xx (retried)."""
-    params = {
+    """One page of results for a single NAICS code. Raises on non-2xx (retried).
+
+    httpx expands the ptype LIST into repeated params (ptype=o&ptype=k&ptype=p) — required.
+    Tries the documented base first; only a 404 (wrong path shape) falls through to legacy,
+    so quota-relevant responses (200/403/429) never trigger a second request.
+    """
+    params: dict[str, Any] = {
         "api_key": Config.sam_gov_api_key,
         "postedFrom": posted_from,
         "postedTo": posted_to,
-        "ptype": DEFAULT_PTYPES,
+        "ptype": list(DEFAULT_PTYPES),
         "ncode": naics,
         "limit": str(limit),
         "offset": "0",
     }
     with httpx.Client(timeout=45.0) as c:
-        r = c.get(_BASE, params=params)
-        r.raise_for_status()
-        data = r.json()
-    return data.get("opportunitiesData") or []
+        for i, base in enumerate(_BASES):
+            r = c.get(base, params=params)
+            if r.status_code == 404 and i + 1 < len(_BASES):
+                continue
+            r.raise_for_status()
+            data = r.json()
+            return data.get("opportunitiesData") or []
+    return []
 
 
 def _normalize(o: dict[str, Any]) -> dict[str, Any]:

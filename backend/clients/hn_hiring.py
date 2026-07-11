@@ -11,6 +11,7 @@ APIs: https://hn.algolia.com/api  ·  story item: /api/v1/items/<id>
 """
 from __future__ import annotations
 
+import html as _html
 import re
 from typing import Any
 
@@ -21,22 +22,26 @@ _SEARCH = "https://hn.algolia.com/api/v1/search_by_date"
 _ITEM = "https://hn.algolia.com/api/v1/items/"
 
 _TAG = re.compile(r"<[^>]+>")
-_ENTITIES = (("&amp;", "&"), ("&#x27;", "'"), ("&#x2F;", "/"), ("&quot;", '"'),
-             ("&lt;", "<"), ("&gt;", ">"), ("&#62;", ">"), ("&#60;", "<"))
 
 # Only surface postings that mention AI/agent work AND ideally contract/remote terms.
-_AI_KEYWORDS = ("ai", "a.i.", "llm", "agent", "machine learning", "ml", "genai",
-                "generative", "nlp", "gpt", "rag", "chatbot", "automation")
+# Word-boundary regex, NOT substring membership: "ai"/"ml" are substrings of ubiquitous
+# words (email, available, html), which made a substring gate pass nearly everything.
+_AI_RE = re.compile(
+    r"\b(a\.?i\.?|llm|agents?|machine learning|ml|gen ?ai|generative|nlp|gpt|rag"
+    r"|chatbots?|automation)\b",
+    re.IGNORECASE,
+)
 _CONTRACT_HINTS = ("contract", "contractor", "freelance", "consult", "part-time",
                    "part time", "remote", "1099")
 
 
-def _clean(html: str) -> str:
-    text = html or ""
-    for a, b in _ENTITIES:
-        text = text.replace(a, b)
-    text = _TAG.sub(" ", text)
-    return re.sub(r"[ \t]+", " ", text).strip()
+def _clean(raw: str) -> str:
+    """Strip tags, then unescape entities with the stdlib (covers the full entity set —
+    a hand-kept list silently leaks anything it doesn't know, e.g. &#38; or &nbsp;)."""
+    text = _TAG.sub(" ", raw or "")
+    text = _html.unescape(text)
+    # \xa0: html.unescape turns &nbsp; into a non-breaking space — collapse it too.
+    return re.sub(r"[ \t\xa0]+", " ", text).strip()
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
@@ -67,8 +72,7 @@ def _fetch_thread(thread_id: str) -> dict[str, Any]:
 
 
 def _matches(text: str) -> bool:
-    low = text.lower()
-    return any(k in low for k in _AI_KEYWORDS)
+    return bool(_AI_RE.search(text))
 
 
 def _first_line(text: str) -> str:
