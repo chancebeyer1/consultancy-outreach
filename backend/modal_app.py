@@ -302,10 +302,11 @@ def _maybe_generate_blog() -> dict:
 
 def _maybe_sweep_opportunities() -> dict:
     """Sweep contract/freelance sources for software-AI work and draft bids — at most ONCE
-    a day. The ~20h guard (opportunity-count + an app_settings marker, like the blog) keeps it
-    to roughly once daily across hourly ticks, which is REQUIRED: SAM.gov's free API tier is
-    ~10 requests/day, so an hourly sweep would exhaust the quota immediately. Best-effort;
-    wrapped by the caller."""
+    a day. The guard reads the app_settings marker's OWN timestamp (not recent-ingest counts:
+    a steady-state sweep often ingests zero new rows because dedup drops already-seen postings,
+    and a count-based guard would then re-fire every hour — draining SAM.gov's ~10 req/day free
+    quota and re-billing LLM scoring). Marker is stamped BEFORE the sweep so a mid-run crash
+    can't cause hourly retry storms either. Best-effort; wrapped by the caller."""
     import psycopg
 
     from config import Config, require
@@ -316,27 +317,23 @@ def _maybe_sweep_opportunities() -> dict:
     if not any_source:
         return {"skipped": "no bidding sources configured"}
     with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
-        cur.execute("select value from app_settings where key = 'last_opportunity_sweep'")
-        has_marker = cur.fetchone() is not None
+        # `value #>> '{}'` unwraps the to_jsonb(now()::text) scalar back to a timestamp string.
         cur.execute(
-            "select count(*) from opportunities where discovered_at > now() - interval '20 hours'"
+            "select 1 from app_settings where key = 'last_opportunity_sweep' "
+            "and (value #>> '{}')::timestamptz > now() - interval '20 hours'"
         )
-        swept_recently = int((cur.fetchone() or [0])[0] or 0) > 0
-        if has_marker and swept_recently:
+        if cur.fetchone() is not None:
             return {"skipped": "already swept today"}
+        # Stamp up front (same connection): the next tick skips even if this run crashes or
+        # ingests nothing. Worst case of stamping early is one MISSED day, never a quota drain.
+        cur.execute(
+            "insert into app_settings (key, value) values ('last_opportunity_sweep', to_jsonb(now()::text)) "
+            "on conflict (key) do update set value = excluded.value"
+        )
+        conn.commit()
     from workers.opportunity_sourcing import source_all
 
-    result = source_all(dry_run=False, time_budget_s=500)
-    # Stamp the marker so the guard is exact even on a sweep that ingested nothing.
-    try:
-        with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
-            cur.execute(
-                "insert into app_settings (key, value) values ('last_opportunity_sweep', to_jsonb(now()::text)) "
-                "on conflict (key) do update set value = excluded.value"
-            )
-    except Exception:  # noqa: BLE001 — marker is best-effort; the 20h opportunity-count guard still holds
-        pass
-    return result
+    return source_all(dry_run=False, time_budget_s=500)
 
 
 @app.function(secrets=secrets, timeout=900)
@@ -410,6 +407,51 @@ def blog_get(slug: str = "") -> dict:
     from workers.blog import get_by_slug
 
     return {"post": get_by_slug(slug) if slug else None}
+
+
+@app.function(secrets=secrets, timeout=30)
+@modal.fastapi_endpoint(method="GET")
+def upwork_callback(code: str = "", state: str = ""):
+    """OAuth2 redirect target for the Upwork API (bidding module). Registered as the app's
+    Callback URL in the Upwork developer console. Upwork redirects here with ?code=… after
+    the operator authorizes; we stash the one-time code in app_settings (10-min validity on
+    Upwork's side) so the token-exchange script can pick it up, and show it on screen too.
+    Until the API application is approved this endpoint just sits here answering 200 —
+    which is exactly what we want the registered callback URL to do."""
+    from fastapi.responses import HTMLResponse
+
+    stored = False
+    if code:
+        try:
+            import psycopg
+
+            from config import require
+
+            with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "insert into app_settings (key, value) values ('upwork_oauth_code', "
+                    "jsonb_build_object('code', %s::text, 'state', %s::text, 'at', now()::text)) "
+                    "on conflict (key) do update set value = excluded.value",
+                    (code, state),
+                )
+                conn.commit()
+            stored = True
+        except Exception as e:  # noqa: BLE001 — still show the code on screen
+            print(f"WARNING upwork_callback store failed: {e}")
+    body = (
+        "<html><body style='font-family:monospace;padding:2rem'>"
+        "<h2>Upwork OAuth callback</h2>"
+        + (
+            f"<p>Authorization code received{' and saved' if stored else ''}:</p>"
+            f"<pre style='background:#eee;padding:1rem'>{code}</pre>"
+            "<p>Next: run <b>uv run python -m scripts.upwork_oauth --exchange</b> within "
+            "10 minutes to trade it for tokens.</p>"
+            if code
+            else "<p>Endpoint is live. Waiting for an OAuth redirect with ?code=…</p>"
+        )
+        + "</body></html>"
+    )
+    return HTMLResponse(content=body)
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -1095,18 +1137,18 @@ def send_approved_cron() -> dict:
         withdrew = {"error": str(e)}
     # Pace connects (<=4 per hourly tick) so the daily cap spreads out instead of one
     # burst; InMail/email aren't paced — they send on their own daily caps + credits.
-    linkedin = _timed("linkedin", lambda: send_approved_first_touch(connect_per_run=4))
+    linkedin = _timed("linkedin", lambda: send_approved_first_touch(connect_per_run=4, time_budget_s=180))
     # Same tick sends EMAIL via Maildoso (rotated + ramped). FOLLOW-UPS RUN FIRST, then new
     # openers take whatever is left of the shared daily cap — replies come from touches 2-4, so
     # working the existing pipeline before adding cold openers is the highest-leverage ordering
     # (previously openers ran first and starved the follow-ups). Each is wrapped so an email-side
     # failure never aborts the rest.
     try:
-        email_followups = _timed("email_followups", lambda: send_email_followups(time_budget_s=150))
+        email_followups = _timed("email_followups", lambda: send_email_followups(time_budget_s=120))
     except Exception as e:  # noqa: BLE001
         email_followups = _err_meta(e)
     try:
-        email = _timed("email", lambda: send_email_first_touch(time_budget_s=150))
+        email = _timed("email", lambda: send_email_first_touch(time_budget_s=120))
     except Exception as e:  # noqa: BLE001
         email = _err_meta(e)
     # Publish any LinkedIn posts the operator approved in the dashboard (via Unipile).

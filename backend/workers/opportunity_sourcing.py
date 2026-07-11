@@ -19,8 +19,10 @@ most once a day (workers/modal wiring guards it) — do not call source_all on a
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
+from datetime import datetime
 from typing import Any
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -38,18 +40,28 @@ BIDS_CAMPAIGN = "ai-consulting-bids"
 
 SCORE_LIMIT = 40          # max opportunities SCORED per sweep (bounds LLM cost)
 DRAFT_LIMIT = 15          # max proposals DRAFTED per sweep (bounds LLM cost)
-MIN_FIT_TO_DRAFT = 70     # only draft a bid at/above this fit …
+MIN_FIT_TO_DRAFT = 60     # only draft a bid at/above this fit …
 # … AND only when the scorer marks it as real software work (is_software).
+# 60 (not 70): the first live sweeps showed real solo-winnable builds landing in the low 60s
+# (e.g. a federal lab's custom parser at 62) while junk sits ≤45 — a draft costs ~a cent and
+# 30s of review, so the cheaper error is drafting a marginal one, not missing a real one.
 
-# Sources in priority order — the highest-value work is scored first, so a per-run cap or a
-# time budget cutting the sweep short still spends the budget on the best opportunities.
 # Each entry: (source_name, callable returning list[normalized opportunity dict]).
+# Fetch order is cosmetic — scoring order is decided by _rank_for_scoring below.
 SOURCES: tuple[tuple[str, Any], ...] = (
     ("sam_gov", lambda: sam_gov.fetch_opportunities()),
     ("upwork", lambda: upwork.fetch_opportunities()),
     ("hn_hiring", lambda: hn_hiring.fetch_opportunities()),
     ("linkedin_jobs", lambda: linkedin_jobs.fetch_opportunities()),
     ("remoteok", lambda: remoteok.fetch_opportunities()),
+)
+
+# Cheap pre-LLM signal used only to ORDER scoring (never to drop anything): items whose
+# title/description mention AI/agent work jump the queue within their source.
+_AI_HINT = re.compile(
+    r"\b(a\.?i\.?|artificial intelligence|machine learning|ml|llm|agents?|gen ?ai"
+    r"|generative|nlp|chatbots?|automation|rag)\b",
+    re.IGNORECASE,
 )
 
 
@@ -73,8 +85,7 @@ def _admin_user_id(cur) -> str | None:
 
 
 def _gather(errors: list[str]) -> list[dict[str, Any]]:
-    """Fetch from every enabled source, in priority order. One source failing is logged,
-    not fatal. Preserves priority ordering so scoring spends the cap on the best work."""
+    """Fetch from every enabled source. One source failing is logged, not fatal."""
     out: list[dict[str, Any]] = []
     for name, fn in SOURCES:
         try:
@@ -85,6 +96,35 @@ def _gather(errors: list[str]) -> list[dict[str, Any]]:
             errors.append(f"{name}: {e}")
             print(f"WARNING source {name} failed: {e}")
     return out
+
+
+def _rank_for_scoring(fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order candidates so the SCORE_LIMIT cap is spent well: AI-hinted items first within
+    each source, then ROUND-ROBIN across sources. A strict source-priority order starves the
+    later sources whenever one is prolific — the first live sweep fetched 54 SAM notices
+    (mostly renewals/hardware) and burned the whole 40-score cap before a single HN/LinkedIn
+    item (where the AI-agent gigs actually live) was looked at. Nothing is dropped here —
+    unscored items simply defer to the next sweep."""
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for o in fresh:
+        by_source.setdefault(str(o.get("source")), []).append(o)
+    for items in by_source.values():
+        items.sort(
+            key=lambda o: 0 if _AI_HINT.search(f"{o.get('title') or ''} {o.get('description') or ''}") else 1
+        )
+    # Round-robin merge, respecting SOURCES order for the tie within each round.
+    order = [name for name, _ in SOURCES if name in by_source]
+    order += [s for s in by_source if s not in order]  # future sources not in SOURCES yet
+    ranked: list[dict[str, Any]] = []
+    i = 0
+    while any(by_source.values()):
+        src = order[i % len(order)]
+        if by_source[src]:
+            ranked.append(by_source[src].pop(0))
+        i += 1
+        if i > 100_000:  # safety valve; unreachable in practice
+            break
+    return ranked
 
 
 def _score(opp: dict[str, Any], prefix: str) -> dict[str, Any]:
@@ -153,11 +193,17 @@ def _draft(opp: dict[str, Any], fit: dict[str, Any], prefix: str, owner_id: str 
 
 
 def _ts(v: Any) -> str | None:
-    """Pass timestamp strings through to Postgres; coerce empties/obvious non-timestamps to None."""
+    """Pass only ISO-parseable timestamp strings to Postgres; anything else → None.
+    A digit-leading heuristic isn't enough — an epoch string ('1736899200000') or malformed
+    date would abort that row's INSERT, dropping (and later re-scoring) the opportunity."""
     if not v or not isinstance(v, str):
         return None
     s = v.strip()
-    return s if len(s) >= 8 and s[0].isdigit() else None
+    try:
+        datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return s
+    except ValueError:
+        return None
 
 
 def _ingest(opp: dict[str, Any], fit: dict[str, Any], bid: dict[str, Any] | None, owner_id: str | None) -> bool:
@@ -231,6 +277,7 @@ def source_all(*, dry_run: bool = False, time_budget_s: float = 500.0) -> dict[s
 
     candidates = _gather(errors)
     fresh = [o for o in candidates if (o.get("source"), str(o.get("external_id"))) not in existing]
+    fresh = _rank_for_scoring(fresh)
     print(f"gathered {len(candidates)} ({len(fresh)} new after dedup)")
 
     scored = drafted = ingested = 0

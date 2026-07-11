@@ -58,7 +58,9 @@ query jobSearch($filter: MarketplaceJobPostingsSearchFilter, $sort: [Marketplace
 def _query(query: str, first: int) -> dict[str, Any]:
     variables = {
         "filter": {"searchExpression_eq": query, "pagination_eq": {"first": first, "after": "0"}},
-        "sort": [{"field": "RECENCY", "order": "DESC"}],
+        # MarketplaceJobPostingSearchSortAttribute defines ONLY `field` — adding an `order`
+        # key fails GraphQL input validation and kills the whole query. RECENCY implies desc.
+        "sort": [{"field": "RECENCY"}],
     }
     headers = {
         "Authorization": f"Bearer {Config.upwork_access_token}",

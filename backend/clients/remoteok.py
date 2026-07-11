@@ -9,7 +9,7 @@ are a cheap zero-approval signal source; the fit-scorer decides which are worth 
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import re
 from typing import Any
 
 import httpx
@@ -18,10 +18,13 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 _URL = "https://remoteok.com/api"
 
 # Client-side keyword gate — RemoteOK returns everything; we only want software/AI work.
-_KEYWORDS = (
-    "ai", "artificial intelligence", "machine learning", "ml", "llm", "agent", "agents",
-    "genai", "generative", "nlp", "chatbot", "automation", "rag", "python", "developer",
-    "engineer", "software", "backend", "full stack", "fullstack", "data",
+# Word-boundary regex, NOT substring membership: short tokens like "ai"/"ml" are substrings
+# of ubiquitous words (email, available, html), which made a substring gate a no-op.
+_KW_RE = re.compile(
+    r"\b(a\.?i\.?|artificial intelligence|machine learning|ml|llm|agents?|gen ?ai|generative"
+    r"|nlp|chatbots?|automation|rag|python|developers?|engineers?|software|back[- ]?end"
+    r"|full[- ]?stack|data)\b",
+    re.IGNORECASE,
 )
 
 
@@ -42,11 +45,11 @@ def _fetch_raw() -> list[dict[str, Any]]:
 
 def _matches(job: dict[str, Any]) -> bool:
     hay = " ".join(
-        str(x).lower() for x in (
+        str(x) for x in (
             job.get("position"), job.get("description"), " ".join(job.get("tags") or []),
         ) if x
     )
-    return any(k in hay for k in _KEYWORDS)
+    return bool(_KW_RE.search(hay))
 
 
 def _normalize(job: dict[str, Any]) -> dict[str, Any]:
