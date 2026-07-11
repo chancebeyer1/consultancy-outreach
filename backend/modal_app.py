@@ -440,6 +440,30 @@ def opportunities_sweep_now(dry_run: bool = False) -> dict:
     return _logged("opportunities_sweep", source_all(dry_run=dry_run, time_budget_s=800))
 
 
+@app.function(secrets=secrets, timeout=120)
+def bids_sources_check(sources: str = "") -> dict:
+    """Fetch-only connectivity check for bidding sources — no scoring, no drafting, no DB
+    writes. `modal run modal_app.py::bids_sources_check --sources freelancer,remoteok`.
+    Default checks everything EXCEPT sam_gov (its free tier is ~10 requests/DAY — name it
+    explicitly when you mean to spend one)."""
+    from workers.opportunity_sourcing import SOURCES
+
+    wanted = {s.strip() for s in sources.split(",") if s.strip()} or {
+        n for n, _ in SOURCES if n != "sam_gov"
+    }
+    out: dict = {}
+    for name, fn in SOURCES:
+        if name not in wanted:
+            continue
+        try:
+            rows = fn() or []
+            out[name] = {"fetched": len(rows), "sample": rows[0]["title"][:70] if rows else None}
+        except Exception as e:  # noqa: BLE001
+            out[name] = {"error": str(e)[:200]}
+    print(out)
+    return out
+
+
 @app.function(secrets=secrets, timeout=300)
 def blog_generate_now(dry_run: bool = False) -> dict:
     """On-demand blog post. `modal run modal_app.py::blog_generate_now --dry-run`."""
