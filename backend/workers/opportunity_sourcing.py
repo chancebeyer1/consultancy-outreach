@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
 import psycopg
 
 from campaigns_loader import load_campaign
-from clients import claude, hn_hiring, linkedin_jobs, remoteok, sam_gov, upwork
+from clients import claude, freelancer, hn_hiring, linkedin_jobs, remoteok, sam_gov, upwork
 from config import Config, require
 from operator_profile import operator_bio
 from prompts_loader import load_prompt, system_prefix
@@ -51,6 +51,7 @@ MIN_FIT_TO_DRAFT = 60     # only draft a bid at/above this fit …
 SOURCES: tuple[tuple[str, Any], ...] = (
     ("sam_gov", lambda: sam_gov.fetch_opportunities()),
     ("upwork", lambda: upwork.fetch_opportunities()),
+    ("freelancer", lambda: freelancer.fetch_opportunities()),
     ("hn_hiring", lambda: hn_hiring.fetch_opportunities()),
     ("linkedin_jobs", lambda: linkedin_jobs.fetch_opportunities()),
     ("remoteok", lambda: remoteok.fetch_opportunities()),
@@ -258,12 +259,33 @@ def _ingest(opp: dict[str, Any], fit: dict[str, Any], bid: dict[str, Any] | None
         return False
 
 
+def _expire_stale(dry_run: bool) -> int:
+    """Flip pre-decision opportunities whose response deadline has passed to 'passed' so the
+    /bids queue only shows work that can still be won. Approved/submitted rows are left alone —
+    the operator made a call on those and the UI already flags a lapsed deadline in red."""
+    if dry_run or not Config.database_url:
+        return 0
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "update opportunities set status = 'passed' "
+                "where status in ('new', 'scored', 'drafted') and deadline < now()"
+            )
+            return cur.rowcount or 0
+    except Exception as e:  # noqa: BLE001 — hygiene must never break the sweep
+        print(f"WARNING expire_stale failed: {e}")
+        return 0
+
+
 def source_all(*, dry_run: bool = False, time_budget_s: float = 500.0) -> dict[str, Any]:
-    """Run one full sweep. Returns a summary dict (counts + timings + errors) for the
-    activity log. `dry_run` fetches + scores but writes nothing. `time_budget_s` defers the
-    remainder of the queue to the next sweep once elapsed (Modal watchdog safety)."""
+    """Run one full sweep. Returns a summary dict (counts + timings + errors + the drafted
+    items, so the cron can email an alert) for the activity log. `dry_run` fetches + scores
+    but writes nothing. `time_budget_s` defers the remainder of the queue to the next sweep
+    once elapsed (Modal watchdog safety)."""
     started = time.monotonic()
     errors: list[str] = []
+
+    expired = _expire_stale(dry_run)
 
     prefix = system_prefix(load_campaign(BIDS_CAMPAIGN))
 
@@ -281,6 +303,7 @@ def source_all(*, dry_run: bool = False, time_budget_s: float = 500.0) -> dict[s
     print(f"gathered {len(candidates)} ({len(fresh)} new after dedup)")
 
     scored = drafted = ingested = 0
+    drafted_items: list[dict[str, Any]] = []  # compact — goes into the activity log + alert email
     for opp in fresh:
         if scored >= SCORE_LIMIT:
             errors.append(f"score cap {SCORE_LIMIT} hit — {len(fresh) - scored} deferred")
@@ -301,6 +324,14 @@ def source_all(*, dry_run: bool = False, time_budget_s: float = 500.0) -> dict[s
             bid = _draft(opp, fit, prefix, owner_id)
             if bid:
                 drafted += 1
+                drafted_items.append({
+                    "title": (opp.get("title") or "")[:100],
+                    "source": opp.get("source"),
+                    "fit": int(fit.get("fit_score") or 0),
+                    "est_price": bid.get("est_price") or fit.get("suggested_price"),
+                    "deadline": opp.get("deadline"),
+                    "url": opp.get("url"),
+                })
 
         title = (opp.get("title") or "")[:60]
         print(f"  [{opp.get('source')}] fit={fit.get('fit_score')} "
@@ -317,7 +348,9 @@ def source_all(*, dry_run: bool = False, time_budget_s: float = 500.0) -> dict[s
         "new": len(fresh),
         "scored": scored,
         "drafted": drafted,
+        "drafted_items": drafted_items,
         "ingested": ingested,
+        "expired": expired,
         "elapsed_s": round(time.monotonic() - started, 1),
         "errors": errors,
     }

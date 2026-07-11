@@ -26,6 +26,7 @@ go live on the free ones today and add the gated ones later.
 | **LinkedIn jobs** | uses existing `UNIPILE_*` | Rides your connected LinkedIn account via Unipile. Best-effort, account-scoped, not LinkedIn-sanctioned. |
 | **SAM.gov** (federal) | `SAM_GOV_API_KEY` | Free key from your SAM.gov account. **Free tier ≈ 10 requests/day** — the sweep runs at most once daily to respect it. Register your LLC as an entity to get 1,000/day. |
 | **Upwork** | `UPWORK_ACCESS_TOKEN` | **Gated**: apply at upwork.com/developer (~2-week review), then OAuth2. Connector is built and activates the moment a token is set. **Never scrape Upwork or auto-submit proposals — instant-ban ToS.** |
+| **Freelancer.com** | `FREELANCER_OAUTH_TOKEN` | **Self-serve, no review**: log in → [create an app](https://accounts.freelancer.com/settings/create_app) → mint a token (`basic` scope is enough). Lower rates than Upwork but live immediately. |
 
 Set keys in `.env` (see `.env.example` → "Bidding module") and, for production, in the Modal
 secret: `modal secret create outreach --from-dotenv .env` (re-run to update).
@@ -64,6 +65,11 @@ high-fit software work) an editable drafted proposal. Actions:
 - **Mark submitted** — after you've submitted on the source portal.
 - **Save edits / Copy** — tweak the proposal, copy it to paste into the portal.
 - **Reject / Pass** — drop it from the queue.
+- **Pass N low-fit** — one click clears every undecided, undrafted row under fit 40.
+
+You don't need to check /bids speculatively: whenever a sweep drafts new proposals you get an
+**email alert** listing them (set the optional `DASHBOARD_URL` env for clickable links), and
+opportunities whose response deadline lapses are auto-passed out of the queue daily.
 
 You submit on SAM.gov / Upwork / etc. **by hand** — federal solicitations require a formal
 submission and Upwork's ToS forbids automated proposals. This system gets you a fit-ranked

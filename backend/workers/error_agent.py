@@ -34,6 +34,26 @@ STALE_RESOLVE_DAYS = 4     # a failure not seen this long is treated as resolved
 LOOKBACK_DAYS = 21         # how far back in alert_log to consider "active"
 _SKIP_PATH = ("site-packages", "/pkg/", "python3.", "dist-packages", "<string>")
 
+# Many failures surface as a controlled error DICT (a cron catches the exception and returns
+# {"error": ...}) with no traceback file:line. Map the process/summary to its likely source files so
+# the agent still gets code to write an applyable fix against.
+_SOURCE_HINTS: dict[str, list[str]] = {
+    "blog": ["workers/blog.py"],
+    "email_followup": ["workers/email_sender.py"],
+    "email": ["workers/email_sender.py"],
+    "send_approved": ["workers/sequence_send.py", "workers/email_sender.py"],
+    "replenish": ["workers/replenish.py", "workers/apollo_sourcing.py"],
+    "detect_connection": ["workers/sequence_send.py"],
+    "progress_sequences": ["workers/sequence_send.py"],
+    "sequences": ["workers/sequence_send.py"],
+    "inbound_sweep": ["workers/email_inbox.py", "workers/replies.py"],
+    "replies": ["workers/replies.py"],
+    "comment": ["workers/comment_pacer.py", "workers/growth.py"],
+    "content": ["workers/content.py"],
+    "newsletter": ["workers/newsletter.py"],
+    "withdraw": ["workers/sequence_send.py"],
+}
+
 
 def _connect():
     return psycopg.connect(require("DATABASE_URL"))
@@ -69,13 +89,12 @@ def _repo_rel(path: Path) -> str:
         return path.name
 
 
-def _code_context(detail: str, max_files: int = 4) -> list[dict[str, Any]]:
-    """Read source around each app-file the traceback references. Returns [{path, code}]."""
-    if not detail:
-        return []
+def _code_context(detail: str, source: str = "", summary: str = "", max_files: int = 4) -> list[dict[str, Any]]:
+    """Code the agent needs to write a fix: the source at each traceback file:line, and — when
+    there is no traceback (a cron that returns an error dict) — the likely files for that process."""
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for m in re.finditer(r'File "([^"]+\.py)", line (\d+)', detail):
+    for m in re.finditer(r'File "([^"]+\.py)", line (\d+)', detail or ""):
         raw, line = m.group(1), int(m.group(2))
         local = _resolve_local(raw)
         if not local or str(local) in seen:
@@ -86,10 +105,28 @@ def _code_context(detail: str, max_files: int = 4) -> list[dict[str, Any]]:
         except Exception:  # noqa: BLE001
             continue
         lo, hi = max(0, line - 30), min(len(lines), line + 20)
-        snippet = "\n".join(f"{i + 1}: {lines[i]}" for i in range(lo, hi))
-        out.append({"path": _repo_rel(local), "around_line": line, "code": snippet})
+        out.append({"path": _repo_rel(local), "around_line": line,
+                    "code": "\n".join(f"{i + 1}: {lines[i]}" for i in range(lo, hi))})
         if len(out) >= max_files:
             break
+    # No traceback file:line — fall back to the process's likely source files (whole file, capped).
+    if not out:
+        hay = f"{source} {summary}".lower()
+        for kw, files in _SOURCE_HINTS.items():
+            if kw not in hay:
+                continue
+            for rel in files:
+                local = BACKEND_DIR / rel
+                if str(local) in seen or not local.exists():
+                    continue
+                seen.add(str(local))
+                try:
+                    out.append({"path": _repo_rel(local),
+                                "code": local.read_text(encoding="utf-8", errors="replace")[:12000]})
+                except Exception:  # noqa: BLE001
+                    continue
+                if len(out) >= max_files:
+                    return out
     return out
 
 
@@ -190,7 +227,7 @@ def analyze_new(*, max_n: int = 8) -> dict[str, Any]:
         payload = {
             "source": source, "app": "outreach", "summary": summary,
             "detail": detail or "", "occurrences": occ,
-            "code_context": _code_context(detail or ""),
+            "code_context": _code_context(detail or "", source=source, summary=summary),
         }
         try:
             res = claude.call_json(

@@ -55,12 +55,16 @@ def ab_variant(key: str | None, salt: str = "") -> str:
 
 
 def connect_variant(key: str | None) -> str:
-    """A/B bucket for the LinkedIn connect note. Keeps the original byte-sum algorithm so leads
-    assigned before ab_variant existed keep their bucket — variants are stored per draft row, and
-    a re-draft must land on the same (lead, channel, step, variant) row, not spawn a duplicate."""
+    """A/B/C bucket for the LinkedIn connect note, deterministic per lead (byte-sum of the URL).
+
+    'a' curiosity-led note · 'b' peer-observation note · 'c' NO NOTE AT ALL — the 2026 benchmark
+    data (Belkins/Expandi, 15.1M touchpoints) shows no-note invites ACCEPT higher (27.6% vs 25.3%)
+    while notes double the post-accept reply; variant c tests that trade on our own funnel. A 'c'
+    draft stores an empty body and skips the drafting call entirely. Variants are stored per draft
+    row, so sends made under the old two-way split keep their recorded bucket for attribution."""
     if not key:
         return "a"
-    return "a" if sum(key.encode("utf-8", "ignore")) % 2 == 0 else "b"
+    return ("a", "b", "c")[sum(key.encode("utf-8", "ignore")) % 3]
 
 
 def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:
@@ -198,6 +202,29 @@ def _sender_identity(campaign: "Campaign | None") -> tuple[str, str]:
     return Config.sender_first_name, operator_bio()
 
 
+# The operator's free AI-audit tool — the value-give a post-accept DM can offer (tools convert
+# visitors and prove the product; outbound is their distribution). UTM proves the motion works.
+AUDIT_TOOL_URL = "https://agentry.contentdrip.ai/audit?utm_source=linkedin_dm"
+
+
+def _audit_url_for(campaign: "Campaign | None") -> str | None:
+    """Audit-tool link for the DM payload — ONLY for the admin's (or unowned) campaigns. The tool
+    is the admin's Agentry asset; another user's campaign (e.g. the realtor's) must never link it."""
+    if campaign is None or not campaign.user_id:
+        return AUDIT_TOOL_URL
+    try:
+        import psycopg
+
+        from config import require
+
+        with psycopg.connect(require("DATABASE_URL")) as c, c.cursor() as cur:
+            cur.execute("select is_admin from profiles where id = %s", (campaign.user_id,))
+            row = cur.fetchone()
+        return AUDIT_TOOL_URL if (row and row[0]) else None
+    except Exception:  # noqa: BLE001 — a lookup hiccup just means no tool link this draft
+        return None
+
+
 def draft_for_channel(
     channel: str,
     enrichment: dict[str, Any],
@@ -245,6 +272,8 @@ def draft_for_channel(
         "channel": channel,
         "char_budget": CHANNEL_BUDGETS[channel],
         "variant": variant,  # 'a'|'b' for connect-note A/B; the prompt picks the angle
+        # The free AI-audit tool as the DM's optional value-give (admin campaigns only).
+        "audit_url": _audit_url_for(campaign) if channel == "linkedin_dm" else None,
     }
     raw = claude.call(
         instruction=instruction,

@@ -52,17 +52,19 @@ One or two short sentences. Pattern:
 - Match the prospect's register from their recent posts.
 - One ask MAX; soft.
 
-## A/B variant (use the angle matching `variant` in the payload)
+## A/B/C variant (use the angle matching `variant` in the payload)
 
-We're split-testing two connect-note angles. Write in the one matching `variant`:
+We're split-testing connect-note angles. Write in the one matching `variant`:
 
 - **variant "a" — curiosity / research-led:** lead with genuine curiosity about how they run
   something specific; intent signal is "I'm researching this and would value learning from you."
   Warmer, lower-key.
 - **variant "b" — specific-observation / peer:** open with a concrete observation about their
   work/company, framed peer-to-peer ("just wrapped X, hit the same thing"). More direct.
+- (variant "c" is the NO-NOTE arm — the invite goes out with no text at all. You will never be
+  called for it; if you somehow are, return an empty string.)
 
-If `variant` is null, use "a". Both must obey every hard constraint above.
+If `variant` is null, use "a". All variants must obey every hard constraint above.
 
 ## Grounding — use your real background
 

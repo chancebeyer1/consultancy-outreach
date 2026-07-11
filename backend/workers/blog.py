@@ -69,14 +69,14 @@ def generate_blog_post(*, dry_run: bool = False) -> dict[str, Any]:
         "book_url": BOOK_URL,
     }
     try:
-        # 4000 tokens: the output grew when linkedin_post was added to this call (article 700-1000
-        # words + 1000-1600 char post) — at 2600 the JSON was getting truncated mid-string and
-        # failing to parse ("Expecting value: line 1 column 1").
+        # 8000 tokens: the full JSON is an ~800-1000 word article PLUS a 1000-1600 char LinkedIn
+        # post PLUS meta/tags — at 4000 it was still truncating mid-structure (the error agent caught
+        # the tail landing mid-sentence, not on a } / ]). 8000 clears it with headroom.
         result = claude.call_json(
             instruction=load_prompt("draft_blog_post"),
             user_payload=json.dumps(payload, indent=2),
             model=Config.claude_model_draft,
-            max_tokens=4000,
+            max_tokens=8000,
         )
     except Exception as e:  # noqa: BLE001
         return {"generated": False, "error": f"generation failed: {e}"}

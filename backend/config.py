@@ -108,6 +108,8 @@ class Config:
     # approved, complete OAuth2 and set a (refreshed) access token here. Unset → Upwork skipped.
     upwork_access_token: str = _env("UPWORK_ACCESS_TOKEN")
     upwork_org_id: str = _env("UPWORK_ORG_ID")  # optional tenant id for org-scoped tokens
+    # Freelancer.com — self-serve token from freelancer.com Settings → API. Unset → skipped.
+    freelancer_oauth_token: str = _env("FREELANCER_OAUTH_TOKEN")
 
     # DB
     database_url: str = _env("DATABASE_URL")

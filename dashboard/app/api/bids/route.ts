@@ -29,12 +29,25 @@ interface BidDecisionPayload {
   rejection_reason?: string | null;
 }
 
+// Queue hygiene: pass every still-undecided, undrafted opportunity under a fit threshold in
+// one call. Only touches status new/scored — drafted/approved rows always need human eyes.
+interface BulkPassPayload {
+  action: "bulk_pass";
+  max_fit: number;
+}
+
 const ACTIONS: BidAction[] = ["save", "approve", "reject", "submit", "pass"];
 
 function isValid(p: unknown): p is BidDecisionPayload {
   if (!p || typeof p !== "object") return false;
   const o = p as Record<string, unknown>;
   return typeof o.opportunity_id === "string" && ACTIONS.includes(o.action as BidAction);
+}
+
+function isBulkPass(p: unknown): p is BulkPassPayload {
+  if (!p || typeof p !== "object") return false;
+  const o = p as Record<string, unknown>;
+  return o.action === "bulk_pass" && typeof o.max_fit === "number" && o.max_fit >= 0 && o.max_fit <= 100;
 }
 
 // Map an action → (bid fields, opportunity.status). Some actions touch only one table.
@@ -72,7 +85,7 @@ export async function POST(request: Request) {
   }
 
   const payload = (await request.json()) as unknown;
-  if (!isValid(payload)) {
+  if (!isValid(payload) && !isBulkPass(payload)) {
     return NextResponse.json({ error: "invalid payload" }, { status: 400 });
   }
 
@@ -80,6 +93,21 @@ export async function POST(request: Request) {
   if (gate.error) return gate.error;
 
   const admin = serverAdminClient();
+
+  if (isBulkPass(payload)) {
+    let q = admin
+      .from("opportunities")
+      .update({ status: "passed" }, { count: "exact" })
+      .in("status", ["new", "scored"])
+      .lt("fit_score", payload.max_fit);
+    if (!gate.profile.isAdmin) q = q.eq("user_id", gate.profile.id);
+    const { error, count } = await q;
+    if (error) {
+      console.error("[bids] bulk pass failed", error);
+      return NextResponse.json({ persisted: false, error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ persisted: true, passed: count ?? 0 });
+  }
 
   // Owner check: non-admins may only decide on opportunities they own.
   if (!gate.profile.isAdmin) {

@@ -311,9 +311,12 @@ def _maybe_sweep_opportunities() -> dict:
 
     from config import Config, require
 
-    # Nothing to sweep unless at least one source is configured. SAM/Upwork need keys; the
-    # free feeds (RemoteOK/HN) and LinkedIn (Unipile) run whenever their creds exist.
-    any_source = any((Config.sam_gov_api_key, Config.upwork_access_token, Config.unipile_api_key))
+    # Nothing to sweep unless at least one source is configured. SAM/Upwork/Freelancer need
+    # keys; the free feeds (RemoteOK/HN) and LinkedIn (Unipile) run whenever their creds exist.
+    any_source = any((
+        Config.sam_gov_api_key, Config.upwork_access_token,
+        Config.freelancer_oauth_token, Config.unipile_api_key,
+    ))
     if not any_source:
         return {"skipped": "no bidding sources configured"}
     with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
@@ -333,7 +336,45 @@ def _maybe_sweep_opportunities() -> dict:
         conn.commit()
     from workers.opportunity_sourcing import source_all
 
-    return source_all(dry_run=False, time_budget_s=500)
+    result = source_all(dry_run=False, time_budget_s=500)
+    # Email the operator ONLY when the sweep actually drafted proposals — so /bids never
+    # needs speculative checking. Best-effort: a mail hiccup must not fail the sweep.
+    try:
+        items = result.get("drafted_items") or []
+        if items:
+            _email_bid_alert(items)
+    except Exception as e:  # noqa: BLE001
+        result.setdefault("errors", []).append(f"bid alert email: {e}")
+    return result
+
+
+def _email_bid_alert(items: list) -> None:
+    """One email listing today's drafted bids, via the same Resend-first notify() path the
+    reply/digest alerts use. DASHBOARD_URL (optional env) makes the review link clickable."""
+    import os
+
+    from workers.email_sender import notify
+
+    dash = (os.environ.get("DASHBOARD_URL") or "").rstrip("/")
+    lines = []
+    for it in items:
+        bits = [f"[{it.get('source')}] fit {it.get('fit')} — {it.get('title')}"]
+        if it.get("est_price"):
+            bits.append(f"  suggested: {it['est_price']}")
+        if it.get("deadline"):
+            bits.append(f"  deadline: {str(it['deadline'])[:10]}")
+        if it.get("url"):
+            bits.append(f"  {it['url']}")
+        lines.append("\n".join(bits))
+    n = len(items)
+    body = (
+        f"The daily sweep drafted {n} bid proposal{'s' if n != 1 else ''} for you to review:\n\n"
+        + "\n\n".join(lines)
+        + "\n\nReview, edit, and submit from the dashboard: "
+        + (f"{dash}/bids" if dash else "/bids")
+        + "\n(Nothing is ever auto-submitted.)"
+    )
+    notify(f"{n} new bid draft{'s' if n != 1 else ''} ready to review", body)
 
 
 @app.function(secrets=secrets, timeout=900)
@@ -1199,19 +1240,21 @@ def _maybe_withdraw_stale() -> dict:
         conn.commit()
     from workers.sequence_send import withdraw_stale_invites
 
-    return withdraw_stale_invites(max_per_run=25)
+    return withdraw_stale_invites()
 
 
 @app.function(secrets=secrets, timeout=300)
-def withdraw_stale_now(older_than_days: int = 21, max_per_run: int = 25, dry_run: bool = False) -> dict:
-    """On-demand stale-invite withdrawal (frees pending-invite headroom).
+def withdraw_stale_now(min_age_days: int = 14, target_pending: int = 110, max_per_run: int = 30,
+                       dry_run: bool = False) -> dict:
+    """On-demand adaptive invite withdrawal (frees pending-invite headroom).
 
-        modal run modal_app.py::withdraw_stale_now --dry-run                 # preview
-        modal run modal_app.py::withdraw_stale_now --older-than-days 28      # live, conservative
+        modal run modal_app.py::withdraw_stale_now --dry-run       # preview what would be withdrawn
+        modal run modal_app.py::withdraw_stale_now                 # live
     """
     from workers.sequence_send import withdraw_stale_invites
 
-    return withdraw_stale_invites(older_than_days=older_than_days, max_per_run=max_per_run, dry_run=dry_run)
+    return withdraw_stale_invites(min_age_days=min_age_days, target_pending=target_pending,
+                                  max_per_run=max_per_run, dry_run=dry_run)
 
 
 @app.function(secrets=secrets, timeout=600)

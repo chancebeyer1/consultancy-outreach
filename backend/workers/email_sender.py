@@ -502,7 +502,10 @@ def send_email_followups(
             blocked_no_box.append(item["lead_id"])
             continue
 
+        # _split_subject returns None when the original body has no "Subject:" line (or is empty),
+        # so guard before .lower() — this was the recurring `NoneType has no attribute 'lower'` crash.
         orig_subject, _ = _split_subject(item["ft_body"])
+        orig_subject = (orig_subject or "").strip() or "Following up"
         subject = orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
 
         if dry_run:

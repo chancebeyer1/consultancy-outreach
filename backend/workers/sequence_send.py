@@ -35,10 +35,14 @@ from workers.sequence import determine_next_action
 # Our send-rate quota can't see pending count, so pre-empt the wall at this ceiling.
 PENDING_INVITE_CEILING = 150
 
-# An invite unaccepted this long is effectively dead (research: nearly all accepts land within the
-# first weeks). Withdrawing it frees ceiling headroom so fresh connects keep flowing. The ~3-week
-# re-invite lockout LinkedIn imposes on a withdrawn invite is moot for a lead this cold.
-STALE_INVITE_DAYS = 21
+# Invite-withdrawal policy (adaptive). An invite unaccepted for 2+ weeks is effectively dead
+# (benchmarks: nearly all accepts land within the first days); withdrawing it frees pending-invite
+# ceiling headroom so fresh connects keep flowing. The ~3-week re-invite lockout LinkedIn imposes
+# on a withdrawn invite is moot for a lead this cold.
+STALE_INVITE_DAYS = 21        # age at which an invite is ALWAYS withdrawn (dead weight)
+MIN_WITHDRAW_AGE_DAYS = 14    # never withdraw anything younger — late accepts still trickle in
+PENDING_TARGET = 110          # adaptive goal: keep pending comfortably under the 150 ceiling
+MAX_WITHDRAW_PER_DAY = 30     # gentle daily drip — a mass purge looks like automation
 
 LINKEDIN_CHANNELS = {
     "linkedin_connect",
@@ -367,41 +371,58 @@ def _invalidate_pending_cache() -> None:
 
 def withdraw_stale_invites(
     *,
-    older_than_days: int = STALE_INVITE_DAYS,
-    max_per_run: int = 25,
+    min_age_days: int = MIN_WITHDRAW_AGE_DAYS,
+    hard_stale_days: int = STALE_INVITE_DAYS,
+    target_pending: int = PENDING_TARGET,
+    max_per_run: int = MAX_WITHDRAW_PER_DAY,
     dry_run: bool = False,
     account_id: str | None = None,
 ) -> dict[str, Any]:
-    """Withdraw pending invites older than `older_than_days` to free pending-invite headroom.
+    """Adaptively withdraw old pending invites to keep headroom under the pending-invite ceiling.
 
-    We hit the pending-invite ceiling (self-guarded at PENDING_INVITE_CEILING) well before the
-    send-rate cap, and a pile of old unaccepted invites — including the operator's own pre-system
-    manual ones — just sits there blocking new connects. This withdraws only clearly-dead invites
-    (oldest first, capped per run so it's gentle on the account), which is the single unlock for
-    sustained LinkedIn connect throughput given every accepted connection converts at ~30% on the DM.
+    Two rules, oldest-first, capped at `max_per_run` per day so the pattern stays human:
+      1. Anything older than `hard_stale_days` is dead weight — always withdrawn.
+      2. While the pending count is above `target_pending`, also withdraw the oldest invites that
+         are at least `min_age_days` old, until the count reaches the target.
+    Invites younger than `min_age_days` are NEVER touched (late accepts still trickle in inside two
+    weeks; beyond that the accept probability is negligible per the 2026 benchmark data). This is
+    what keeps connects flowing: we hit the self-imposed ceiling (PENDING_INVITE_CEILING guard) long
+    before any send-rate cap, and every accepted connection converts at ~30% on the post-accept DM.
     """
     try:
         pending = unipile.list_sent_invitations(account_id=account_id, budget_s=90)
     except Exception as e:  # noqa: BLE001
         return {"error": f"list failed: {str(e)[:140]}"}
 
-    cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
-    stale: list[tuple[datetime, dict]] = []
+    now = datetime.now(UTC)
+    dated: list[tuple[datetime, dict]] = []
     for inv in pending:
         raw = inv.get("sent_at")
         if not raw or not inv.get("id"):
             continue
         try:
-            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            dated.append((datetime.fromisoformat(str(raw).replace("Z", "+00:00")), inv))
         except ValueError:
             continue
-        if ts < cutoff:
-            stale.append((ts, inv))
-    stale.sort(key=lambda x: x[0])  # oldest first
+    dated.sort(key=lambda x: x[0])  # oldest first
+
+    hard_cut = now - timedelta(days=hard_stale_days)
+    soft_cut = now - timedelta(days=min_age_days)
+    to_withdraw: list[dict] = []
+    projected = len(pending)
+    for ts, inv in dated:
+        if len(to_withdraw) >= max_per_run:
+            break
+        if ts < hard_cut:
+            to_withdraw.append(inv)          # rule 1: dead weight, always
+            projected -= 1
+        elif ts < soft_cut and projected > target_pending:
+            to_withdraw.append(inv)          # rule 2: oldest eligible, only while over target
+            projected -= 1
 
     withdrawn: list[dict] = []
     failed: list[dict] = []
-    for _, inv in stale[:max_per_run]:
+    for inv in to_withdraw:
         if dry_run:
             withdrawn.append({"id": inv.get("id"), "name": inv.get("name"), "sent_at": inv.get("sent_at")})
             continue
@@ -416,11 +437,13 @@ def withdraw_stale_invites(
 
     return {
         "pending_total": len(pending),
-        "stale_found": len(stale),
+        "eligible": len(to_withdraw),
         "withdrawn": len(withdrawn),
         "failed": len(failed),
+        "pending_after": len(pending) - len(withdrawn),
+        "target": target_pending,
         "dry_run": dry_run,
-        "details": {"withdrawn": withdrawn[:25], "failed": failed[:10]},
+        "details": {"withdrawn": withdrawn[:30], "failed": failed[:10]},
     }
 
 
@@ -488,6 +511,7 @@ def send_approved_first_touch(
     dry_run: bool = False,
     limit: int | None = None,
     connect_per_run: int | None = None,
+    time_budget_s: float | None = None,
 ) -> dict[str, Any]:
     """Send approved FIRST-TOUCH drafts straight from the DB.
 
@@ -551,6 +575,11 @@ def send_approved_first_touch(
     blocked_fairness: list[str] = []
     blocked_cooldown: list[str] = []
     connects_sent = 0  # per-run pacing for connection requests (avoid one daily burst)
+    # Wall-clock bound so this leg can't blow the dispatcher's 600s watchdog when the send queue is
+    # deep or Unipile is slow (each send is a ~1-5s API call, worse with retries). Remaining approved
+    # drafts DEFER to the next tick — idempotent, nothing lost. This is what makes cron_send bounded.
+    deferred = 0
+    deadline = (time.monotonic() + time_budget_s) if time_budget_s else None
 
     def _has_quota(channel: str, account_id: str | None) -> bool:
         key = (channel, account_id)
@@ -614,8 +643,11 @@ def send_approved_first_touch(
         except Exception:  # noqa: BLE001 — a failed pre-check must not block the run
             pass
 
-    for (draft_id, lead_id, channel, body, edited_body, url, name, company, campaign_id,
-         acct, email_acct) in rows:
+    for _i, (draft_id, lead_id, channel, body, edited_body, url, name, company, campaign_id,
+             acct, email_acct) in enumerate(rows):
+        if deadline is not None and time.monotonic() > deadline:
+            deferred = len(rows) - _i
+            break
         campaign_id = str(campaign_id) if campaign_id else None
         first, _, last = (name or "").partition(" ")
         lead = {
@@ -717,6 +749,7 @@ def send_approved_first_touch(
         "blocked_cooldown": len(blocked_cooldown),
         "blocked_no_recipient": len(blocked_no_recipient),
         "failed": len(failed),
+        "deferred": deferred,
         "details": {
             "pushed": pushed,
             "fell_back": fell_back,

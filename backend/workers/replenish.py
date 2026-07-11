@@ -29,6 +29,12 @@ from workers import draft, enrich, score
 QUEUE_THRESHOLD = 20  # if < this many messageable leads, pull fresh ones
 PULL_LIMIT = 15  # max leads to source per campaign per replenish run (gradual ramp)
 QUEUE_LOOKBACK_DAYS = 7  # count leads sourced in the last N days
+# LinkedIn-specific queue (the 2026-07 rebalance): the blended queue count let email drafts mask an
+# EMPTY LinkedIn queue — recruiting had 915 approved emails and zero connect drafts while LinkedIn
+# was the only converting channel. Keep a per-campaign pool of ready connect drafts, filled from
+# leads ALREADY in the DB (email-sourced, enriched + scored) before ever sourcing anew.
+LI_QUEUE_THRESHOLD = 20   # unsent connect drafts to keep ready per campaign
+LI_DRAFT_BATCH = 12       # connects drafted per campaign per tick (~1 Claude call each)
 
 
 def _connect():
@@ -53,14 +59,14 @@ def _load_campaigns() -> list:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "select c.id, c.slug, c.search_url, c.search_params, p.unipile_account_id "
+                "select c.id, c.slug, c.search_url, c.search_params, p.unipile_account_id, c.channels "
                 "from campaigns c "
                 "left join profiles p on p.id = c.user_id "
                 "where c.status = 'active' and (c.search_url is not null or c.search_params is not null)"
             )
             return [
                 {"id": row[0], "slug": row[1], "search_url": row[2], "search_params": row[3],
-                 "account_id": row[4]}
+                 "account_id": row[4], "channels": row[5]}
                 for row in cur.fetchall()
             ]
     finally:
@@ -85,6 +91,157 @@ def _messageable_count(cursor, campaign_id: str) -> int:
         (campaign_id, cutoff.isoformat()),
     )
     return cursor.fetchone()[0] or 0
+
+
+# Output-sanity gate for auto-approved connect notes. With no human review in the loop, a draft
+# that leaks meta-text ("variant b wants..."), echoes a template placeholder, declares the lead
+# disqualified, or blows LinkedIn's 300-char invite cap MUST NOT ship. Caught live 2026-07-11:
+# one note narrated its own instructions (1,150 chars), another read "DISQUALIFIED, do not send"
+# (the model rightly refusing an off-ICP lead the scorer overrated) — both auto-approved.
+_NOTE_BAD_MARKERS = (
+    "variant", "payload", "char budget", "char_budget", "{{", "first_name",
+    "disqualified", "do not send", "cannot write", "as an ai", "i can't",
+)
+
+
+def _connect_note_ok(body: str) -> bool:
+    """True if a connect note is safe to auto-send (length + no meta/refusal leakage)."""
+    if len(body) > 300:
+        return False
+    low = body.lower()
+    return not any(m in low for m in _NOTE_BAD_MARKERS)
+
+
+def _li_queue_count(cursor, campaign_id: str) -> int:
+    """Unsent LinkedIn opener drafts (connect/InMail) ready for this campaign — no lookback
+    window: an old unsent connect draft is still sendable inventory."""
+    cursor.execute(
+        """
+        select count(*)
+        from drafts d
+        join leads l on l.id = d.lead_id
+        left join sends s on s.draft_id = d.id
+        where l.campaign_id = %s
+          and d.channel in ('linkedin_connect', 'linkedin_inmail')
+          and d.status in ('draft', 'approved')
+          and s.id is null
+        """,
+        (campaign_id,),
+    )
+    return cursor.fetchone()[0] or 0
+
+
+def draft_connects_for_existing(
+    campaign_slug: str,
+    *,
+    limit: int = LI_DRAFT_BATCH,
+    deadline_ts: float | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """Draft (and auto-approve) LinkedIn connect openers for leads ALREADY in the DB.
+
+    These are leads sourced for email (Apollo) that never got LinkedIn work — enriched and scored
+    already, so each connect note costs ONE Claude call (zero for the no-note 'c' arm) instead of a
+    full re-enrichment. Highest-fit first; only fit>=60 (the auto-approve floor — anything lower
+    would sit unreviewed forever now the drafts page is retired). Skips leads with any existing
+    LinkedIn opener draft or any reply. `deadline_ts` (time.monotonic value) bounds the loop.
+    """
+    from workers.draft import Hook
+
+    campaign = load_campaign(campaign_slug)
+    conn, Jsonb = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select id, auto_send from campaigns where slug = %s", (campaign_slug,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"slug": campaign_slug, "error": "campaign not found"}
+            campaign_id, auto_send = str(row[0]), bool(row[1])
+            cur.execute(
+                """
+                select l.id, l.linkedin_url, l.company, sc.fit_score,
+                       e.profile_json, e.company_signals_json, e.recent_posts_json, e.hooks_json
+                from leads l
+                join scores sc on sc.lead_id = l.id
+                join enrichments e on e.lead_id = l.id
+                where l.campaign_id = %s
+                  and l.linkedin_url is not null
+                  and sc.fit_score >= 60
+                  and not exists (
+                      select 1 from drafts d
+                      where d.lead_id = l.id and d.channel in ('linkedin_connect', 'linkedin_inmail')
+                  )
+                  and not exists (select 1 from replies r where r.lead_id = l.id)
+                order by sc.fit_score desc
+                limit %s
+                """,
+                (campaign_id, limit),
+            )
+            candidates = cur.fetchall()
+
+        drafted = 0
+        approved = 0
+        rejected = 0
+        by_variant: dict[str, int] = {}
+        for lead_id, url, company, fit, profile, signals, posts, hooks_json in candidates:
+            if deadline_ts is not None and time.monotonic() > deadline_ts:
+                break
+            enrichment = {
+                "profile": profile or {},
+                "company_signals": signals or {},
+                "recent_posts": posts or [],
+                "company": company,
+            }
+            variant = draft.connect_variant(url)
+            try:
+                if variant == "c":
+                    body = ""  # no-note invite arm — nothing to draft
+                else:
+                    hooks = [Hook.from_json(h) for h in (hooks_json or []) if isinstance(h, dict)]
+                    chosen = draft.pick_hook(hooks, "linkedin_connect") if hooks else None
+                    if chosen is None:
+                        hooks = draft.extract_hooks(enrichment, campaign=campaign)
+                        chosen = draft.pick_hook(hooks, "linkedin_connect")
+                    body = draft.draft_for_channel(
+                        "linkedin_connect", enrichment, chosen, campaign=campaign, variant=variant,
+                    )
+            except Exception as e:  # noqa: BLE001 — one bad lead must not stop the batch
+                print(f"draft_connects_for_existing: {campaign_slug} lead {lead_id}: {str(e)[:120]}")
+                continue
+
+            status = "approved" if (auto_send and int(fit or 0) >= 60) else "draft"
+            # Sanity-gate the note (variant c's empty body is exempt — there is no note). A bad
+            # note is stored as 'rejected': audit trail + blocks re-drafting the same lead.
+            if variant != "c" and not _connect_note_ok(body):
+                status = "rejected"
+            if dry_run:
+                drafted += 1
+                by_variant[variant] = by_variant.get(variant, 0) + 1
+                continue
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into drafts (lead_id, channel, step_index, body, status, variant, generated_at)
+                    values (%s, 'linkedin_connect', 0, %s, %s, %s, now())
+                    on conflict (lead_id, channel, step_index, variant) do update
+                      set body = excluded.body, generated_at = now()
+                      where drafts.status in ('draft', 'rejected')
+                    """,
+                    (lead_id, body, status, variant),
+                )
+                conn.commit()
+            drafted += 1
+            approved += status == "approved"
+            rejected += status == "rejected"
+            by_variant[variant] = by_variant.get(variant, 0) + 1
+
+        return {"slug": campaign_slug, "candidates": len(candidates), "drafted": drafted,
+                "approved": approved, "rejected_bad": rejected, "variants": by_variant,
+                "dry_run": dry_run}
+    finally:
+        conn.close()
 
 
 def _existing_lead_urls(cur) -> set[str]:
@@ -220,13 +377,16 @@ def _process_lead(
         fit = int((record.get("score") or {}).get("fit_score") or 0)
         channels = draft.resolve_channels(campaign, fit)
         _url = record.get("linkedin_url")
-        record["drafts"] = {
-            channel: draft.draft_for_channel(
-                channel, enrichment, chosen, campaign=campaign,
-                variant=draft.connect_variant(_url) if channel == "linkedin_connect" else None,
+        drafts_out: dict[str, str] = {}
+        for channel in channels:
+            variant = draft.connect_variant(_url) if channel == "linkedin_connect" else None
+            if channel == "linkedin_connect" and variant == "c":
+                drafts_out[channel] = ""  # variant c = NO-NOTE invite; nothing to draft
+                continue
+            drafts_out[channel] = draft.draft_for_channel(
+                channel, enrichment, chosen, campaign=campaign, variant=variant,
             )
-            for channel in channels
-        }
+        record["drafts"] = drafts_out
         record["status"] = "ok"
     except Exception as e:  # noqa: BLE001
         record["status"] = "failed"
@@ -362,7 +522,10 @@ def _ingest_records(records: list[dict]) -> dict:
                     lead_url = rec.get("linkedin_url")
                     first_touch = {"linkedin_connect", "linkedin_inmail"}
                     for step_index, (channel, body) in enumerate(drafts.items()):
-                        if not body:
+                        # A/B tag the connect note (deterministic per lead); other channels stay NULL.
+                        variant = connect_variant(lead_url) if channel == "linkedin_connect" else None
+                        # Empty body is only legitimate for variant 'c' (the no-note invite arm).
+                        if not body and variant != "c":
                             continue
                         # auto-approve only above a fit floor so a noisy search can't auto-blast
                         draft_status = (
@@ -370,8 +533,10 @@ def _ingest_records(records: list[dict]) -> dict:
                             if (auto_send and channel in first_touch and fit >= 60)
                             else "draft"
                         )
-                        # A/B tag the connect note (deterministic per lead); other channels stay NULL.
-                        variant = connect_variant(lead_url) if channel == "linkedin_connect" else None
+                        # Same output-sanity gate as draft_connects_for_existing: a note that leaks
+                        # meta/refusal text or blows the invite cap must never auto-send.
+                        if channel == "linkedin_connect" and variant != "c" and not _connect_note_ok(body):
+                            draft_status = "rejected"
                         cur.execute(
                             """
                             insert into drafts
@@ -436,6 +601,30 @@ def replenish_all_campaigns(dry_run: bool = False, time_budget_s: float | None =
                         {"slug": campaign_slug, "reason": "time budget exhausted; deferred to next tick"}
                     )
                     continue
+
+                # 0. LinkedIn-first: keep a pool of ready connect drafts, filled from leads ALREADY
+                # in the DB (their enrichment + score are paid for). Independent of the sourcing
+                # check below — whose blended count lets a full email queue mask an empty LinkedIn
+                # queue (the 2026-07 starvation: 915 email drafts, zero connects, recruiting ICP).
+                li_channels = camp_info.get("channels")
+                if (li_channels is None or "linkedin_connect" in li_channels):
+                    li_queue = _li_queue_count(cur, campaign_id)
+                    if li_queue < LI_QUEUE_THRESHOLD:
+                        try:
+                            li_res = draft_connects_for_existing(
+                                campaign_slug,
+                                limit=LI_DRAFT_BATCH,
+                                deadline_ts=(started + time_budget_s) if time_budget_s else None,
+                                dry_run=dry_run,
+                            )
+                            if li_res.get("drafted") or li_res.get("error"):
+                                summary.setdefault("li_drafted", []).append(
+                                    {"queue_before": li_queue, **li_res}
+                                )
+                        except Exception as e:  # noqa: BLE001 — never block sourcing on this leg
+                            summary.setdefault("li_drafted", []).append(
+                                {"slug": campaign_slug, "error": str(e)[:140]}
+                            )
 
                 # 1. Count messageable queue
                 queue_count = _messageable_count(cur, campaign_id)

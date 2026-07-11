@@ -434,16 +434,20 @@ def cancel_invitation(invitation_id: str, *, account_id: str | None = None) -> d
 def send_linkedin_invitation(
     provider_id: str, message: str, *, user_email: str | None = None, account_id: str | None = None
 ) -> dict[str, Any]:
-    """Send a connection request with a note.  POST /users/invite (JSON).
+    """Send a connection request, with or without a note.  POST /users/invite (JSON).
 
-    `message` is truncated to LinkedIn's 300-char invite-note limit. `account_id` is the
-    sending account (defaults to the global account; multi-user passes the lead owner's).
+    `message` is truncated to LinkedIn's 300-char invite-note limit. An EMPTY message sends a
+    no-note invite (the field is omitted entirely — variant "c" of the connect A/B; benchmarks
+    show no-note invites accept slightly HIGHER). `account_id` is the sending account (defaults
+    to the global account; multi-user passes the lead owner's).
     """
     body: dict[str, Any] = {
         "account_id": account_id or _li_account(),
         "provider_id": provider_id,
-        "message": _invite_note(message),
     }
+    note = _invite_note(message)
+    if note:
+        body["message"] = note
     if user_email:
         body["user_email"] = user_email
     with httpx.Client(timeout=60.0) as c:

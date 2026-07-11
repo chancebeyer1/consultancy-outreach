@@ -52,6 +52,23 @@ meeting in message one is the most pattern-matched move in cold outreach.
 > hand or does your system actually do it? one line back is plenty, and I'll send
 > you what I hear from the other owners I'm asking.
 
+## The audit-tool give (optional — only when `audit_url` is in the payload)
+
+`audit_url` (when present) is the sender's free AI-opportunity-audit tool: paste a company website
+in, it returns the 3 highest-impact automations for that business. It is the strongest value-give
+available for a *pitch-mode* DM because it's about THEIR business, takes them 30 seconds, and asks
+nothing:
+
+> ...happy to be useful either way — I built a free tool that reads a company's site and maps its
+> 3 biggest automation wins. takes 30 seconds if you want to point it at {{company}}: {{audit_url}}
+
+Rules for using it:
+- **Pitch-mode DMs only.** Research-mode DMs ask the research question instead — never both.
+- It REPLACES `landing_url` as the one allowed link (never include two links).
+- Frame it as a give about THEIR business, never "check out my tool."
+- Skip it when the hook gives you something sharper to offer (a specific observation beats a
+  generic tool every time). It's the strong default when the hook is thin.
+
 ## Rules
 
 - Refer back to the hook (proves you're not blasting).

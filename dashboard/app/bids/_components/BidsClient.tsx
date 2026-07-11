@@ -9,6 +9,7 @@ type Action = "save" | "approve" | "reject" | "submit" | "pass";
 const SOURCE_META: Record<OpportunitySource, { label: string; cls: string }> = {
   sam_gov: { label: "SAM.gov", cls: "bg-blue-500/15 text-blue-300 ring-blue-500/30" },
   upwork: { label: "Upwork", cls: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30" },
+  freelancer: { label: "Freelancer", cls: "bg-teal-500/15 text-teal-300 ring-teal-500/30" },
   remoteok: { label: "RemoteOK", cls: "bg-fuchsia-500/15 text-fuchsia-300 ring-fuchsia-500/30" },
   hn_hiring: { label: "HN hiring", cls: "bg-orange-500/15 text-orange-300 ring-orange-500/30" },
   linkedin_jobs: { label: "LinkedIn", cls: "bg-sky-500/15 text-sky-300 ring-sky-500/30" },
@@ -32,9 +33,15 @@ function deadlineLabel(iso: string | null): { text: string; urgent: boolean } | 
   return { text: `${days}d left`, urgent: days <= 5 };
 }
 
+// Bulk-pass threshold: rows under this fit, with no drafted bid, are junk by definition —
+// the scorer reserves <40 for out-of-scope work (see prompts/score_opportunity.md).
+const BULK_PASS_FIT = 40;
+
 export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const [rows, setRows] = useState<BidReviewRow[]>(initialRows);
   const [sourceFilter, setSourceFilter] = useState<OpportunitySource | "all">("all");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkNote, setBulkNote] = useState<string | null>(null);
 
   // Derive chips from LIVE rows (not initialRows) so a fully-dispositioned source's chip
   // disappears instead of lingering at "(0)".
@@ -64,6 +71,40 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
     });
   }
 
+  // Mirrors the server-side bulk_pass filter: undecided, undrafted, fit below threshold.
+  const isLowFit = (r: BidReviewRow) =>
+    !r.bid &&
+    (r.opportunity.status === "new" || r.opportunity.status === "scored") &&
+    r.opportunity.fit_score != null &&
+    r.opportunity.fit_score < BULK_PASS_FIT;
+  const lowFitCount = rows.filter(isLowFit).length;
+
+  async function bulkPass() {
+    if (!window.confirm(`Pass ${lowFitCount} low-fit opportunities (fit < ${BULK_PASS_FIT})?`)) return;
+    setBulkBusy(true);
+    setBulkNote(null);
+    try {
+      const res = await fetch("/api/bids", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bulk_pass", max_fit: BULK_PASS_FIT }),
+      });
+      const data = (await res.json()) as { persisted?: boolean; passed?: number; error?: string; reason?: string };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setRows((prev) => prev.filter((r) => !isLowFit(r)));
+      if (sourceFilter !== "all" && !rows.filter((r) => !isLowFit(r)).some((r) => r.opportunity.source === sourceFilter)) {
+        setSourceFilter("all");
+      }
+      setBulkNote(
+        data.persisted === false ? `cleared locally (${data.reason ?? "mock mode"})` : `passed ${data.passed ?? lowFitCount}`,
+      );
+    } catch (err) {
+      setBulkNote(`error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <header className="mb-6">
@@ -84,6 +125,16 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
             {SOURCE_META[s]?.label ?? s} ({rows.filter((r) => r.opportunity.source === s).length})
           </FilterChip>
         ))}
+        {lowFitCount > 0 && (
+          <button
+            onClick={bulkPass}
+            disabled={bulkBusy}
+            className="ml-auto rounded-md bg-neutral-900 px-3 py-1 text-xs font-medium text-red-300 ring-1 ring-red-500/30 transition hover:bg-red-500/10 disabled:opacity-40"
+          >
+            {bulkBusy ? "…" : `Pass ${lowFitCount} low-fit (<${BULK_PASS_FIT})`}
+          </button>
+        )}
+        {bulkNote && <span className="text-xs text-neutral-400">{bulkNote}</span>}
       </div>
 
       {visible.length === 0 ? (
