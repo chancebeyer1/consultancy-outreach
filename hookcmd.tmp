@@ -1,1 +1,0 @@
-cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" && { [ -n "$(git status --porcelain)" ] || exit 0; } && git add -A && git commit -q -m "auto-checkpoint: $(date '+%Y-%m-%d %H:%M')" && git push -q origin HEAD && { git push -q origin HEAD:main 2>/dev/null || true; }
