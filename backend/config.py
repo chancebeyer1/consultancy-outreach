@@ -93,6 +93,22 @@ class Config:
     resend_api_key: str = _env("RESEND_API_KEY")
     notify_email: str = _env("NOTIFY_EMAIL")
 
+    # Error Agent — opens fix PRs for recurring failures. GITHUB_TOKEN = a fine-grained PAT with
+    # contents:write + pull_requests:write on the repo. Without it the agent still root-causes +
+    # digests every error; it just can't open the PR (the digest carries the ready-to-apply fix).
+    github_token: str = _env("GITHUB_TOKEN")
+    github_repo: str = _env("GITHUB_REPO", "chancebeyer1/consultancy-outreach")
+
+    # Bidding module — opportunity sourcing across gov + freelance sources.
+    # SAM.gov: free key from your SAM.gov account (Account Details → generate). Free tier is
+    # ~10 requests/DAY, so the sweep runs at most once daily; entity-registering your LLC
+    # lifts it to 1,000/day. Unset → the SAM source is skipped.
+    sam_gov_api_key: str = _env("SAM_GOV_API_KEY")
+    # Upwork GraphQL API — gated behind Upwork's ~2-week developer-application review. Once
+    # approved, complete OAuth2 and set a (refreshed) access token here. Unset → Upwork skipped.
+    upwork_access_token: str = _env("UPWORK_ACCESS_TOKEN")
+    upwork_org_id: str = _env("UPWORK_ORG_ID")  # optional tenant id for org-scoped tokens
+
     # DB
     database_url: str = _env("DATABASE_URL")
 

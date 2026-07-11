@@ -124,6 +124,14 @@ def _logged(action: str, result):
     return result
 
 
+def _err_meta(e: Exception) -> dict:
+    """Error dict that KEEPS the full traceback — so the error agent can pinpoint the file:line and
+    propose an exact fix, instead of only seeing the exception message. Use in cron except blocks."""
+    import traceback
+
+    return {"error": str(e)[:300], "traceback": traceback.format_exc()[:2500]}
+
+
 # ---------------------------------------------------------------------------
 # Scheduled work
 # ---------------------------------------------------------------------------
@@ -175,7 +183,9 @@ def progress_sequences_cron() -> dict:
     from workers.sequence_send import progress_sequences
 
     try:
-        res = progress_sequences(limit=50)
+        # 500s budget keeps this well under the dispatcher's 600s per-job watchdog; a backlog
+        # of due follow-ups defers to the next tick instead of hanging (idempotent, no loss).
+        res = progress_sequences(limit=50, time_budget_s=500)
     except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
         import traceback
 
@@ -236,10 +246,16 @@ def replenish_queue_cron() -> dict:
         digest = _maybe_comment_digest()
     except Exception as e:  # noqa: BLE001
         digest = {"error": str(e)}
+    # And — at most once a day — sweep gov/freelance sources for software-AI work and draft
+    # bids into /bids. Guarded to ~once daily (SAM.gov free tier is ~10 requests/day).
+    try:
+        bids = _maybe_sweep_opportunities()
+    except Exception as e:  # noqa: BLE001
+        bids = {"error": str(e)}
     return _logged(
         "cron_replenish",
-        {"linkedin": linkedin, "apollo_email": email,
-         "deal_briefs": briefs, "newsletter": newsletter, "blog": blog, "growth_digest": digest},
+        {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
+         "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids},
     )
 
 
@@ -282,6 +298,54 @@ def _maybe_generate_blog() -> dict:
     from workers.blog import generate_blog_post
 
     return generate_blog_post()
+
+
+def _maybe_sweep_opportunities() -> dict:
+    """Sweep contract/freelance sources for software-AI work and draft bids — at most ONCE
+    a day. The ~20h guard (opportunity-count + an app_settings marker, like the blog) keeps it
+    to roughly once daily across hourly ticks, which is REQUIRED: SAM.gov's free API tier is
+    ~10 requests/day, so an hourly sweep would exhaust the quota immediately. Best-effort;
+    wrapped by the caller."""
+    import psycopg
+
+    from config import Config, require
+
+    # Nothing to sweep unless at least one source is configured. SAM/Upwork need keys; the
+    # free feeds (RemoteOK/HN) and LinkedIn (Unipile) run whenever their creds exist.
+    any_source = any((Config.sam_gov_api_key, Config.upwork_access_token, Config.unipile_api_key))
+    if not any_source:
+        return {"skipped": "no bidding sources configured"}
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_opportunity_sweep'")
+        has_marker = cur.fetchone() is not None
+        cur.execute(
+            "select count(*) from opportunities where discovered_at > now() - interval '20 hours'"
+        )
+        swept_recently = int((cur.fetchone() or [0])[0] or 0) > 0
+        if has_marker and swept_recently:
+            return {"skipped": "already swept today"}
+    from workers.opportunity_sourcing import source_all
+
+    result = source_all(dry_run=False, time_budget_s=500)
+    # Stamp the marker so the guard is exact even on a sweep that ingested nothing.
+    try:
+        with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+            cur.execute(
+                "insert into app_settings (key, value) values ('last_opportunity_sweep', to_jsonb(now()::text)) "
+                "on conflict (key) do update set value = excluded.value"
+            )
+    except Exception:  # noqa: BLE001 — marker is best-effort; the 20h opportunity-count guard still holds
+        pass
+    return result
+
+
+@app.function(secrets=secrets, timeout=900)
+def opportunities_sweep_now(dry_run: bool = False) -> dict:
+    """On-demand bid sweep. `modal run modal_app.py::opportunities_sweep_now --dry-run`.
+    Ignores the once-a-day guard — use sparingly given SAM.gov's ~10 req/day free quota."""
+    from workers.opportunity_sourcing import source_all
+
+    return _logged("opportunities_sweep", source_all(dry_run=dry_run, time_budget_s=800))
 
 
 @app.function(secrets=secrets, timeout=300)
@@ -1040,11 +1104,11 @@ def send_approved_cron() -> dict:
     try:
         email_followups = _timed("email_followups", lambda: send_email_followups(time_budget_s=150))
     except Exception as e:  # noqa: BLE001
-        email_followups = {"error": str(e)}
+        email_followups = _err_meta(e)
     try:
         email = _timed("email", lambda: send_email_first_touch(time_budget_s=150))
     except Exception as e:  # noqa: BLE001
-        email = {"error": str(e)}
+        email = _err_meta(e)
     # Publish any LinkedIn posts the operator approved in the dashboard (via Unipile).
     try:
         from workers.content import publish_approved
@@ -1206,6 +1270,65 @@ def dispatch_comments_now(dry_run: bool = False, force: bool = False) -> dict:
     return dispatch_due_comments(dry_run=dry_run, force=force)
 
 
+def _error_digest_due() -> bool:
+    """True at most once per day, first tick at/after 14:00 UTC — the daily error-digest gate."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.hour < 14:
+        return False
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_error_digest'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return False
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_error_digest', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    return True
+
+
+@app.function(secrets=secrets, timeout=600)
+def error_agent_cron() -> dict:
+    """Collect + root-cause new failures, open fix PRs, and once/day email the consolidated digest.
+
+    This is the self-healing loop: it turns the per-error alert spam into one analyzed digest and a
+    set of ready-to-merge PRs. Runs every hour (analysis is near-instant once errors are known);
+    the digest fires once daily via the date guard.
+    """
+    from workers.error_agent import run
+
+    try:
+        res = run(do_prs=True, do_digest=_error_digest_due())
+    except Exception:  # noqa: BLE001 — surface a crash so it logs (agent failing is worth knowing)
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_error_agent", res)
+
+
+@app.function(secrets=secrets, timeout=600)
+def error_agent_now(dry_run: bool = False, digest: bool = False) -> dict:
+    """On-demand error-agent pass.
+
+        modal run modal_app.py::error_agent_now --dry-run --digest   # collect+analyze, preview digest, no PRs
+        modal run modal_app.py::error_agent_now                      # live: analyze + open PRs
+        modal run modal_app.py::error_agent_now --digest             # live + send the digest now
+    """
+    from workers.error_agent import run
+
+    return run(do_prs=not dry_run, do_digest=digest, dry_run=dry_run)
+
+
 def _run_job(name: str, fn, timeout: int = 600, stragglers: list | None = None) -> str:
     """Run one dispatcher job under a hard wall-clock cap.
 
@@ -1275,6 +1398,7 @@ def hourly_dispatcher() -> dict:
         ("send_approved", send_approved_cron, 600),
         ("dispatch_comments", dispatch_comments_cron, 600),
         ("ramp_caps", ramp_caps_cron, 180),
+        ("error_agent", error_agent_cron, 600),
     )
     results: dict = {}
     stragglers: list = []

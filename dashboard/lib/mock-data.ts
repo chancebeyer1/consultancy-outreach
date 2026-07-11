@@ -1,4 +1,13 @@
-import type { Campaign, DraftReviewRow, Hook, Lead, Reply, ReplyReviewRow, Score } from "./types";
+import type {
+  BidReviewRow,
+  Campaign,
+  DraftReviewRow,
+  Hook,
+  Lead,
+  Reply,
+  ReplyReviewRow,
+  Score,
+} from "./types";
 
 // In-memory fixtures so the dashboard renders without Supabase wired up.
 // Replace with real Supabase queries in lib/queries.ts once the DB is live.
@@ -519,4 +528,96 @@ export const MOCK_REPLY_ROWS: ReplyReviewRow[] = [
     },
     "your AI practice page caught my eye — specifically the bit about…",
   ),
+];
+
+// Bidding module fixtures so /bids renders without Supabase wired up.
+export const MOCK_BID_ROWS: BidReviewRow[] = [
+  {
+    opportunity: {
+      id: "opp-1",
+      source: "sam_gov",
+      external_id: "N0002426R1234",
+      title: "AI-Enabled Document Processing & Workflow Automation",
+      org: "Dept. of Veterans Affairs — Office of Information & Technology",
+      description:
+        "The VA seeks a contractor to design and deploy an AI/LLM-based system to classify, extract, and route inbound benefits documents, reducing manual triage. Small business set-aside. Response due in 21 days.",
+      url: "https://sam.gov/opp/example",
+      budget: "Est. ceiling $180,000",
+      location: "Remote / Washington, DC",
+      deadline: ts(-21),
+      posted_at: ts(2),
+      naics: "541512",
+      psc: "D302",
+      set_aside: "Total Small Business",
+      fit_score: 88,
+      fit_rationale:
+        "Core deliverable is an AI document-processing agent — squarely in scope. Small-business set-aside makes a solo LLC eligible; sub-$250K ceiling is winnable.",
+      fit_flags: {
+        is_software: true,
+        is_ai_agent: true,
+        eligible: true,
+        reasons: ["AI/LLM core", "small-business set-aside", "sub-$250K, solo-winnable"],
+      },
+      status: "drafted",
+      discovered_at: ts(2),
+      updated_at: ts(2),
+    },
+    bid: {
+      id: "bid-1",
+      opportunity_id: "opp-1",
+      summary: "We ship production document-classification agents — directly on target.",
+      body: "Reducing manual triage of benefits documents is exactly the kind of problem a focused AI agent solves well. My approach: an LLM classification-and-extraction pipeline that reads each inbound document, tags it by type, pulls the fields that matter, and routes it to the right queue — with a human-in-the-loop confirmation step for low-confidence cases so nothing slips. I've shipped production agents that do precisely this kind of intake-and-route work (e.g. iinfii.ai), built on the Anthropic API with Postgres and a review dashboard. I can provide a full technical response ahead of the deadline. Could we set up a 20-minute scoping call to confirm document types and volumes?\n\n— Chance",
+      edited_body: null,
+      est_price: "$140,000 fixed (phased: pilot → full rollout)",
+      status: "draft",
+      rejection_reason: null,
+      generated_at: ts(2),
+      decided_at: null,
+      submitted_at: null,
+    },
+  },
+  {
+    opportunity: {
+      id: "opp-2",
+      source: "upwork",
+      external_id: "~01abc",
+      title: "Build a customer-support AI agent (RAG over our docs)",
+      org: "Upwork client (US)",
+      description:
+        "Startup wants an AI agent that answers customer questions from our help-center docs and escalates to a human when unsure. Must integrate with Intercom. Looking for someone who has shipped this before.",
+      url: "https://www.upwork.com/jobs/~01abc",
+      budget: "$60–$90/hr",
+      location: "Remote",
+      deadline: null,
+      posted_at: ts(1),
+      naics: null,
+      psc: null,
+      set_aside: null,
+      fit_score: 82,
+      fit_rationale:
+        "Grounded RAG support agent with escalation and an Intercom integration — textbook AI-agent build, clearly solo-deliverable.",
+      fit_flags: {
+        is_software: true,
+        is_ai_agent: true,
+        eligible: true,
+        reasons: ["RAG agent", "clear scope", "remote"],
+      },
+      status: "drafted",
+      discovered_at: ts(1),
+      updated_at: ts(1),
+    },
+    bid: {
+      id: "bid-2",
+      opportunity_id: "opp-2",
+      summary: "Grounded support agent with escalation — I've shipped this exact pattern.",
+      body: "A support agent that actually answers from your docs (and knows when to hand off) lives or dies on grounding. I'd build it as RAG over your help-center content with confidence-gated escalation into Intercom, so it resolves the easy questions instantly and routes the rest to a human with full context. I've shipped agents on this exact pattern in production. Happy to walk through your Intercom setup and doc sources on a quick call — what's your current ticket volume?\n\n— Chance",
+      edited_body: null,
+      est_price: "$75/hr, ~3–4 week initial build",
+      status: "draft",
+      rejection_reason: null,
+      generated_at: ts(1),
+      decided_at: null,
+      submitted_at: null,
+    },
+  },
 ];

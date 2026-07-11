@@ -877,11 +877,18 @@ def progress_sequences(
     *,
     dry_run: bool = False,
     limit: int | None = None,
+    time_budget_s: float | None = None,
 ) -> dict[str, Any]:
     """One pass through the sequence engine. Returns a summary dict.
 
     Suitable for a cron tick; idempotent across runs. Follow-ups run automatically and stop
     per-lead the moment they reply (determine_next_action halts on any reply).
+
+    `time_budget_s` bounds the run's wall clock so it always returns inside the dispatcher's
+    per-job watchdog: each LinkedIn step costs ~5-15s (on-demand Claude draft + Unipile send),
+    so a backlog of due follow-ups could otherwise blow the 600s cap (the 2026-07 progress_
+    sequences hang). Remaining actionable leads are DEFERRED to the next hourly tick (idempotent,
+    so nothing is lost).
     """
     sends_by_lead, replies_by_lead, leads_by_id = _load_state()
     actionable_list = determine_next_action(
@@ -897,6 +904,8 @@ def progress_sequences(
     blocked_no_recipient: list[str] = []
     blocked_quota: list[str] = []
     failed: list[dict[str, Any]] = []
+    deferred = 0
+    deadline = (time.monotonic() + time_budget_s) if time_budget_s else None
 
     if not actionable_list:
         return {
@@ -925,7 +934,10 @@ def progress_sequences(
     # connections so each send commits independently.
     conn = _connect()
     try:
-        for a in actionable_list:
+        for idx, a in enumerate(actionable_list):
+            if deadline is not None and time.monotonic() > deadline:
+                deferred = len(actionable_list) - idx
+                break
             lead = leads_by_id.get(a.lead_id)
             if not lead:
                 blocked_no_recipient.append(a.lead_id)
@@ -1004,6 +1016,7 @@ def progress_sequences(
         "blocked_no_recipient": len(blocked_no_recipient),
         "blocked_quota": len(blocked_quota),
         "failed": len(failed),
+        "deferred": deferred,
         "details": {
             "pushed": pushed,
             "blocked_no_draft": blocked_no_draft,

@@ -5,10 +5,12 @@
 
 import type { Scope } from "./auth";
 import { loadDraftReviewRowsFromFile } from "./jsonl-source";
-import { MOCK_CAMPAIGNS, MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
+import { MOCK_BID_ROWS, MOCK_CAMPAIGNS, MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
 import { loadReplyRowsFromFile } from "./replies-source";
 import { dataSource, serverAdminClient, serverClient } from "./supabase";
 import type {
+  Bid,
+  BidReviewRow,
   Campaign,
   Channel,
   Draft,
@@ -21,6 +23,7 @@ import type {
   LeadDisplayStatus,
   LeadRow,
   LeadStatus,
+  Opportunity,
   Reply,
   ReplyReviewRow,
   Score,
@@ -880,4 +883,52 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
     notes: (notesRes.data ?? []) as DealDetail["notes"],
     auditReport: auditRow?.report ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Bidding module — /bids review queue. Opportunities (discovered software/AI
+// work) joined with their drafted bid. Mirrors getDraftReviewRows' 3-mode shape
+// (file mode has no bids, so it degrades to []). Sorted best-fit first.
+// ---------------------------------------------------------------------------
+export async function getBidReviewRows(scope?: Scope): Promise<BidReviewRow[]> {
+  if (dataSource === "mock") return MOCK_BID_ROWS;
+  if (dataSource === "file") return [];
+  return loadBidReviewRowsFromSupabase(scope);
+}
+
+async function loadBidReviewRowsFromSupabase(scope?: Scope): Promise<BidReviewRow[]> {
+  const supabase = await serverClient();
+  const uid = scopeUserId(scope);
+
+  // Opportunities the operator hasn't dispositioned yet (submitted/passed drop off the queue).
+  let oppQ = supabase
+    .from("opportunities")
+    .select("*")
+    .in("status", ["new", "scored", "drafted", "approved"])
+    .order("fit_score", { ascending: false, nullsFirst: false })
+    .order("discovered_at", { ascending: false })
+    .limit(400);
+  if (uid) oppQ = oppQ.eq("user_id", uid);
+  const { data: opps, error: oppErr } = await oppQ;
+  if (oppErr) throw oppErr;
+  if (!opps || opps.length === 0) return [];
+
+  const oppRows = opps as unknown as Opportunity[];
+  const oppIds = oppRows.map((o) => o.id);
+
+  const bidsById = new Map<string, Bid>();
+  for (let i = 0; i < oppIds.length; i += 200) {
+    const chunk = oppIds.slice(i, i + 200);
+    const { data: bids, error: bidErr } = await supabase
+      .from("bids")
+      .select("*")
+      .in("opportunity_id", chunk);
+    if (bidErr) throw bidErr;
+    for (const b of (bids ?? []) as unknown as Bid[]) bidsById.set(b.opportunity_id, b);
+  }
+
+  return oppRows.map((opportunity) => ({
+    opportunity,
+    bid: bidsById.get(opportunity.id) ?? null,
+  }));
 }

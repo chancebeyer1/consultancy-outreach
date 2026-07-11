@@ -25,6 +25,17 @@ def _connect():
     return psycopg.connect(require("DATABASE_URL"))
 
 
+def _ticket_status(signature: str) -> str | None:
+    """Status of this failure in the error agent's ticket store, if it has one (None if untracked)."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("select status from error_tickets where signature = %s", (signature,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception:  # noqa: BLE001 — table may not exist yet / DB hiccup → behave as untracked
+        return None
+
+
 def _should_send(signature: str, source: str, summary: str, cooldown_hours: float) -> bool:
     """True if this failure should email now (new, or its cooldown has passed). Records the hit."""
     try:
@@ -57,6 +68,17 @@ def _should_send(signature: str, source: str, summary: str, cooldown_hours: floa
 def alert(source: str, summary: str, detail: str = "", *, cooldown_hours: float = 6.0) -> dict[str, Any]:
     """Email a throttled failure alert. `source` = process name, `summary` = short problem line."""
     sig = hashlib.sha1(f"{source}|{summary}".encode("utf-8", "ignore")).hexdigest()[:20]
+    # If the error agent already owns this failure (root-caused / PR open / muted), stay silent —
+    # it's carried in the daily digest. Only NEW or not-yet-analyzed failures alert immediately, so
+    # a novel breakage still pings fast while known ones stop spamming the inbox.
+    if _ticket_status(sig) in ("analyzed", "pr_opened", "muted", "resolved"):
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute("update alert_log set count = count + 1 where signature = %s", (sig,))
+                conn.commit()
+        except Exception:  # noqa: BLE001
+            pass
+        return {"sent": False, "suppressed": "handled by error agent"}
     if not _should_send(sig, source, summary, cooldown_hours):
         return {"sent": False, "throttled": True}
     body = (

@@ -1,0 +1,14 @@
+# AI Consulting Bids — the persona bundle the BIDDING module uses to fit-score
+# opportunities and draft proposals. Unlike the outreach campaigns, this one drives no
+# LinkedIn/email lead sourcing (no search_url / no apollo_params → the replenish worker
+# skips it). Its `icp` is the "ideal opportunity profile" and its `offer` is what Chance
+# actually builds. Sync to DB (optional) with:  uv run python -m scripts.sync_campaigns
+#
+# The bidding worker loads it by slug: workers.opportunity_sourcing → load_campaign("ai-consulting-bids").
+
+name = "AI Consulting Bids"
+slug = "ai-consulting-bids"
+is_default = false
+
+# No auto-anything: every bid is drafted for human review, then you submit by hand.
+auto_send = false

@@ -203,3 +203,77 @@ export interface ReplyReviewRow {
   lead: Lead;
   original_message: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Bidding module — mirrors backend/db/migrations/0038_opportunities.sql.
+// Opportunities are discovered software/AI work; bids are drafted proposals.
+// ---------------------------------------------------------------------------
+
+export type OpportunitySource =
+  | "sam_gov"
+  | "upwork"
+  | "remoteok"
+  | "hn_hiring"
+  | "linkedin_jobs";
+
+export type OpportunityStatus =
+  | "new"
+  | "scored"
+  | "drafted"
+  | "approved"
+  | "submitted"
+  | "passed"
+  | "won"
+  | "lost";
+
+export type BidStatus = "draft" | "approved" | "rejected" | "submitted";
+
+export interface FitFlags {
+  is_software?: boolean;
+  is_ai_agent?: boolean;
+  eligible?: boolean;
+  reasons?: string[];
+}
+
+export interface Opportunity {
+  id: string;
+  source: OpportunitySource;
+  external_id: string;
+  title: string;
+  org: string | null;
+  description: string | null;
+  url: string | null;
+  budget: string | null;
+  location: string | null;
+  deadline: string | null;
+  posted_at: string | null;
+  naics: string | null;
+  psc: string | null;
+  set_aside: string | null;
+  fit_score: number | null;
+  fit_rationale: string | null;
+  fit_flags: FitFlags | null;
+  status: OpportunityStatus;
+  discovered_at: string;
+  updated_at: string;
+}
+
+export interface Bid {
+  id: string;
+  opportunity_id: string;
+  summary: string | null;
+  body: string;
+  edited_body: string | null;
+  est_price: string | null;
+  status: BidStatus;
+  rejection_reason: string | null;
+  generated_at: string;
+  decided_at: string | null;
+  submitted_at: string | null;
+}
+
+// Aggregate view for /bids: an opportunity joined with its drafted bid (if any).
+export interface BidReviewRow {
+  opportunity: Opportunity;
+  bid: Bid | null;
+}
