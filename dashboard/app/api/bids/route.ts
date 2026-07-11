@@ -19,7 +19,7 @@ import { NextResponse } from "next/server";
 import { requireApiUser } from "@/lib/auth";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
-type BidAction = "save" | "approve" | "reject" | "submit" | "pass";
+type BidAction = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api";
 
 interface BidDecisionPayload {
   opportunity_id: string;
@@ -27,7 +27,13 @@ interface BidDecisionPayload {
   action: BidAction;
   edited_body?: string | null;
   rejection_reason?: string | null;
+  // submit_api only — relayed to the Modal bid_submit webhook (Freelancer.com, whose
+  // official API sanctions bid placement; Upwork/SAM stay manual).
+  amount?: number | null;
+  period_days?: number | null;
 }
+
+const BID_SUBMIT_URL = "https://chanceb323--consultancy-outreach-bid-submit.modal.run";
 
 // Queue hygiene: pass the low-fit rows the client is DISPLAYING, by explicit id. The client
 // sends the ids so the confirm dialog's count is exactly what gets passed — a filter-only
@@ -40,7 +46,7 @@ interface BulkPassPayload {
   opportunity_ids: string[];
 }
 
-const ACTIONS: BidAction[] = ["save", "approve", "reject", "submit", "pass"];
+const ACTIONS: BidAction[] = ["save", "approve", "reject", "submit", "pass", "submit_api"];
 
 function isValid(p: unknown): p is BidDecisionPayload {
   if (!p || typeof p !== "object") return false;
@@ -82,11 +88,22 @@ function bidPatch(action: BidAction, payload: BidDecisionPayload): Record<string
       };
     case "pass":
       return null; // opportunity-only
+    case "submit_api":
+      return null; // handled before the patch path (relayed to Modal, which owns the flips)
   }
 }
 
 function oppStatus(action: BidAction): string | null {
-  return { save: null, approve: "approved", reject: "passed", submit: "submitted", pass: "passed" }[action];
+  return (
+    {
+      save: null,
+      approve: "approved",
+      reject: "passed",
+      submit: "submitted",
+      pass: "passed",
+      submit_api: null,
+    }[action] ?? null
+  );
 }
 
 export async function POST(request: Request) {
@@ -140,6 +157,52 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (!opp || opp.user_id !== gate.profile.id) {
       return NextResponse.json({ error: "not your opportunity" }, { status: 403 });
+    }
+  }
+
+  // API submission: persist any pending edits first (the worker reads the proposal from the
+  // DB), then relay to the Modal webhook which places the bid on the platform. The Modal
+  // side owns all state flips (bids/opportunities → submitted) on success.
+  if (payload.action === "submit_api") {
+    const token = process.env.CONTENT_WEBHOOK_TOKEN;
+    if (!token) {
+      return NextResponse.json({ error: "not configured (set CONTENT_WEBHOOK_TOKEN)" }, { status: 503 });
+    }
+    if (payload.edited_body) {
+      let q = admin
+        .from("bids")
+        .update({ edited_body: payload.edited_body })
+        .eq("opportunity_id", payload.opportunity_id);
+      if (payload.bid_id) q = q.eq("id", payload.bid_id);
+      const { error } = await q;
+      if (error) {
+        return NextResponse.json({ persisted: false, error: error.message }, { status: 500 });
+      }
+    }
+    try {
+      const res = await fetch(BID_SUBMIT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          opportunity_id: payload.opportunity_id,
+          amount: payload.amount ?? null,
+          period_days: payload.period_days ?? 7,
+        }),
+      });
+      const data = (await res.json()) as { submitted?: boolean; error?: string };
+      if (!res.ok || data.submitted === false) {
+        return NextResponse.json(
+          { persisted: false, submitted: false, error: data.error || `HTTP ${res.status}` },
+          { status: 502 },
+        );
+      }
+      return NextResponse.json({ persisted: true, submitted: true, ...data });
+    } catch (err) {
+      return NextResponse.json(
+        { persisted: false, submitted: false, error: err instanceof Error ? err.message : String(err) },
+        { status: 502 },
+      );
     }
   }
 

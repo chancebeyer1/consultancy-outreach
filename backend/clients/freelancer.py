@@ -109,6 +109,59 @@ def _normalize(p: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# ---------------------------------------------------------------------------
+# Bid placement — officially supported by the Freelancer API (the official SDK ships
+# place_project_bid). Only ever called from a human-initiated dashboard/CLI action; the
+# sweep never submits anything.
+# ---------------------------------------------------------------------------
+
+_USERS_SELF = "https://www.freelancer.com/api/users/0.1/self/"
+_BIDS = "https://www.freelancer.com/api/projects/0.1/bids/"
+
+
+def my_user_id() -> int:
+    """The token owner's Freelancer user id (required as bidder_id when placing a bid)."""
+    with httpx.Client(timeout=30.0) as c:
+        r = c.get(_USERS_SELF, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token})
+        r.raise_for_status()
+        data = r.json()
+    uid = (data.get("result") or {}).get("id")
+    if not uid:
+        raise RuntimeError(f"couldn't resolve own user id from /users/0.1/self/: {str(data)[:200]}")
+    return int(uid)
+
+
+def place_bid(
+    *,
+    project_id: int,
+    amount: float,
+    period_days: int,
+    description: str,
+    milestone_percentage: int = 100,
+) -> dict[str, Any]:
+    """Place one bid on an open project. Raises with the API's own error message on failure
+    (e.g. insufficient token scope, bid limit reached, already bid) so the caller can show it.
+    Returns the created bid object (contains `id` — the provider bid id)."""
+    body = {
+        "project_id": int(project_id),
+        "bidder_id": my_user_id(),
+        "amount": float(amount),
+        "period": int(period_days),
+        "milestone_percentage": int(milestone_percentage),
+        "description": description,
+    }
+    with httpx.Client(timeout=45.0) as c:
+        r = c.post(_BIDS, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token}, json=body)
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        if r.status_code >= 400 or data.get("status") == "error":
+            msg = data.get("message") or data.get("error_code") or r.text[:200]
+            raise RuntimeError(f"Freelancer bid failed (HTTP {r.status_code}): {msg}")
+    result = data.get("result") or {}
+    if not result.get("id"):
+        raise RuntimeError(f"Freelancer bid response missing id: {str(data)[:200]}")
+    return result
+
+
 def fetch_opportunities(*, query: str = DEFAULT_QUERY, limit: int = 50) -> list[dict[str, Any]]:
     """Recent AI/software Freelancer projects open for bidding. [] if no token / on error."""
     if not Config.freelancer_oauth_token:

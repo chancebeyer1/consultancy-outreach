@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { BidReviewRow, OpportunitySource } from "@/lib/types";
 
-type Action = "save" | "approve" | "reject" | "submit" | "pass";
+type Action = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api";
 
 const SOURCE_META: Record<OpportunitySource, { label: string; cls: string }> = {
   sam_gov: { label: "SAM.gov", cls: "bg-blue-500/15 text-blue-300 ring-blue-500/30" },
@@ -14,6 +14,14 @@ const SOURCE_META: Record<OpportunitySource, { label: string; cls: string }> = {
   hn_hiring: { label: "HN hiring", cls: "bg-orange-500/15 text-orange-300 ring-orange-500/30" },
   linkedin_jobs: { label: "LinkedIn", cls: "bg-sky-500/15 text-sky-300 ring-sky-500/30" },
 };
+
+// Sources whose official API lets us place the bid from here (mirrors the backend's
+// API_SUBMITTABLE). Upwork's ToS bans automated proposals; SAM has no submission API.
+const API_SUBMITTABLE = new Set<OpportunitySource>(["freelancer"]);
+
+// Bulk-pass threshold: undrafted rows under this fit are junk by definition —
+// the scorer reserves <40 for out-of-scope work (see prompts/score_opportunity.md).
+const BULK_PASS_FIT = 40;
 
 function fitColor(score: number | null): string {
   if (score == null) return "text-neutral-500";
@@ -33,9 +41,18 @@ function deadlineLabel(iso: string | null): { text: string; urgent: boolean } | 
   return { text: `${days}d left`, urgent: days <= 5 };
 }
 
-// Bulk-pass threshold: rows under this fit, with no drafted bid, are junk by definition —
-// the scorer reserves <40 for out-of-scope work (see prompts/score_opportunity.md).
-const BULK_PASS_FIT = 40;
+function amountFromEstPrice(estPrice: string | null): string {
+  const m = (estPrice ?? "").replace(/,/g, "").match(/\d+(\.\d+)?/);
+  return m ? m[0] : "";
+}
+
+type Bucket = "needs_approval" | "approved" | "low_fit";
+
+function bucketOf(r: BidReviewRow): Bucket {
+  if (r.bid?.status === "approved") return "approved";
+  if (r.bid) return "needs_approval";
+  return "low_fit";
+}
 
 export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const [rows, setRows] = useState<BidReviewRow[]>(initialRows);
@@ -43,8 +60,6 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkNote, setBulkNote] = useState<string | null>(null);
 
-  // Derive chips from LIVE rows (not initialRows) so a fully-dispositioned source's chip
-  // disappears instead of lingering at "(0)".
   const sources = useMemo(() => {
     const s = new Set<OpportunitySource>();
     rows.forEach((r) => s.add(r.opportunity.source));
@@ -55,23 +70,36 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
     () => (sourceFilter === "all" ? rows : rows.filter((r) => r.opportunity.source === sourceFilter)),
     [rows, sourceFilter],
   );
+  const needsApproval = visible.filter((r) => bucketOf(r) === "needs_approval");
+  const approved = visible.filter((r) => bucketOf(r) === "approved");
+  const lowFit = visible.filter((r) => bucketOf(r) === "low_fit");
 
   function removeRow(oppId: string) {
     setRows((prev) => {
       const next = prev.filter((r) => r.opportunity.id !== oppId);
-      // If the active source just emptied, fall back to "all" — otherwise the page shows
-      // the global empty state while other sources still have rows.
-      if (
-        sourceFilter !== "all" &&
-        !next.some((r) => r.opportunity.source === sourceFilter)
-      ) {
+      if (sourceFilter !== "all" && !next.some((r) => r.opportunity.source === sourceFilter)) {
         setSourceFilter("all");
       }
       return next;
     });
   }
 
-  // Mirrors the server-side bulk_pass filter: undecided, undrafted, fit below threshold.
+  // Approve keeps the row — it MOVES to the Approved section (and the server keeps
+  // returning it), so a refresh shows exactly the same state.
+  function markApproved(oppId: string) {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.opportunity.id === oppId && r.bid
+          ? {
+              opportunity: { ...r.opportunity, status: "approved" as const },
+              bid: { ...r.bid, status: "approved" as const },
+            }
+          : r,
+      ),
+    );
+  }
+
+  // Mirrors the server-side bulk_pass guards: undecided, undrafted, fit below threshold.
   const isLowFit = (r: BidReviewRow) =>
     !r.bid &&
     (r.opportunity.status === "new" || r.opportunity.status === "scored") &&
@@ -80,8 +108,6 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const lowFitCount = rows.filter(isLowFit).length;
 
   async function bulkPass() {
-    // Snapshot the ids at click time — the server only passes THESE rows, so the count the
-    // user confirms is exactly what happens even if the queue mutates mid-flight.
     const ids = rows.filter(isLowFit).map((r) => r.opportunity.id);
     if (ids.length === 0) return;
     if (!window.confirm(`Pass ${ids.length} low-fit opportunities (fit < ${BULK_PASS_FIT})?`)) return;
@@ -98,7 +124,6 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
       const removed = new Set(ids);
       setRows((prev) => {
         const next = prev.filter((r) => !removed.has(r.opportunity.id));
-        // Reset inside the updater (fresh `next`, not a stale closure) — mirrors removeRow.
         if (sourceFilter !== "all" && !next.some((r) => r.opportunity.source === sourceFilter)) {
           setSourceFilter("all");
         }
@@ -119,13 +144,13 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
       <header className="mb-6">
         <h1 className="text-xl font-semibold text-white">Bids</h1>
         <p className="mt-1 text-sm text-neutral-400">
-          Software / AI-agent work discovered across SAM.gov, Upwork, RemoteOK, HN and LinkedIn —
-          fit-scored, with a drafted proposal. Review, edit, then submit on the source portal.
-          Nothing is auto-submitted.
+          Software / AI-agent work discovered across SAM.gov, Upwork, Freelancer, RemoteOK, HN and
+          LinkedIn — fit-scored, with drafted proposals. Freelancer bids submit from here via
+          their official API; other platforms you submit by hand and mark submitted.
         </p>
       </header>
 
-      <div className="mb-5 flex flex-wrap items-center gap-2">
+      <div className="mb-6 flex flex-wrap items-center gap-2">
         <FilterChip active={sourceFilter === "all"} onClick={() => setSourceFilter("all")}>
           All ({rows.length})
         </FilterChip>
@@ -153,13 +178,66 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
           <code className="text-neutral-400">scripts.sweep_opportunities</code>.
         </div>
       ) : (
-        <div className="space-y-4">
-          {visible.map((row) => (
-            <BidCard key={row.opportunity.id} row={row} onDone={removeRow} />
-          ))}
+        <div className="space-y-8">
+          <Section
+            title="Needs approval"
+            hint="Drafted proposals awaiting your decision"
+            count={needsApproval.length}
+            accent="text-amber-300"
+          >
+            {needsApproval.map((row) => (
+              <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
+            ))}
+          </Section>
+          <Section
+            title="Approved — ready to submit"
+            hint="Freelancer submits from here; other platforms: submit on the portal, then mark submitted"
+            count={approved.length}
+            accent="text-emerald-300"
+          >
+            {approved.map((row) => (
+              <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
+            ))}
+          </Section>
+          <Section
+            title="Low fit — no bid drafted"
+            hint="Scored below the draft gate; pass them or pursue by hand"
+            count={lowFit.length}
+            accent="text-neutral-400"
+          >
+            {lowFit.map((row) => (
+              <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
+            ))}
+          </Section>
         </div>
       )}
     </div>
+  );
+}
+
+function Section({
+  title,
+  hint,
+  count,
+  accent,
+  children,
+}: {
+  title: string;
+  hint: string;
+  count: number;
+  accent: string;
+  children: React.ReactNode;
+}) {
+  if (count === 0) return null;
+  return (
+    <section>
+      <div className="mb-3 flex items-baseline gap-2">
+        <h2 className={`text-sm font-semibold uppercase tracking-wide ${accent}`}>{title}</h2>
+        <span className="text-xs text-neutral-500">{count}</span>
+        <span className="hidden text-xs text-neutral-600 sm:inline">— {hint}</span>
+      </div>
+      <div className="space-y-4">{children}</div>
+    </section>
   );
 }
 
@@ -186,26 +264,37 @@ function FilterChip({
   );
 }
 
-function BidCard({ row, onDone }: { row: BidReviewRow; onDone: (id: string) => void }) {
+function BidCard({
+  row,
+  onApproved,
+  onRemoved,
+}: {
+  row: BidReviewRow;
+  onApproved: (oppId: string) => void;
+  onRemoved: (oppId: string) => void;
+}) {
   const { opportunity: o, bid } = row;
-  // Fallback: opportunities.source is free text in the DB — an unknown value (new source
-  // shipped in the worker before the UI) must not crash the whole page.
   const meta = SOURCE_META[o.source] ?? {
     label: o.source,
     cls: "bg-neutral-500/15 text-neutral-300 ring-neutral-500/30",
   };
   const dl = deadlineLabel(o.deadline);
   const flags = o.fit_flags ?? {};
+  const isApproved = bid?.status === "approved";
+  const canApiSubmit = isApproved && API_SUBMITTABLE.has(o.source);
 
   const [body, setBody] = useState(bid?.edited_body ?? bid?.body ?? "");
-  // Baseline the dirty check against the last SAVED body (state), not the immutable prop —
-  // otherwise the Save button never flips back to "Saved" after a successful save.
   const [savedBody, setSavedBody] = useState(bid?.edited_body ?? bid?.body ?? "");
+  const [amount, setAmount] = useState(() => amountFromEstPrice(bid?.est_price ?? null));
   const [busy, setBusy] = useState<Action | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const dirty = bid ? body !== savedBody : false;
 
   async function act(action: Action) {
+    if (action === "submit_api" && (!amount || Number(amount) <= 0)) {
+      setNote("enter a bid amount first");
+      return;
+    }
     setBusy(action);
     setNote(null);
     try {
@@ -217,15 +306,25 @@ function BidCard({ row, onDone }: { row: BidReviewRow; onDone: (id: string) => v
           bid_id: bid?.id ?? null,
           action,
           edited_body: body || null,
+          amount: action === "submit_api" ? Number(amount) : null,
+          period_days: action === "submit_api" ? 7 : null,
         }),
       });
-      const data = (await res.json()) as { persisted?: boolean; reason?: string; error?: string };
+      const data = (await res.json()) as {
+        persisted?: boolean;
+        submitted?: boolean;
+        reason?: string;
+        error?: string;
+      };
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (action === "save") {
         setNote(data.persisted === false ? `saved (${data.reason ?? "no-op"})` : "saved");
         setSavedBody(body);
+      } else if (action === "approve") {
+        setSavedBody(body);
+        onApproved(o.id);
       } else {
-        onDone(o.id); // approve / reject / submit / pass all clear the row
+        onRemoved(o.id); // reject / pass / submit / submit_api clear the row
       }
     } catch (err) {
       setNote(`error: ${err instanceof Error ? err.message : String(err)}`);
@@ -305,9 +404,9 @@ function BidCard({ row, onDone }: { row: BidReviewRow; onDone: (id: string) => v
       {bid ? (
         <div className="mt-4">
           {bid.summary && <p className="mb-2 text-sm font-medium text-neutral-200">{bid.summary}</p>}
-          {(bid.est_price || o.budget) && (
+          {bid.est_price && (
             <p className="mb-2 text-xs text-neutral-400">
-              Suggested: <span className="text-neutral-200">{bid.est_price ?? "—"}</span>
+              Suggested: <span className="text-neutral-200">{bid.est_price}</span>
             </p>
           )}
           <textarea
@@ -317,12 +416,31 @@ function BidCard({ row, onDone }: { row: BidReviewRow; onDone: (id: string) => v
             className="w-full resize-y rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-[13px] leading-relaxed text-neutral-100 outline-none focus:border-neutral-600"
           />
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <ActionBtn tone="primary" busy={busy === "approve"} onClick={() => act("approve")}>
-              Approve
-            </ActionBtn>
-            <ActionBtn tone="ghost" busy={busy === "submit"} onClick={() => act("submit")}>
-              Mark submitted
-            </ActionBtn>
+            {!isApproved && (
+              <ActionBtn tone="primary" busy={busy === "approve"} onClick={() => act("approve")}>
+                Approve
+              </ActionBtn>
+            )}
+            {canApiSubmit && (
+              <span className="flex items-center gap-1.5">
+                <span className="text-xs text-neutral-400">$</span>
+                <input
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))}
+                  inputMode="decimal"
+                  placeholder="amount"
+                  className="w-24 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-xs text-neutral-100 outline-none focus:border-neutral-600"
+                />
+                <ActionBtn tone="primary" busy={busy === "submit_api"} onClick={() => act("submit_api")}>
+                  Submit on {meta.label}
+                </ActionBtn>
+              </span>
+            )}
+            {isApproved && (
+              <ActionBtn tone="ghost" busy={busy === "submit"} onClick={() => act("submit")}>
+                Mark submitted
+              </ActionBtn>
+            )}
             <ActionBtn tone="ghost" busy={busy === "save"} disabled={!dirty} onClick={() => act("save")}>
               {dirty ? "Save edits" : "Saved"}
             </ActionBtn>

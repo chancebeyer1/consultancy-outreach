@@ -58,14 +58,20 @@ guarded to **once a day** (SAM.gov quota). On-demand: `modal run modal_app.py::o
 
 ## Review & submit
 
-Open the dashboard **/bids** tab. Each card shows the source, fit score, why it fits, and (for
-high-fit software work) an editable drafted proposal. Actions:
+Open the dashboard **/bids** tab — three sections: **Needs approval** (drafted proposals
+awaiting your call), **Approved — ready to submit**, and **Low fit — no bid drafted**.
+Approving moves the card to the Approved section (it stays until submitted or rejected).
 
-- **Approve** — mark ready to submit.
-- **Mark submitted** — after you've submitted on the source portal.
-- **Save edits / Copy** — tweak the proposal, copy it to paste into the portal.
+- **Approve** — move to the ready-to-submit list.
+- **Submit on Freelancer** — places the bid through Freelancer's official API (amount
+  prefilled from the draft's estimate, 7-day delivery window). Freelancer's API sanctions
+  programmatic bid placement; every submission is you clicking the button on a proposal you
+  reviewed. Requires a completed Freelancer profile on the account.
+- **Mark submitted** — for the manual platforms (SAM.gov has no submission API; Upwork's
+  ToS bans automated proposals — never wire it).
+- **Save edits / Copy** — tweak the proposal; API submission always uses your last-saved text.
 - **Reject / Pass** — drop it from the queue.
-- **Pass N low-fit** — one click clears every undecided, undrafted row under fit 40.
+- **Pass N low-fit** — one click clears the low-fit rows currently shown.
 
 You don't need to check /bids speculatively: when the **daily sweep** drafts new proposals it
 emails you the list (requires `NOTIFY_EMAIL` + Resend, same as reply alerts; set the optional

@@ -440,6 +440,50 @@ def opportunities_sweep_now(dry_run: bool = False) -> dict:
     return _logged("opportunities_sweep", source_all(dry_run=dry_run, time_budget_s=800))
 
 
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def bid_submit(request_body: dict) -> dict:
+    """Dashboard-triggered bid submission via the source platform's official API (currently
+    Freelancer.com only — see workers/bids_submit.py for why the others stay manual).
+    Human-initiated per bid; nothing scheduled ever calls this. Reuses CONTENT_WEBHOOK_TOKEN.
+    Body: {"token": ..., "opportunity_id": "...", "amount": 1500, "period_days": 7}."""
+    import os
+
+    from fastapi import HTTPException
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    if not token or request_body.get("token") != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+    opportunity_id = request_body.get("opportunity_id")
+    if not opportunity_id:
+        raise HTTPException(status_code=400, detail="opportunity_id required")
+    amount = request_body.get("amount")
+    period = int(request_body.get("period_days") or 7)
+    from workers.bids_submit import submit_freelancer_bid
+
+    try:
+        result = submit_freelancer_bid(
+            str(opportunity_id),
+            amount=float(amount) if amount else None,
+            period_days=period,
+        )
+    except Exception as e:  # noqa: BLE001 — surface the reason to the dashboard verbatim
+        return {"submitted": False, "error": str(e)[:300]}
+    return _logged("bid_submitted", result)
+
+
+@app.function(secrets=secrets, timeout=60)
+def bid_submit_now(opportunity_id: str, amount: float = 0.0, period_days: int = 7) -> dict:
+    """One-shot CLI submission: `modal run modal_app.py::bid_submit_now --opportunity-id <uuid>
+    [--amount 1500] [--period-days 7]`. Same guards as the webhook."""
+    from workers.bids_submit import submit_freelancer_bid
+
+    result = submit_freelancer_bid(
+        opportunity_id, amount=amount if amount > 0 else None, period_days=period_days
+    )
+    return _logged("bid_submitted", result)
+
+
 @app.function(secrets=secrets, timeout=120)
 def bids_sources_check(sources: str = "") -> dict:
     """Fetch-only connectivity check for bidding sources — no scoring, no drafting, no DB
