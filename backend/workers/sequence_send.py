@@ -517,7 +517,8 @@ def send_approved_first_touch(
 
     The dashboard's approve action sets drafts.status='approved' in Postgres. This
     sends those approved cold-opener drafts (linkedin_connect / email) for leads with
-    no prior send, via Unipile — the DB-driven equivalent of scripts/send_approvals.py,
+    no prior LinkedIn send (an email touch does NOT block — cross-channel openers are
+    intentional), via Unipile — the DB-driven equivalent of scripts/send_approvals.py,
     so first contact works on Modal without the operator's laptop. Follow-ups (the DM
     after a connection is accepted, etc.) stay with progress_sequences().
 
@@ -543,10 +544,14 @@ def send_approved_first_touch(
                   and d.channel in ('linkedin_connect', 'linkedin_inmail')
                   and (c.status is null or c.status = 'active')  -- paused/archived campaigns don't send
                   and not exists (select 1 from sends s where s.draft_id = d.id)
+                  -- no prior LINKEDIN send only: leads sourced for email get LinkedIn openers
+                  -- from replenish.draft_connects_for_existing, so an email send must not
+                  -- block them (mirrors email_sender's channel-scoped gate).
                   and not exists (
                       select 1 from sends s2
                       join drafts d2 on d2.id = s2.draft_id
                       where d2.lead_id = d.lead_id
+                        and d2.channel in ('linkedin_connect', 'linkedin_inmail')
                   )
                 order by d.generated_at asc
                 """

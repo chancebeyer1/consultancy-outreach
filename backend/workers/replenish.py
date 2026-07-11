@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import time
 from pathlib import Path
 
@@ -98,23 +99,36 @@ def _messageable_count(cursor, campaign_id: str) -> int:
 # disqualified, or blows LinkedIn's 300-char invite cap MUST NOT ship. Caught live 2026-07-11:
 # one note narrated its own instructions (1,150 chars), another read "DISQUALIFIED, do not send"
 # (the model rightly refusing an off-ICP lead the scorer overrated) — both auto-approved.
+#
+# Markers must be HIGH-PRECISION: notes are deliberately casual prose (anti-template doctrine),
+# and a false positive stores 'rejected', which the candidate query treats as "never re-draft
+# this lead" — a permanent drop. Soft phrases (bare "variant", "i can't") live in the
+# context-anchored regex below instead of the substring list.
 _NOTE_BAD_MARKERS = (
-    "variant", "payload", "char budget", "char_budget", "{{", "first_name",
-    "disqualified", "do not send", "cannot write", "as an ai", "i can't",
+    "{{", "char_budget", "first_name", "disqualified", "do not send", "as an ai",
 )
+# Meta/refusal leakage that needs context to stay precise: A/B-arm narration ("variant b
+# wants...") and first-person refusals ("I can't write a note for..."). Matched against the
+# apostrophe-normalized lowercase body.
+_NOTE_BAD_RE = re.compile(r"\bvariant [abc]\b|\bi (?:can't|cannot) (?:write|draft|generate)\b")
 
 
 def _connect_note_ok(body: str) -> bool:
     """True if a connect note is safe to auto-send (length + no meta/refusal leakage)."""
     if len(body) > 300:
         return False
-    low = body.lower()
-    return not any(m in low for m in _NOTE_BAD_MARKERS)
+    # Claude usually emits curly apostrophes ("can’t") — fold to ASCII before matching.
+    low = body.lower().replace("’", "'")
+    if any(m in low for m in _NOTE_BAD_MARKERS):
+        return False
+    return not _NOTE_BAD_RE.search(low)
 
 
 def _li_queue_count(cursor, campaign_id: str) -> int:
     """Unsent LinkedIn opener drafts (connect/InMail) ready for this campaign — no lookback
-    window: an old unsent connect draft is still sendable inventory."""
+    window: an old unsent connect draft is still sendable inventory. Only 'approved' counts:
+    with the drafts review page retired, a 'draft'-status row can never be approved or sent,
+    so counting it would mask an empty sendable queue."""
     cursor.execute(
         """
         select count(*)
@@ -123,7 +137,7 @@ def _li_queue_count(cursor, campaign_id: str) -> int:
         left join sends s on s.draft_id = d.id
         where l.campaign_id = %s
           and d.channel in ('linkedin_connect', 'linkedin_inmail')
-          and d.status in ('draft', 'approved')
+          and d.status = 'approved'
           and s.id is null
         """,
         (campaign_id,),
@@ -143,8 +157,10 @@ def draft_connects_for_existing(
     These are leads sourced for email (Apollo) that never got LinkedIn work — enriched and scored
     already, so each connect note costs ONE Claude call (zero for the no-note 'c' arm) instead of a
     full re-enrichment. Highest-fit first; only fit>=60 (the auto-approve floor — anything lower
-    would sit unreviewed forever now the drafts page is retired). Skips leads with any existing
-    LinkedIn opener draft or any reply. `deadline_ts` (time.monotonic value) bounds the loop.
+    would sit unreviewed forever now the drafts page is retired). For the same reason the whole
+    leg no-ops for auto_send=false campaigns: their drafts could never be approved. Skips leads
+    with any existing LinkedIn opener draft or any reply. `deadline_ts` (time.monotonic value)
+    bounds the loop.
     """
     from workers.draft import Hook
 
@@ -159,6 +175,11 @@ def draft_connects_for_existing(
             if not row:
                 return {"slug": campaign_slug, "error": "campaign not found"}
             campaign_id, auto_send = str(row[0]), bool(row[1])
+            if not auto_send:
+                # Drafts review page is retired: a 'draft'-status connect can never be
+                # approved or sent, so drafting here would only burn Claude calls on rows
+                # that sit dead forever.
+                return {"slug": campaign_slug, "skipped": "auto_send off"}
             cur.execute(
                 """
                 select l.id, l.linkedin_url, l.company, sc.fit_score,
