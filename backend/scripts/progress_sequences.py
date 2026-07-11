@@ -10,10 +10,10 @@ Usage:
     cd backend
     uv sync --extra worker
 
-    # show what would be sent — no Heyreach calls
+    # show what would be sent — no Unipile calls
     uv run python -m scripts.progress_sequences --dry-run
 
-    # actually push due steps to Heyreach
+    # actually send due steps via Unipile
     uv run python -m scripts.progress_sequences
 
     # cap how many to push per run (respect daily caps)
@@ -43,7 +43,7 @@ console = Console()
 def main(
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Don't actually push to Heyreach."),
+        typer.Option("--dry-run", help="Don't actually send via Unipile."),
     ] = False,
     limit: Annotated[
         int | None,
@@ -58,7 +58,7 @@ def main(
     table.add_row("actionable", str(result["actionable"]))
     table.add_row("pushed", str(result["pushed"]))
     table.add_row("blocked (no approved draft)", str(result["blocked_no_draft"]))
-    table.add_row("blocked (no Heyreach campaign id)", str(result["blocked_no_campaign"]))
+    table.add_row("blocked (no recipient)", str(result["blocked_no_recipient"]))
     table.add_row("failed", str(result["failed"]))
     table.add_row("dry run", str(result["dry_run"]))
     console.print(table)
@@ -76,10 +76,11 @@ def main(
         console.print(
             "[dim]→ Review pending drafts in the dashboard for these leads and approve.[/dim]"
         )
-    if details.get("blocked_no_campaign"):
+    if details.get("blocked_no_recipient"):
         console.print(
-            f"\n[red]Blocked — no Heyreach campaign id configured:[/red] "
-            f"{details['blocked_no_campaign']}"
+            f"\n[red]Blocked — no usable recipient (missing LinkedIn URL, or an "
+            f"email step with no address on the lead):[/red] "
+            f"{details['blocked_no_recipient']}"
         )
     if details.get("failed"):
         console.print("\n[red]Failed:[/red]")

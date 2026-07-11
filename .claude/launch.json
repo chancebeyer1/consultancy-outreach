@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agentry-site",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "website", "run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "dashboard", "run", "dev", "--", "--port", "3100"],
+      "port": 3100,
+      "env": {
+        "NEXT_PUBLIC_DATA_SOURCE": "mock",
+        "NEXT_PUBLIC_USE_MOCK_DATA": "1",
+        "NEXT_PUBLIC_SUPABASE_URL": "",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": ""
+      }
+    }
+  ]
+}

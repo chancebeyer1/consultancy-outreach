@@ -1,0 +1,27 @@
+# RE Referral Partners — the brother's campaign #1: build a local referral network.
+# Sender persona is HIM (a real-estate agent), NOT the AI consultancy — voice.md and
+# style.md in this folder override the globals entirely. Targets the professionals who
+# SEND agents clients: loan officers, divorce/estate attorneys, financial advisors,
+# property managers, relocation/HR — plus out-of-market agents for referral swaps.
+#
+# Onboarded 2026-07: Tanner Beyer (solo agent, LPT Realty cloud brokerage),
+# market = Los Angeles County (LinkedIn geo 90000049, "Los Angeles Metropolitan Area").
+# search.json is classic api (the Unipile plan 403s sales_navigator; see
+# home-services-sprint/campaign.toml). His account: profiles.unipile_account_id.
+
+name = "RE Referral Partners"
+slug = "re-referral-partners"
+is_default = false
+status = "active"
+
+owner_email = "tannerbuyhomes@gmail.com"
+
+# No draft-review surface exists anymore — first-touch notes auto-approve on
+# ingest (fit-gated >=60) and send within his account's caps.
+auto_send = true
+
+# LinkedIn-only; his account is fresh to automation so caps start low
+# (profiles.li_daily_cap is set at onboarding).
+channels = ["linkedin_connect", "linkedin_dm"]
+
+# No inmail_min_fit: no Sales Navigator seat on his account.

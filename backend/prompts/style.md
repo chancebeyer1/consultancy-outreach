@@ -22,7 +22,7 @@ This is how I write. Drafts should sound like me, not like an LLM.
 - Any sentence starting with "As a [adjective] [noun]"
 - "World-class", "cutting-edge", "best-in-class"
 - "Hands-on" (the bot's favourite word)
-- Em-dashes overused — one per message max
+- Em-dashes or en-dashes (—, –). None, ever. They read as AI; use a comma or two short sentences.
 
 ## Structural rules
 
@@ -39,7 +39,7 @@ This is how I write. Drafts should sound like me, not like an LLM.
 
 ❌ "Hi {{name}}, I hope this email finds you well. I came across your profile and was impressed by your work at {{company}}. I'd love to connect and discuss how my experience could potentially benefit your team."
 
-✅ "saw your post on tool-call retry loops — hit the same wall on a recent agent build. ended up doing X. happy to compare notes if you're still on it."
+✅ "saw your post on tool-call retry loops, hit the same wall on a recent agent build. ended up doing X. happy to compare notes if you're still on it."
 
 ❌ "Quick question — are you currently looking for senior AI engineers? I have extensive experience shipping production AI applications and would love to discuss potential opportunities."
 

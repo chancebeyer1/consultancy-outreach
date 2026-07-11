@@ -43,6 +43,7 @@ function syntheticLead(rec: RepliesJsonlRecord): Lead {
     company_domain: null,
     role: null,
     location: null,
+    campaign_id: rec.campaign_id ?? null,
     segment: null,
     source: null,
     trigger: null,

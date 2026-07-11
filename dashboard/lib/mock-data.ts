@@ -1,7 +1,50 @@
-import type { DraftReviewRow, Hook, Lead, Reply, ReplyReviewRow, Score } from "./types";
+import type {
+  BidReviewRow,
+  Campaign,
+  DraftReviewRow,
+  Hook,
+  Lead,
+  Reply,
+  ReplyReviewRow,
+  Score,
+} from "./types";
 
 // In-memory fixtures so the dashboard renders without Supabase wired up.
 // Replace with real Supabase queries in lib/queries.ts once the DB is live.
+
+// Two campaigns so the campaign selector + filter + by-campaign analytics have
+// something to toggle between. The leads below are tagged with these ids; the
+// tags are illustrative (the mock copy is all consultancy-flavored).
+export const MOCK_CAMPAIGNS: Campaign[] = [
+  {
+    id: "c_default",
+    slug: "_default",
+    name: "AI-Agent Consultancy (default)",
+    icp_md: "# ICP\n\nCTOs and founding engineers at AI-native consultancies…",
+    offer_md: "# Offer\n\nContract agent engineer — production AI builds…",
+    style_md: null,
+    voice_md: null,
+    landing_url: "https://your-domain.com",
+    calcom_url: "https://cal.com/your-handle/intro",
+    is_default: true,
+    auto_send: false,
+    status: "active",
+  },
+  {
+    id: "c_realestate",
+    slug: "real-estate-agents",
+    name: "Real-estate listing agents",
+    icp_md: "# ICP\n\nIndependent listing agents doing 20+ deals/yr…",
+    offer_md: "# Offer\n\nAI assistant that drafts listing copy + follow-ups…",
+    style_md: null,
+    voice_md: null,
+    landing_url: "https://your-domain.com/real-estate",
+    calcom_url: "https://cal.com/your-handle/intro",
+    is_default: false,
+    auto_send: false,
+    status: "active",
+  },
+];
 
 const ll = (slug: string) => `https://linkedin.com/in/${slug}`;
 const ts = (offset: number) =>
@@ -21,6 +64,7 @@ const lead = (overrides: Partial<Lead> & { id: string; linkedin_url: string }): 
   company_domain: null,
   role: null,
   location: null,
+  campaign_id: "c_default",
   segment: null,
   source: null,
   trigger: null,
@@ -137,13 +181,13 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
         "Bracket Labs raises $7M seed to bring AI agents to legal ops",
         "Bracket Labs hiring: Senior Agent Engineer",
       ],
-      github_topics: ["agents", "anthropic", "modal", "evals"],
     },
   },
 
   {
     lead: lead({
       id: "2",
+      campaign_id: "c_realestate",
       linkedin_url: ll("marcus-vp-eng-pivotworks"),
       name: "Marcus Lin",
       headline: "VP Engineering at Pivotworks Studio · digital → AI consultancy",
@@ -229,7 +273,6 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
         "Pivotworks launches AI Studio practice — Q1 press release",
         "Pivotworks hiring: AI Practice Engineer",
       ],
-      github_topics: [],
     },
   },
 
@@ -268,7 +311,7 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
       ),
       hook(
         "tech_choice",
-        "Treble's github shows Anthropic + LangGraph + Postgres",
+        "Treble's recent posts mention Anthropic + LangGraph + Postgres",
         "Same stack I shipped — reduce friction in eval claims",
         3,
       ),
@@ -326,7 +369,6 @@ export const MOCK_DRAFT_ROWS: DraftReviewRow[] = [
         "Treble case study: how we shipped a calendaring agent in 8 weeks",
         "Treble featured in TechCrunch agent-startup roundup",
       ],
-      github_topics: ["anthropic", "langgraph", "agents", "postgres"],
     },
   },
 ];
@@ -390,6 +432,7 @@ export const MOCK_REPLY_ROWS: ReplyReviewRow[] = [
     "r2",
     {
       id: "l_r2",
+      campaign_id: "c_realestate",
       linkedin_url: "https://linkedin.com/in/marcus-vp-eng-pivotworks",
       name: "Marcus Lin",
       headline: "VP Engineering at Pivotworks Studio",
@@ -439,6 +482,7 @@ export const MOCK_REPLY_ROWS: ReplyReviewRow[] = [
     "r4",
     {
       id: "l_r4",
+      campaign_id: "c_realestate",
       linkedin_url: "https://linkedin.com/in/jeff-cto-stackpoint",
       name: "Jeff Yamamoto",
       headline: "CTO at Stackpoint",
@@ -484,4 +528,96 @@ export const MOCK_REPLY_ROWS: ReplyReviewRow[] = [
     },
     "your AI practice page caught my eye — specifically the bit about…",
   ),
+];
+
+// Bidding module fixtures so /bids renders without Supabase wired up.
+export const MOCK_BID_ROWS: BidReviewRow[] = [
+  {
+    opportunity: {
+      id: "opp-1",
+      source: "sam_gov",
+      external_id: "N0002426R1234",
+      title: "AI-Enabled Document Processing & Workflow Automation",
+      org: "Dept. of Veterans Affairs — Office of Information & Technology",
+      description:
+        "The VA seeks a contractor to design and deploy an AI/LLM-based system to classify, extract, and route inbound benefits documents, reducing manual triage. Small business set-aside. Response due in 21 days.",
+      url: "https://sam.gov/opp/example",
+      budget: "Est. ceiling $180,000",
+      location: "Remote / Washington, DC",
+      deadline: ts(-21),
+      posted_at: ts(2),
+      naics: "541512",
+      psc: "D302",
+      set_aside: "Total Small Business",
+      fit_score: 88,
+      fit_rationale:
+        "Core deliverable is an AI document-processing agent — squarely in scope. Small-business set-aside makes a solo LLC eligible; sub-$250K ceiling is winnable.",
+      fit_flags: {
+        is_software: true,
+        is_ai_agent: true,
+        eligible: true,
+        reasons: ["AI/LLM core", "small-business set-aside", "sub-$250K, solo-winnable"],
+      },
+      status: "drafted",
+      discovered_at: ts(2),
+      updated_at: ts(2),
+    },
+    bid: {
+      id: "bid-1",
+      opportunity_id: "opp-1",
+      summary: "We ship production document-classification agents — directly on target.",
+      body: "Reducing manual triage of benefits documents is exactly the kind of problem a focused AI agent solves well. My approach: an LLM classification-and-extraction pipeline that reads each inbound document, tags it by type, pulls the fields that matter, and routes it to the right queue — with a human-in-the-loop confirmation step for low-confidence cases so nothing slips. I've shipped production agents that do precisely this kind of intake-and-route work (e.g. iinfii.ai), built on the Anthropic API with Postgres and a review dashboard. I can provide a full technical response ahead of the deadline. Could we set up a 20-minute scoping call to confirm document types and volumes?\n\n— Chance",
+      edited_body: null,
+      est_price: "$140,000 fixed (phased: pilot → full rollout)",
+      status: "draft",
+      rejection_reason: null,
+      generated_at: ts(2),
+      decided_at: null,
+      submitted_at: null,
+    },
+  },
+  {
+    opportunity: {
+      id: "opp-2",
+      source: "upwork",
+      external_id: "~01abc",
+      title: "Build a customer-support AI agent (RAG over our docs)",
+      org: "Upwork client (US)",
+      description:
+        "Startup wants an AI agent that answers customer questions from our help-center docs and escalates to a human when unsure. Must integrate with Intercom. Looking for someone who has shipped this before.",
+      url: "https://www.upwork.com/jobs/~01abc",
+      budget: "$60–$90/hr",
+      location: "Remote",
+      deadline: null,
+      posted_at: ts(1),
+      naics: null,
+      psc: null,
+      set_aside: null,
+      fit_score: 82,
+      fit_rationale:
+        "Grounded RAG support agent with escalation and an Intercom integration — textbook AI-agent build, clearly solo-deliverable.",
+      fit_flags: {
+        is_software: true,
+        is_ai_agent: true,
+        eligible: true,
+        reasons: ["RAG agent", "clear scope", "remote"],
+      },
+      status: "drafted",
+      discovered_at: ts(1),
+      updated_at: ts(1),
+    },
+    bid: {
+      id: "bid-2",
+      opportunity_id: "opp-2",
+      summary: "Grounded support agent with escalation — I've shipped this exact pattern.",
+      body: "A support agent that actually answers from your docs (and knows when to hand off) lives or dies on grounding. I'd build it as RAG over your help-center content with confidence-gated escalation into Intercom, so it resolves the easy questions instantly and routes the rest to a human with full context. I've shipped agents on this exact pattern in production. Happy to walk through your Intercom setup and doc sources on a quick call — what's your current ticket volume?\n\n— Chance",
+      edited_body: null,
+      est_price: "$75/hr, ~3–4 week initial build",
+      status: "draft",
+      rejection_reason: null,
+      generated_at: ts(1),
+      decided_at: null,
+      submitted_at: null,
+    },
+  },
 ];

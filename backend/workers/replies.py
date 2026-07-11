@@ -1,11 +1,17 @@
-"""Reply-fetching worker: poll Heyreach inbox, classify new inbound messages.
+"""Reply-fetching worker: poll Unipile (LinkedIn chats + email), classify inbound.
 
 Used by both:
   - scripts/pull_replies.py  → writes results to runs/replies.jsonl
-  - modal_app.py (cron)      → writes results to Supabase / Postgres
+  - modal_app.py (cron + webhook) → writes results to Supabase / Postgres
 
 Stays pure (no I/O persistence): returns the new reply records as dicts.
 Callers pass in the set of already-seen message ids for idempotency.
+
+Unipile message shapes:
+  * LinkedIn chat message: {id, text, timestamp, is_sender (0|1), sender_id, …}
+    is_sender == 0 ⇒ inbound (the prospect). 1 ⇒ outbound (us).
+  * Email: {id, from_attendee:{identifier,display_name}, subject, body,
+    body_plain, date, read_date (null ⇒ unread), …}
 """
 
 from __future__ import annotations
@@ -14,59 +20,98 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Any, Iterable
 
-from clients import heyreach
+from clients import unipile
+from config import Config
 from workers import reply_triage
 
 
-def _message_id(msg: dict[str, Any]) -> str:
-    """Stable id per message. Falls back to a content+timestamp hash if
-    Heyreach doesn't return one."""
-    mid = msg.get("id") or msg.get("messageId")
-    if mid:
-        return str(mid)
-    blob = f"{msg.get('sentAt')}|{msg.get('body', '')[:200]}".encode()
+def _stable_id(primary: Any, *fallback_parts: Any) -> str:
+    """Provider message id when present, else a content hash for idempotency."""
+    if primary:
+        return str(primary)
+    blob = "|".join(str(p) for p in fallback_parts).encode()
     return hashlib.sha1(blob).hexdigest()[:16]
 
 
+def _is_inbound(msg: dict[str, Any]) -> bool:
+    """A LinkedIn chat message is inbound (from the prospect) when is_sender == 0."""
+    flag = msg.get("is_sender")
+    if flag is None:
+        return False
+    try:
+        return int(flag) == 0
+    except (TypeError, ValueError):
+        return not bool(flag)
+
+
 def _find_last_outbound(messages: list[dict[str, Any]], before_idx: int) -> str | None:
-    """Walk backward from a reply to find the most recent outbound we sent."""
+    """Walk backward from a reply to find the most recent message we sent."""
     for i in range(before_idx - 1, -1, -1):
         m = messages[i]
-        if (m.get("direction") or "").lower() == "outbound":
-            return m.get("body")
+        if not _is_inbound(m) and (m.get("text") or m.get("body")):
+            return m.get("text") or m.get("body")
     return None
 
 
-def _classify_one(
-    convo: dict[str, Any],
-    msg: dict[str, Any],
+def _linkedin_url_from_chat(chat: dict[str, Any]) -> str | None:
+    """Best-effort recovery of the prospect's profile URL from a chat object.
+
+    Unipile keys vary; if we can find a public identifier we rebuild the URL,
+    otherwise return None (the reply persists as an orphan — lead_id is
+    nullable downstream).
+    """
+    ident = (
+        chat.get("attendee_public_identifier")
+        or chat.get("public_identifier")
+        or chat.get("attendee_provider_id")
+    )
+    if ident and not str(ident).startswith("http"):
+        # provider_id values are opaque ACoAA… urns, not usable as /in/ slugs.
+        if str(ident).startswith("ACoA") or "," in str(ident):
+            return None
+        return f"https://www.linkedin.com/in/{ident}"
+    return ident or None
+
+
+def classify_message(
     *,
-    original_message: str | None,
+    channel: str,
+    external_id: str,
+    text: str,
+    linkedin_url: str | None = None,
+    provider_id: str | None = None,
+    lead_name: str | None = None,
+    lead_company: str | None = None,
+    lead_role: str | None = None,
+    original_message: str | None = None,
+    received_at: str | None = None,
 ) -> dict[str, Any] | None:
-    """Run the LLM classifier on one inbound message. Returns the assembled
-    record, or None if classification fails."""
+    """Run the LLM classifier on one inbound message → assembled reply record.
+
+    Returns None if classification fails (caller decides whether to log/skip).
+    Shared by the poller and the webhook receiver so both produce identical rows.
+    """
     try:
         classification = reply_triage.classify_reply(
-            reply_body=msg.get("body") or "",
+            reply_body=text or "",
             original_message=original_message,
-            lead_name=convo.get("firstName") or convo.get("leadName"),
-            lead_role=convo.get("role"),
-            lead_company=convo.get("companyName") or convo.get("company"),
+            lead_name=lead_name,
+            lead_role=lead_role,
+            lead_company=lead_company,
         )
     except Exception:  # noqa: BLE001 — caller decides whether to log
         return None
 
     return {
-        "message_id": _message_id(msg),
-        "conversation_id": str(convo.get("id") or convo.get("conversationId") or ""),
-        "linkedin_url": convo.get("leadLinkedinUrl") or convo.get("linkedinUrl"),
-        "lead_name": convo.get("firstName") or convo.get("leadName"),
-        "lead_company": convo.get("companyName") or convo.get("company"),
-        "campaign_id": convo.get("campaignId"),
-        "channel": "linkedin_dm",  # Heyreach inbox = LinkedIn DM
-        "body": msg.get("body") or "",
+        "message_id": external_id,
+        "linkedin_url": linkedin_url,
+        "provider_id": provider_id,
+        "lead_name": lead_name,
+        "lead_company": lead_company,
+        "channel": channel,
+        "body": text or "",
         "original_message": original_message,
-        "received_at": msg.get("sentAt") or datetime.now(UTC).isoformat(),
+        "received_at": received_at or datetime.now(UTC).isoformat(),
         "classified_at": datetime.now(UTC).isoformat(),
         "intent": classification.get("intent"),
         "sentiment": classification.get("sentiment"),
@@ -76,51 +121,137 @@ def _classify_one(
     }
 
 
+def _linkedin_replies(
+    seen: set[str],
+    limit: int,
+    unread_only: bool,
+    known_provider_ids: set[str] = frozenset(),
+    known_urls: set[str] = frozenset(),
+    account_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Scan LinkedIn chats; classify inbound messages from leads we contacted.
+
+    Chats whose sender isn't a known lead are skipped BEFORE any LLM call or extra
+    API fetch — so the operator's normal inbox costs nothing. `account_id` selects
+    whose LinkedIn inbox to scan (None → the global env account).
+    """
+    records: list[dict[str, Any]] = []
+    chats = unipile.list_chats(unread_only=unread_only, limit=limit, account_id=account_id)
+    for chat in chats:
+        chat_id = str(chat.get("id") or chat.get("chat_id") or "")
+        if not chat_id:
+            continue
+        lead_name = chat.get("name")
+        linkedin_url = _linkedin_url_from_chat(chat)
+        # The chat's provider_id is the other attendee's LinkedIn member id (ACoAA…).
+        provider_id = chat.get("provider_id") or chat.get("attendee_provider_id")
+        # Skip non-leads before spending an LLM call (or another fetch) on them.
+        if (
+            (known_provider_ids or known_urls)
+            and provider_id not in known_provider_ids
+            and linkedin_url not in known_urls
+        ):
+            continue
+        messages = unipile.list_chat_messages(chat_id)
+        messages.sort(key=lambda m: str(m.get("timestamp") or ""))
+        for idx, msg in enumerate(messages):
+            if not _is_inbound(msg):
+                continue
+            mid = _stable_id(msg.get("id"), msg.get("timestamp"), (msg.get("text") or "")[:200])
+            if mid in seen:
+                continue
+            record = classify_message(
+                channel="linkedin_dm",
+                external_id=mid,
+                text=msg.get("text") or "",
+                linkedin_url=linkedin_url,
+                provider_id=provider_id,
+                lead_name=lead_name,
+                original_message=_find_last_outbound(messages, idx),
+                received_at=msg.get("timestamp"),
+            )
+            if record is not None:
+                record["chat_id"] = chat_id  # so the dashboard can thread + reply to this chat
+                records.append(record)
+                seen.add(mid)
+    return records
+
+
+def _email_replies(
+    seen: set[str], limit: int, unread_only: bool, email_account_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Scan the email inbox; classify inbound emails we haven't seen. `email_account_id`
+    selects which connected mailbox to scan (None → the global env mailbox)."""
+    records: list[dict[str, Any]] = []
+    emails = unipile.list_emails(role="inbox", limit=limit, account_id=email_account_id)
+    for email in emails:
+        if unread_only and email.get("read_date"):
+            continue
+        from_attendee = email.get("from_attendee") or {}
+        body = email.get("body_plain") or email.get("body") or ""
+        mid = _stable_id(email.get("id"), email.get("date"), (body or "")[:200])
+        if mid in seen:
+            continue
+        record = classify_message(
+            channel="email",
+            external_id=mid,
+            text=body,
+            lead_name=from_attendee.get("display_name"),
+            received_at=email.get("date"),
+        )
+        if record is not None:
+            records.append(record)
+            seen.add(mid)
+    return records
+
+
 def fetch_and_classify_new_replies(
     *,
     seen_message_ids: Iterable[str] = (),
     limit: int = 100,
     only_with_unread: bool = True,
-    campaign_id: str | None = None,
+    campaign_id: str | None = None,  # noqa: ARG001 — kept for caller back-compat (Unipile has no campaigns)
+    account_id: str | None = None,
+    email_account_id: str | None = None,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Poll the Heyreach inbox; classify any inbound messages we haven't seen.
+    """Poll Unipile (LinkedIn + email); classify inbound messages we haven't seen.
 
     Parameters
     ----------
     seen_message_ids:
-        Set/iterable of message ids the caller has already processed. These
-        are skipped — caller persists their own ledger.
-    limit, only_with_unread, campaign_id:
-        Forwarded to heyreach.list_inbox_conversations.
+        Iterable of message ids the caller has already processed — skipped.
+    limit, only_with_unread:
+        Forwarded to the Unipile list calls.
+    campaign_id:
+        Unused (Unipile has no campaign concept); accepted so existing callers
+        don't break.
+    account_id, email_account_id:
+        Which connected LinkedIn account / mailbox to poll. Both None → the global
+        env accounts (today's single-user behavior). In per-account mode
+        (account_id set), email is only polled when email_account_id is explicit —
+        otherwise every account's pass would re-scan the one global mailbox.
+    user_id:
+        Scope lead matching to this owner's leads (plus unowned ones). None → all
+        leads, the current behavior.
 
     Returns
     -------
     list of reply records (dict). Empty if nothing new.
     """
     seen = set(seen_message_ids)
-    payload = heyreach.list_inbox_conversations(
-        limit=limit,
-        only_with_unread=only_with_unread,
-        campaign_ids=[campaign_id] if campaign_id else None,
-    )
-    conversations = payload.get("items") or payload.get("conversations") or []
+    # Load lead keys once so we only classify (spend LLM tokens on) messages from
+    # people we've actually contacted — not the operator's whole inbox.
+    from workers.replies_db import known_lead_keys
 
-    new_records: list[dict[str, Any]] = []
-    for convo in conversations:
-        convo_id = str(convo.get("id") or convo.get("conversationId") or "")
-        if not convo_id:
-            continue
-        messages = heyreach.list_conversation_messages(convo_id)
-        for idx, msg in enumerate(messages):
-            if (msg.get("direction") or "").lower() != "inbound":
-                continue
-            mid = _message_id(msg)
-            if mid in seen:
-                continue
-            record = _classify_one(
-                convo, msg, original_message=_find_last_outbound(messages, idx)
-            )
-            if record is not None:
-                new_records.append(record)
-                seen.add(mid)
-    return new_records
+    known_provider_ids, known_urls = known_lead_keys(user_id=user_id)
+
+    records: list[dict[str, Any]] = []
+    records.extend(
+        _linkedin_replies(seen, limit, only_with_unread, known_provider_ids, known_urls, account_id)
+    )
+    # Email is optional — only poll the inbox when a mailbox is connected in Unipile.
+    email_acct = email_account_id or (Config.unipile_email_account_id if account_id is None else None)
+    if email_acct:
+        records.extend(_email_replies(seen, limit, only_with_unread, email_account_id=email_acct))
+    return records

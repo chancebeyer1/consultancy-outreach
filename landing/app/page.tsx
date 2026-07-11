@@ -133,8 +133,7 @@ function CTA() {
       </p>
       <div className="mt-6 flex flex-wrap gap-3">
         <a
-          // TODO: replace CAL_USERNAME
-          href="https://cal.com/CAL_USERNAME/intro"
+          href="https://calendly.com/hello-contentdrip/chance-beyer-intro"
           className="inline-block rounded-md bg-sky-300 px-5 py-3 font-medium text-neutral-950 hover:bg-sky-200"
         >
           Book a 20-min call →

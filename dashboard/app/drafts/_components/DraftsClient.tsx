@@ -35,7 +35,7 @@ export function DraftsClient({ initialRows }: Props) {
   );
 
   // Helper: find the row + a specific draft on it so persistDecision has the
-  // full lead metadata Heyreach/Smartlead need (first_name, company, …).
+  // full lead metadata the sender needs (name, company, linkedin_url, …).
   const findRowAndDraft = useCallback(
     (leadId: string, draftId: string): { row: DraftReviewRow; draft: Draft } | null => {
       const row = rows.find((r) => r.lead.id === leadId);
@@ -88,7 +88,9 @@ export function DraftsClient({ initialRows }: Props) {
   const decideOne = useCallback(
     (leadId: string, draftId: string, status: "approved" | "rejected", editedBody?: string) => {
       const ctx = findRowAndDraft(leadId, draftId);
-
+      // Per-draft decision. Drafts for a lead form a SEQUENCE (connection note
+      // first, then the DM after they accept) — approving one doesn't touch the
+      // others, so the whole sequence can be approved.
       setRows((prev) =>
         prev.map((r) =>
           r.lead.id === leadId

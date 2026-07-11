@@ -14,7 +14,7 @@ Usage:
 CSV format:
     Any CSV with a column whose header contains "linkedin" or "url" (case
     insensitive). Examples that work out of the box: a Sales Navigator
-    export via Apify, a hand-curated `leads.csv`, etc.
+    export, a hand-curated `leads.csv`, a partner-supplied list, etc.
 
 `--skip-existing` deduplicates against any prior JSONL at the output path
 so re-running with a longer list is cheap (only new URLs hit the APIs).
@@ -45,6 +45,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from campaigns_loader import Campaign, load_campaign
 from workers import draft, enrich, score
 
 app = typer.Typer(add_completion=False, help=__doc__)
@@ -55,7 +56,7 @@ def _detect_url_column(header: list[str]) -> str | None:
     """Find the column with LinkedIn URLs.
 
     Matches anything with 'linkedin' or 'url' in the name (case-insensitive),
-    which covers Sales Nav exports ('Profile Url'), Apify dumps ('linkedinUrl'),
+    which covers Sales Nav exports ('Profile Url'), scraper dumps ('linkedinUrl'),
     hand-rolled CSVs ('url'), and Phantombuster outputs ('profileUrl').
     """
     for col in header:
@@ -114,29 +115,68 @@ VALID_TRIGGERS = {
 }
 
 
-def _process_one(url: str, *, skip_score: bool, trigger: str = "list") -> dict[str, Any]:
+def _campaign_account_id(campaign: Campaign) -> str | None:
+    """The campaign OWNER's Unipile LinkedIn account id (campaigns.user_id → profiles).
+
+    Best-effort: returns None (→ the global env account) when there's no DATABASE_URL,
+    psycopg isn't installed, or the campaign has no owner / connected account — so the
+    local CLI keeps working without a DB.
+    """
+    from config import Config
+
+    if not Config.database_url:
+        return None
+    try:
+        import psycopg
+
+        with psycopg.connect(Config.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select p.unipile_account_id from campaigns c "
+                    "join profiles p on p.id = c.user_id "
+                    "where c.slug = %s limit 1",
+                    (campaign.slug,),
+                )
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
+    except Exception:  # noqa: BLE001 — owner lookup must never block a local run
+        return None
+
+
+def _process_one(
+    url: str,
+    *,
+    skip_score: bool,
+    trigger: str = "list",
+    campaign: Campaign | None = None,
+    account_id: str | None = None,
+) -> dict[str, Any]:
     """Run the full pipeline for one URL. Catches its own exceptions so
-    one failed lead doesn't kill the whole run."""
+    one failed lead doesn't kill the whole run. `account_id` routes LinkedIn
+    enrichment through the campaign owner's connected account (None → global)."""
     record: dict[str, Any] = {
         "linkedin_url": url,
         "processed_at": datetime.datetime.utcnow().isoformat() + "Z",
         "trigger": trigger,
+        "campaign_slug": campaign.slug if campaign else None,
     }
     try:
-        enrichment = enrich.enrich(url)
+        enrichment = enrich.enrich(url, account_id=account_id)
         record["enrichment"] = enrichment
 
         if not skip_score:
-            record["score"] = score.score(enrichment)
+            record["score"] = score.score(enrichment, campaign=campaign)
 
-        hooks = draft.extract_hooks(enrichment)
+        hooks = draft.extract_hooks(enrichment, campaign=campaign)
         record["hooks"] = [h.__dict__ for h in hooks]
         chosen = draft.pick_hook(hooks, "linkedin_dm")
         record["chosen_hook"] = chosen.__dict__ if chosen else None
 
+        fit = int((record.get("score") or {}).get("fit_score") or 0)
+        channels = draft.resolve_channels(campaign, fit)
         record["drafts"] = {
-            channel: draft.draft_for_channel(channel, enrichment, chosen)
-            for channel in ["linkedin_connect", "linkedin_dm", "email"]
+            channel: draft.draft_for_channel(channel, enrichment, chosen, campaign=campaign)
+            for channel in channels
         }
         record["status"] = "ok"
     except Exception as e:  # noqa: BLE001 — script-level catch is intentional
@@ -229,7 +269,7 @@ def main(
     ] = False,
     concurrency: Annotated[
         int,
-        typer.Option(help="Parallel workers. Keep low (<= 4) to respect ProxyCurl rate limits."),
+        typer.Option(help="Parallel workers. Keep low (<= 4) to respect Unipile rate limits."),
     ] = 3,
     trigger: Annotated[
         str,
@@ -241,6 +281,15 @@ def main(
             ),
         ),
     ] = "list",
+    campaign: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Campaign slug (or id) to target — selects the ICP + offer the whole run "
+                "scores and drafts against. Omitted → the default campaign."
+            ),
+        ),
+    ] = None,
 ) -> None:
     if trigger not in VALID_TRIGGERS:
         console.print(
@@ -250,6 +299,18 @@ def main(
     if not csv_path.exists():
         console.print(f"[red]CSV not found:[/red] {csv_path}")
         raise typer.Exit(2)
+
+    try:
+        active_campaign = load_campaign(campaign)
+    except (FileNotFoundError, RuntimeError) as e:
+        console.print(f"[red]Couldn't load campaign '{campaign or 'default'}':[/red] {e}")
+        raise typer.Exit(2) from e
+    console.print(
+        f"[dim]Campaign: [bold]{active_campaign.name}[/bold] ({active_campaign.slug})[/dim]"
+    )
+    # Resolve the campaign owner's connected account once; every enrichment in the run
+    # goes through it (None → the global env account, i.e. today's behavior).
+    account_id = _campaign_account_id(active_campaign)
 
     out_path = out or Path("runs") / f"{datetime.date.today().isoformat()}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +343,14 @@ def main(
         task = progress.add_task("pipeline", total=len(urls))
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {
-                pool.submit(_process_one, u, skip_score=skip_score, trigger=trigger): u
+                pool.submit(
+                    _process_one,
+                    u,
+                    skip_score=skip_score,
+                    trigger=trigger,
+                    campaign=active_campaign,
+                    account_id=account_id,
+                ): u
                 for u in urls
             }
             for fut in as_completed(futures):

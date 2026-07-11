@@ -3,11 +3,21 @@ without operator intervention.
 
 Functions
 ---------
-- `pull_replies_cron`           every 15 min   poll Heyreach inbox, classify
-                                               new replies, persist to Postgres.
-- `pull_replies_now`            on-demand      same logic, one-shot. Trigger
-                                               from CLI: `modal run modal_app.py::pull_replies_now`.
-- `health`                      on-demand      sanity check that env + deps load.
+- `unipile_webhook`             on event       primary reply path — Unipile POSTs
+                                               new messages/emails; we classify +
+                                               persist within seconds.
+- `hourly_dispatcher`           hourly         THE one scheduled function: runs
+                                               pull_replies → detect_connections →
+                                               progress_sequences → replenish_queue →
+                                               send_approved sequentially. (Modal
+                                               Starter caps the workspace at 5 crons;
+                                               trading-bot uses another slot.)
+- `pull_replies_cron`           via dispatcher fallback poll of Unipile (LinkedIn
+                                               chats + email) in case a webhook is
+                                               missed; classify, persist to Postgres.
+- `progress_sequences_cron`     via dispatcher advance any lead whose next step is due.
+- `pull_replies_now`            on-demand      same poll logic, one-shot.
+- `health`                      on-demand      env + deps + DB + Unipile ping.
 
 Deploy
 ------
@@ -31,8 +41,10 @@ once with all the keys from .env:
         --from-dotenv .env
 
 Reads:
-  ANTHROPIC_API_KEY, HEYREACH_API_KEY, DATABASE_URL, plus the optional
-  CLAUDE_MODEL_* and LANDING_URL/CALCOM_URL strings used by the prompts.
+  ANTHROPIC_API_KEY, UNIPILE_API_KEY, UNIPILE_DSN, UNIPILE_LINKEDIN_ACCOUNT_ID,
+  UNIPILE_EMAIL_ACCOUNT_ID, DATABASE_URL, plus the optional CLAUDE_MODEL_* and
+  LANDING_URL/CALCOM_URL strings used by the prompts. Set UNIPILE_WEBHOOK_SECRET
+  to enable webhook auth (sent back as a custom header you configure in Unipile).
 """
 
 from __future__ import annotations
@@ -47,6 +59,8 @@ PYPROJECT = "pyproject.toml"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
+    # fonts-dejavu-core gives PIL a real TTF to render stat-card images with.
+    .apt_install("fonts-dejavu-core")
     .pip_install(
         "anthropic>=0.40.0",
         "httpx>=0.27.0",
@@ -59,19 +73,31 @@ image = (
         "psycopg[binary]>=3.2.0",
         # fastapi endpoints
         "fastapi[standard]>=0.115.0",
+        # stat-card image rendering
+        "pillow>=10.2.0",
     )
     # Drop the backend/ tree into /root/backend so imports work the same as
     # local: `from workers.replies import ...`. The local source path is the
     # parent dir of this file (modal_app.py is at backend/modal_app.py).
+    # `campaigns_loader` is needed because the reply-classify path resolves the
+    # active campaign's system prefix.
     .add_local_python_source(
         "clients",
         "workers",
         "config",
         "prompts_loader",
+        "campaigns_loader",
+        "operator_profile",  # operator's own bio, injected into reply + outreach drafting
+        "sender_limits",  # rolling-window send caps, imported by workers.sequence_send
+        "activity",  # append-only activity log
+        "alerts",  # failure → email; imported by _logged (was silently absent → alerts never fired)
+        "provider_cooldown",  # cross-run LinkedIn throttle backoff, imported by sequence_send
     )
     # Prompts are referenced from prompts_loader → backend/prompts/*.md.
-    # add_local_dir mirrors the directory at runtime.
+    # Campaign persona files back the file-seed fallback in campaigns_loader when
+    # a campaign row is missing from the DB. add_local_dir mirrors them at runtime.
     .add_local_dir("prompts", remote_path="/root/prompts")
+    .add_local_dir("campaigns", remote_path="/root/campaigns")
 )
 
 app = modal.App("consultancy-outreach", image=image)
@@ -80,28 +106,69 @@ app = modal.App("consultancy-outreach", image=image)
 secrets = [modal.Secret.from_name("outreach")]
 
 
+def _logged(action: str, result):
+    """Record a worker run + its result counts to the activity log, then return the result.
+    Resilient — logging never breaks the run."""
+    try:
+        from activity import log
+
+        log(action, source="worker", meta=result if isinstance(result, dict) else {"result": str(result)})
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from alerts import scan_result
+
+        scan_result(action, result)  # email the operator on any real failure (throttled)
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
+def _err_meta(e: Exception) -> dict:
+    """Error dict that KEEPS the full traceback — so the error agent can pinpoint the file:line and
+    propose an exact fix, instead of only seeing the exception message. Use in cron except blocks."""
+    import traceback
+
+    return {"error": str(e)[:300], "traceback": traceback.format_exc()[:2500]}
+
+
 # ---------------------------------------------------------------------------
 # Scheduled work
 # ---------------------------------------------------------------------------
 
 
+# NOTE: the five hourly jobs below are no longer individually scheduled — the
+# single `hourly_dispatcher` cron runs them in sequence (Modal Starter caps the
+# workspace at 5 scheduled functions, shared with the trading-bot app). They
+# stay as @app.function so `modal run` one-shots keep working.
+
+
 @app.function(
-    schedule=modal.Cron("*/15 * * * *"),  # every 15 minutes
     secrets=secrets,
     timeout=600,
     retries=2,
 )
 def pull_replies_cron() -> dict:
-    """Poll Heyreach for new inbound replies, classify them, persist.
+    """Fallback poll of Unipile for inbound replies the webhook may have missed.
 
-    Conservatively scoped per run (limit=100 conversations) so a single tick
-    finishes well inside the 10-minute timeout even with classifier latency.
+    Unipile's `unipile_webhook` is the primary, near-real-time path; this hourly
+    sweep is a safety net. Conservatively scoped per run (limit=100) so a single
+    tick finishes well inside the timeout even with classifier latency.
+
+    Same tick also sweeps the Maildoso unibox for email replies and alerts
+    NOTIFY_EMAIL (folded in here to stay within the scheduled-function budget).
     """
-    return _pull_replies_impl(limit=100, only_with_unread=True)
+    unipile = _pull_replies_impl(limit=100, only_with_unread=True)
+    try:
+        from workers.email_inbox import poll_inboxes
+
+        email = poll_inboxes(limit_per_box=25)
+    except Exception as e:  # noqa: BLE001
+        email = {"error": str(e)}
+    return _logged("cron_inbound_sweep", {"unipile": unipile, "email": email})
 
 
 @app.function(
-    schedule=modal.Cron("17 * * * *"),  # every hour at :17 (offset from replies cron)
     secrets=secrets,
     timeout=900,
     retries=1,
@@ -110,12 +177,239 @@ def progress_sequences_cron() -> dict:
     """Advance every lead whose next sequence step is due.
 
     Reads sends + replies + drafts from Postgres, finds leads with an
-    approved-but-unsent next-step draft past its wait window, pushes to
-    Heyreach. Idempotent — re-running is safe.
+    approved-but-unsent next-step draft past its wait window, sends via
+    Unipile. Idempotent — re-running is safe.
     """
     from workers.sequence_send import progress_sequences
 
-    return progress_sequences(limit=50)
+    try:
+        # 500s budget keeps this well under the dispatcher's 600s per-job watchdog; a backlog
+        # of due follow-ups defers to the next tick instead of hanging (idempotent, no loss).
+        res = progress_sequences(limit=50, time_budget_s=500)
+    except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_sequences", res)
+
+
+@app.function(
+    secrets=secrets,
+    timeout=1500,  # matches the dispatcher's per-job cap for this bulk job
+    retries=1,
+)
+def replenish_queue_cron() -> dict:
+    """Smart sourcing: auto-pull fresh leads when a campaign queue runs low.
+
+    For each active campaign with a search_url configured:
+    1. Count messageable leads (drafted but not sent/rejected) in the last 7 days
+    2. If count < threshold (20), pull fresh leads from search_url
+    3. Enrich + score + draft them
+    4. Ingest directly to Postgres
+
+    Deduplication via runs/sourced-<campaign_slug>.jsonl ledger prevents re-messaging.
+    """
+    from workers.replenish import replenish_all_campaigns
+
+    # Soft cap: several low queues at once (~30-60s of enrich/score/draft per lead) must not
+    # outlive the dispatcher's per-job watchdog — remaining campaigns defer to the next tick.
+    linkedin = replenish_all_campaigns(dry_run=False, time_budget_s=600)
+    # Same tick also sources EMAIL leads from Apollo (search -> score -> reveal -> verify ->
+    # draft) for campaigns with apollo_params. Wrapped so a failure never aborts LinkedIn.
+    try:
+        from workers.apollo_sourcing import source_apollo_all
+
+        email = source_apollo_all(dry_run=False)
+    except Exception as e:  # noqa: BLE001
+        email = {"error": str(e)}
+    # Content (LinkedIn posts / tweet reactions) is MANUAL-only — generated on demand from the
+    # dashboard's content variant picker (content_webhook), never auto-drafted on this cron.
+    # And research a couple of fresh deals into meeting-prep briefs (best-effort).
+    try:
+        from workers.research import prepare_pending
+
+        briefs = prepare_pending(limit=2)
+    except Exception as e:  # noqa: BLE001
+        briefs = {"error": str(e)}
+    # And — once a week (Monday) — draft The Agent Brief newsletter for review.
+    try:
+        newsletter = _maybe_generate_newsletter()
+    except Exception as e:  # noqa: BLE001
+        newsletter = {"error": str(e)}
+    # And — once a day, IF the operator turned it on — auto-publish an AI-news SEO blog post.
+    try:
+        blog = _maybe_generate_blog()
+    except Exception as e:  # noqa: BLE001
+        blog = {"error": str(e)}
+    # And — weekday mornings — email the LinkedIn growth digest (posts to comment on today).
+    try:
+        digest = _maybe_comment_digest()
+    except Exception as e:  # noqa: BLE001
+        digest = {"error": str(e)}
+    # And — at most once a day — sweep gov/freelance sources for software-AI work and draft
+    # bids into /bids. Guarded to ~once daily (SAM.gov free tier is ~10 requests/day).
+    try:
+        bids = _maybe_sweep_opportunities()
+    except Exception as e:  # noqa: BLE001
+        bids = {"error": str(e)}
+    return _logged(
+        "cron_replenish",
+        {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
+         "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids},
+    )
+
+
+def _maybe_generate_newsletter() -> dict:
+    """Draft The Agent Brief once a week (Monday, ~14:00 UTC). 6-day DB guard = exactly-once."""
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.weekday() != 0 or now.hour < 14:
+        return {"skipped": "off-schedule"}
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select count(*) from newsletter_issues where created_at > now() - interval '6 days'")
+        if int((cur.fetchone() or [0])[0] or 0) > 0:
+            return {"skipped": "already drafted this week"}
+    from workers.newsletter import generate_issue
+
+    return generate_issue()
+
+
+def _maybe_generate_blog() -> dict:
+    """Publish one AI-news SEO blog post per day IF the operator turned on auto_blog. A 20h DB
+    guard makes it ~once-daily even across hourly ticks; the toggle lives in app_settings and is
+    flipped from the dashboard Content page."""
+    import psycopg
+
+    from config import require
+
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'auto_blog'")
+        row = cur.fetchone()
+        if not (row and row[0] is True):
+            return {"skipped": "auto_blog off"}
+        cur.execute("select count(*) from blog_posts where created_at > now() - interval '20 hours'")
+        if int((cur.fetchone() or [0])[0] or 0) > 0:
+            return {"skipped": "already published today"}
+    from workers.blog import generate_blog_post
+
+    return generate_blog_post()
+
+
+def _maybe_sweep_opportunities() -> dict:
+    """Sweep contract/freelance sources for software-AI work and draft bids — at most ONCE
+    a day. The ~20h guard (opportunity-count + an app_settings marker, like the blog) keeps it
+    to roughly once daily across hourly ticks, which is REQUIRED: SAM.gov's free API tier is
+    ~10 requests/day, so an hourly sweep would exhaust the quota immediately. Best-effort;
+    wrapped by the caller."""
+    import psycopg
+
+    from config import Config, require
+
+    # Nothing to sweep unless at least one source is configured. SAM/Upwork need keys; the
+    # free feeds (RemoteOK/HN) and LinkedIn (Unipile) run whenever their creds exist.
+    any_source = any((Config.sam_gov_api_key, Config.upwork_access_token, Config.unipile_api_key))
+    if not any_source:
+        return {"skipped": "no bidding sources configured"}
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_opportunity_sweep'")
+        has_marker = cur.fetchone() is not None
+        cur.execute(
+            "select count(*) from opportunities where discovered_at > now() - interval '20 hours'"
+        )
+        swept_recently = int((cur.fetchone() or [0])[0] or 0) > 0
+        if has_marker and swept_recently:
+            return {"skipped": "already swept today"}
+    from workers.opportunity_sourcing import source_all
+
+    result = source_all(dry_run=False, time_budget_s=500)
+    # Stamp the marker so the guard is exact even on a sweep that ingested nothing.
+    try:
+        with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+            cur.execute(
+                "insert into app_settings (key, value) values ('last_opportunity_sweep', to_jsonb(now()::text)) "
+                "on conflict (key) do update set value = excluded.value"
+            )
+    except Exception:  # noqa: BLE001 — marker is best-effort; the 20h opportunity-count guard still holds
+        pass
+    return result
+
+
+@app.function(secrets=secrets, timeout=900)
+def opportunities_sweep_now(dry_run: bool = False) -> dict:
+    """On-demand bid sweep. `modal run modal_app.py::opportunities_sweep_now --dry-run`.
+    Ignores the once-a-day guard — use sparingly given SAM.gov's ~10 req/day free quota."""
+    from workers.opportunity_sourcing import source_all
+
+    return _logged("opportunities_sweep", source_all(dry_run=dry_run, time_budget_s=800))
+
+
+@app.function(secrets=secrets, timeout=300)
+def blog_generate_now(dry_run: bool = False) -> dict:
+    """On-demand blog post. `modal run modal_app.py::blog_generate_now --dry-run`."""
+    from workers.blog import generate_blog_post
+
+    return generate_blog_post(dry_run=dry_run)
+
+
+def _maybe_comment_digest() -> dict:
+    """Email the LinkedIn growth digest once per weekday, first tick at/after 14:00 UTC (~7am PT —
+    morning US feed time). A date guard in app_settings makes it exactly-once across hourly ticks."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.weekday() >= 5 or now.hour < 14:
+        return {"skipped": "off-schedule"}
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_growth_digest'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already sent today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_growth_digest', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    from workers.growth import comment_digest
+
+    return comment_digest()
+
+
+@app.function(secrets=secrets, timeout=300)
+def growth_digest_now(dry_run: bool = False) -> dict:
+    """On-demand growth digest. `modal run modal_app.py::growth_digest_now --dry-run`."""
+    from workers.growth import comment_digest
+
+    return comment_digest(dry_run=dry_run)
+
+
+@app.function(secrets=secrets, timeout=30)
+@modal.fastapi_endpoint(method="GET")
+def blog_list() -> dict:
+    """Public: published blog posts (metadata) for the site index + sitemap. Read server-side."""
+    from workers.blog import list_published
+
+    return {"posts": list_published(limit=200)}
+
+
+@app.function(secrets=secrets, timeout=30)
+@modal.fastapi_endpoint(method="GET")
+def blog_get(slug: str = "") -> dict:
+    """Public: one published blog post by slug for the article page."""
+    from workers.blog import get_by_slug
+
+    return {"post": get_by_slug(slug) if slug else None}
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -124,6 +418,998 @@ def progress_sequences_now(dry_run: bool = False, limit: int | None = None) -> d
     from workers.sequence_send import progress_sequences
 
     return progress_sequences(dry_run=dry_run, limit=limit)
+
+
+@app.function(secrets=secrets, timeout=600)
+def send_email_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand email send. `modal run modal_app.py::send_email_now --dry-run`."""
+    from workers.email_sender import send_email_first_touch
+
+    return send_email_first_touch(dry_run=dry_run, limit=limit)
+
+
+@app.function(secrets=secrets, timeout=600)
+def send_email_followups_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand threaded email follow-ups. `modal run modal_app.py::send_email_followups_now --dry-run`."""
+    from workers.email_sender import send_email_followups
+
+    return send_email_followups(dry_run=dry_run, limit=limit)
+
+
+@app.function(secrets=secrets, timeout=600)
+def content_generate_now(dry_run: bool = False) -> dict:
+    """On-demand LinkedIn post draft. `modal run modal_app.py::content_generate_now --dry-run`."""
+    from workers.content import generate_post
+
+    res = generate_post(dry_run=dry_run)
+    import json as _json
+
+    print("CONTENT_RESULT " + _json.dumps(res, default=str)[:4000])
+    return res
+
+
+@app.function(secrets=secrets, timeout=600)
+def content_tweet_reaction_now(dry_run: bool = False) -> dict:
+    """On-demand viral-tweet reaction post. `modal run modal_app.py::content_tweet_reaction_now --dry-run`."""
+    from workers.content import generate_tweet_reaction
+
+    res = generate_tweet_reaction(dry_run=dry_run)
+    import json as _json
+
+    print("TWEET_REACTION " + _json.dumps(res, default=str)[:4000])
+    return res
+
+
+@app.function(secrets=secrets, timeout=300)
+def content_refresh_exemplars_now() -> dict:
+    """Refresh the viral-post corpus from Unipile. `modal run modal_app.py::content_refresh_exemplars_now`."""
+    from workers.exemplars import refresh_exemplars
+
+    res = refresh_exemplars()
+    print("EXEMPLARS " + str(res))
+    return res
+
+
+@app.function(secrets=secrets, timeout=600)
+def newsletter_generate_now(dry_run: bool = False) -> dict:
+    """On-demand newsletter draft. `modal run modal_app.py::newsletter_generate_now --dry-run`."""
+    import json as _json
+
+    from workers.newsletter import generate_issue
+
+    res = generate_issue(dry_run=dry_run)
+    print("NEWSLETTER " + _json.dumps(res, default=str)[:4000])
+    return res
+
+
+@app.function(secrets=secrets, timeout=600)
+def newsletter_send_now(issue_id: str = "", dry_run: bool = False) -> dict:
+    """On-demand newsletter send. `modal run modal_app.py::newsletter_send_now --issue-id <id>`."""
+    from workers.newsletter import send_issue
+
+    return send_issue(issue_id, dry_run=dry_run)
+
+
+@app.function(secrets=secrets, timeout=600)
+def content_publish_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand publish of approved posts. `modal run modal_app.py::content_publish_now --dry-run`."""
+    from workers.content import publish_approved
+
+    return publish_approved(dry_run=dry_run, limit=limit)
+
+
+@app.function(secrets=secrets, timeout=600)
+def content_generate_bg(action: str, fmt: str | None = None, tool: str | None = None,
+                        text: str | None = None) -> dict:
+    """Background content generation. Spawned by content_webhook so the HTTP request returns
+    instantly and never times out on slow variants (tweet-reaction's X search can run past a
+    minute). The finished draft lands in the dashboard's Needs review."""
+    from workers.content import (
+        generate_build_post,
+        generate_post,
+        generate_tool_post,
+        generate_tweet_reaction,
+    )
+
+    if action == "news":
+        return generate_post(fmt=fmt)
+    if action == "tweet_reaction":
+        return generate_tweet_reaction()
+    if action == "build":
+        return generate_build_post(text or "")
+    if action == "tool_promo":
+        return generate_tool_post(tool or "")
+    return {"error": f"unknown action {action}"}
+
+
+@app.function(secrets=secrets, timeout=120)
+@modal.fastapi_endpoint(method="POST")
+def content_webhook(request_body: dict, x_content_token: str | None = None) -> dict:
+    """Dashboard-triggered content actions — instant publish + build-in-public generation.
+
+    Secured by a shared token: set CONTENT_WEBHOOK_TOKEN in the Modal secret and send the same
+    value as the X-Content-Token header. Body: {"action": "publish", "post_id": "..."} or
+    {"action": "build", "text": "what you shipped"}.
+    """
+    import os
+
+    from fastapi import HTTPException
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    # The shared token arrives in the request body. A bare `x_content_token` param is bound by
+    # FastAPI as a QUERY param, not the X-Content-Token header, so header-only callers always 401'd
+    # (the original bug). Body is HTTPS-encrypted like a header; still accept the header as fallback.
+    provided = request_body.get("token") or x_content_token
+    if not token or provided != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+
+    action = (request_body.get("action") or "").lower()
+    if action == "publish":
+        from workers.content import publish_one
+
+        return publish_one(request_body.get("post_id"))
+    if action in ("news", "build", "tweet_reaction", "tool_promo"):
+        # Spawn generation in the background and return immediately — some variants (tweet-reaction's
+        # throttled X search) run past a minute and would time out the caller's HTTP request. The
+        # draft shows up in Needs review when it finishes.
+        content_generate_bg.spawn(
+            action=action,
+            fmt=request_body.get("format"),
+            tool=request_body.get("tool"),
+            text=request_body.get("text"),
+        )
+        return {"spawned": True}
+    if action == "prepare_deal":
+        from workers.research import prepare_deal
+
+        return prepare_deal(request_body.get("deal_id"))
+    if action == "newsletter_generate":
+        from workers.newsletter import generate_issue
+
+        return generate_issue()
+    if action == "newsletter_send":
+        from workers.newsletter import send_issue
+
+        return send_issue(request_body.get("issue_id") or "")
+    raise HTTPException(status_code=400, detail="unknown action")
+
+
+@app.function(secrets=secrets, timeout=45)
+@modal.fastapi_endpoint(method="POST")
+def _lead_account(provider_id: str | None = None, chat_id: str | None = None) -> str | None:
+    """The lead owner's Unipile LinkedIn account, resolved via leads.provider_id or a
+    reply's chat_id. None → caller falls back to the env-global account. Best-effort:
+    any lookup failure returns None rather than blocking a human-initiated reply."""
+    try:
+        import psycopg
+
+        from config import Config
+
+        if not Config.database_url:
+            return None
+        with psycopg.connect(Config.database_url) as conn:
+            with conn.cursor() as cur:
+                if provider_id:
+                    cur.execute(
+                        "select p.unipile_account_id from leads l "
+                        "join profiles p on p.id = l.user_id "
+                        "where l.provider_id = %s and p.unipile_account_id is not null limit 1",
+                        (provider_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return row[0]
+                if chat_id:
+                    cur.execute(
+                        "select p.unipile_account_id from replies r "
+                        "join leads l on l.id = r.lead_id "
+                        "join profiles p on p.id = l.user_id "
+                        "where r.chat_id = %s and p.unipile_account_id is not null limit 1",
+                        (chat_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return row[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def linkedin_thread(request_body: dict) -> dict:
+    """Read-only: fetch a LinkedIn conversation thread for the dashboard Replies page.
+
+    Body: {"token", "chat_id"?, "provider_id"?}. Prefers chat_id; falls back to resolving the
+    chat from provider_id (older replies stored before chat_id existed). Returns
+    {messages: [{from_me, text, at}]} oldest-first. Reuses CONTENT_WEBHOOK_TOKEN.
+    """
+    import os
+
+    from fastapi import HTTPException
+
+    from clients import unipile
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    if not token or request_body.get("token") != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+
+    chat_id = request_body.get("chat_id")
+    provider_id = request_body.get("provider_id")
+    account_id = _lead_account(provider_id=provider_id, chat_id=chat_id)
+    if not chat_id and provider_id:
+        # The member id lives in attendee_provider_id; a chat's own provider_id is a different
+        # "2-…" id, so match the attendee first — on the lead OWNER's account.
+        for chat in unipile.list_chats(unread_only=False, limit=100, account_id=account_id):
+            if provider_id in (chat.get("attendee_provider_id"), chat.get("provider_id")):
+                chat_id = str(chat.get("id") or chat.get("chat_id") or "")
+                break
+    if not chat_id:
+        return {"messages": [], "chat_id": None}
+
+    msgs = unipile.list_chat_messages(chat_id)
+    msgs.sort(key=lambda m: str(m.get("timestamp") or ""))
+    out = [
+        {"from_me": m.get("is_sender") in (1, "1", True), "text": m.get("text") or "", "at": m.get("timestamp")}
+        for m in msgs
+        if (m.get("text") or "").strip()
+    ]
+    return {"messages": out, "chat_id": chat_id}
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def linkedin_reply(request_body: dict) -> dict:
+    """Send a LinkedIn DM reply from the dashboard — OPERATOR-INITIATED ONLY (a human clicks Send).
+
+    Body: {"token", "text", "chat_id"?, "provider_id"?, "linkedin_url"?}. Sends into the existing
+    chat when chat_id is given, else starts/reuses the chat with the member (provider_id, resolving
+    from linkedin_url if needed). No cron or auto-send path calls this. Reuses CONTENT_WEBHOOK_TOKEN.
+    """
+    import os
+
+    from fastapi import HTTPException
+
+    from clients import unipile
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    if not token or request_body.get("token") != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+
+    text = (request_body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty text")
+
+    chat_id = request_body.get("chat_id")
+    provider_id = request_body.get("provider_id")
+    linkedin_url = request_body.get("linkedin_url")
+    # Send from the lead OWNER's connected account (multi-user); None → env global.
+    account_id = _lead_account(provider_id=provider_id, chat_id=chat_id)
+    try:
+        if chat_id:
+            resp = unipile.send_chat_message(chat_id, text, account_id=account_id)
+        else:
+            if not provider_id and linkedin_url:
+                provider_id = unipile.resolve_provider_id(linkedin_url, account_id=account_id)
+            if not provider_id:
+                raise HTTPException(status_code=400, detail="no chat_id / provider_id / linkedin_url")
+            resp = unipile.send_linkedin_message(provider_id, text, account_id=account_id)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"unipile send failed: {str(e)[:200]}")
+
+    return {"ok": True, "message_id": resp.get("message_id") or resp.get("id")}
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def regenerate_reply(request_body: dict) -> dict:
+    """Re-draft a suggested reply for /replies given an operator instruction. Reuses CONTENT_WEBHOOK_TOKEN.
+
+    Body: {"token", "reply_id", "instruction"}. Loads the reply + lead + campaign + our last sent
+    message, then redrafts in-voice following the instruction. Returns {"suggested_reply": str}.
+    """
+    import os
+
+    import psycopg
+    from fastapi import HTTPException
+
+    from campaigns_loader import load_campaign
+    from config import require
+    from workers import reply_triage
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    if not token or request_body.get("token") != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+    reply_id = request_body.get("reply_id")
+    instruction = (request_body.get("instruction") or "").strip()
+    if not reply_id or not instruction:
+        raise HTTPException(status_code=400, detail="reply_id + instruction required")
+
+    with psycopg.connect(require("DATABASE_URL")) as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select r.body, r.suggested_reply, r.lead_id, l.name, l.role, l.company, l.campaign_id
+            from replies r join leads l on l.id = r.lead_id where r.id = %s
+            """,
+            (reply_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="reply not found")
+        their_body, prior, lead_id, name, role, company, campaign_id = row
+        cur.execute(
+            "select coalesce(edited_body, body) from drafts where lead_id = %s and status = 'sent' "
+            "order by decided_at desc limit 1",
+            (lead_id,),
+        )
+        d = cur.fetchone()
+        our_last = d[0] if d else None
+
+    campaign = None
+    try:
+        if campaign_id:
+            campaign = load_campaign(str(campaign_id))
+    except Exception:  # noqa: BLE001
+        campaign = None
+
+    text = reply_triage.redraft_reply(
+        reply_body=their_body or "",
+        original_message=our_last,
+        operator_instruction=instruction,
+        prior_suggestion=prior,
+        lead_name=name,
+        lead_role=role,
+        lead_company=company,
+        campaign=campaign,
+    )
+    if not text:
+        raise HTTPException(status_code=502, detail="could not draft a reply")
+    return {"suggested_reply": text}
+
+
+@app.function(secrets=secrets, timeout=30)
+@modal.fastapi_endpoint(method="POST")
+def newsletter_subscribe(request_body: dict) -> dict:
+    """Public subscribe endpoint for the Agentry site's newsletter form. Open (just stores an email)."""
+    from workers.newsletter import add_subscriber
+
+    return add_subscriber(
+        request_body.get("email") or "",
+        name=request_body.get("name"),
+        source=request_body.get("source") or "site",
+    )
+
+
+@app.function(secrets=secrets, timeout=120)
+@modal.fastapi_endpoint(method="POST")
+def audit_run(request_body: dict) -> dict:
+    """Public AI Opportunity Audit — called server-side by the Agentry site. Open by design
+    (a lead magnet anyone can use); cost/abuse is bounded by per-IP + daily caps in the worker.
+    Body: {"website": "...", "email": "...", "name": "...", "ip": "..."}."""
+    from workers.audit import run_audit
+
+    return run_audit(
+        request_body.get("website") or "",
+        email=request_body.get("email"),
+        name=request_body.get("name"),
+        company=request_body.get("company"),
+        ip=request_body.get("ip"),
+    )
+
+
+@app.function(secrets=secrets, timeout=120)
+@modal.fastapi_endpoint(method="POST")
+def roast_run(request_body: dict) -> dict:
+    """Public 'Roast my cold outreach' tool. Open by design; cost bounded by per-IP + daily caps."""
+    from workers.roast import run_roast
+
+    return run_roast(
+        request_body.get("text") or request_body.get("message") or "",
+        email=request_body.get("email"),
+        name=request_body.get("name"),
+        ip=request_body.get("ip"),
+    )
+
+
+@app.function(secrets=secrets, timeout=30)
+@modal.fastapi_endpoint(method="GET")
+def result_get(kind: str = "", id: str = "") -> dict:
+    """Public read of a stored audit/roast result by id, for shareable result pages. No PII
+    (the email is not returned). Unguessable UUID = effectively unlisted, like a share link."""
+    import psycopg
+
+    from config import require
+
+    if kind not in ("audit", "roast") or not id:
+        return {"ok": False, "error": "bad request"}
+    try:
+        with psycopg.connect(require("DATABASE_URL")) as c, c.cursor() as cur:
+            if kind == "audit":
+                cur.execute("select report, company from audits where id=%s", (id,))
+                row = cur.fetchone()
+                if not row:
+                    return {"ok": False, "error": "not found"}
+                return {"ok": True, "kind": "audit", "result": row[0], "company": row[1]}
+            cur.execute("select roast from roasts where id=%s", (id,))
+            row = cur.fetchone()
+            if not row:
+                return {"ok": False, "error": "not found"}
+            return {"ok": True, "kind": "roast", "result": row[0]}
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "not found"}
+
+
+@app.function(secrets=secrets, timeout=600)
+def email_inbox_now(dry_run: bool = False) -> dict:
+    """On-demand unibox sweep. `modal run modal_app.py::email_inbox_now --dry-run`."""
+    from workers.email_inbox import poll_inboxes
+
+    res = poll_inboxes(dry_run=dry_run)
+    import json as _json
+
+    print("INBOX_RESULT " + _json.dumps({k: v for k, v in res.items() if k != "details"}, default=str))
+    return res
+
+
+@app.function(secrets=secrets, timeout=900)
+def apollo_source_now(dry_run: bool = False, limit: int = 8) -> dict:
+    """On-demand Apollo email sourcing. `modal run modal_app.py::apollo_source_now --dry-run --limit 2`."""
+    from workers.apollo_sourcing import source_apollo_all
+
+    res = source_apollo_all(dry_run=dry_run, limit=limit)
+    import json as _json
+
+    print("APOLLO_SOURCE " + _json.dumps(res, default=str)[:2500])
+    return res
+
+
+@app.function(secrets=secrets, timeout=60)
+def notify_test() -> dict:
+    """Send a test reply-alert to NOTIFY_EMAIL from a Maildoso box.
+    `modal run modal_app.py::notify_test`. Returns {sent, reason?} — proves the alert path."""
+    from workers.email_sender import notify
+
+    res = notify(
+        subject="Test alert — outreach unibox",
+        body="This is a test of the reply-notification path. If this landed in your inbox, "
+        "every-reply alerts are working.",
+    )
+    print("NOTIFY_TEST " + str(res))
+    return res
+
+
+@app.function(secrets=secrets, timeout=6 * 3600)  # ~30-60s/lead x several hundred leads — 1h wasn't enough (died twice)
+def backfill_site_enrichment(limit: int = 0) -> dict:
+    """One-off: site-enrich in-flight leads (sent, not-replied, has-domain, not yet site-enriched)
+    so their follow-ups use sharp company-website hooks. Runs in Modal so it survives to completion.
+    `modal run --detach modal_app.py::backfill_site_enrichment`."""
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from campaigns_loader import load_campaign
+    from clients import scrape
+    from config import require
+    from workers import draft
+
+    _camp: dict = {}
+
+    def camp(cid):
+        if cid not in _camp:
+            try:
+                _camp[cid] = load_campaign(str(cid))
+            except Exception:  # noqa: BLE001
+                _camp[cid] = None
+        return _camp[cid]
+
+    conn = psycopg.connect(require("DATABASE_URL"))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select l.id, l.name, l.headline, l.company, l.role, l.location,
+                   l.company_domain, l.campaign_id, l.linkedin_url, l.provider_id
+            from leads l join scores s on s.lead_id=l.id
+            where l.company_domain is not null and l.company_domain <> ''
+              and exists (select 1 from drafts d join sends se on se.draft_id=d.id where d.lead_id=l.id)
+              and not exists (select 1 from replies r where r.lead_id=l.id)
+              and not exists (select 1 from enrichments e where e.lead_id=l.id
+                              and e.company_signals_json::text like '%site_text%')
+            order by s.fit_score desc
+            """
+        )
+        leads = cur.fetchall()
+    if limit:
+        leads = leads[:limit]
+
+    done = fail = 0
+    for (lid, name, headline, company, role, loc, domain, cid, url, pid) in leads:
+        try:
+            site = scrape.fetch_text(domain, max_chars=4000)
+            if not site:
+                fail += 1
+                continue
+            profile = {"full_name": name, "headline": headline, "occupation": headline or role,
+                       "summary": None, "experiences": [{"company": company, "title": role}],
+                       "city": loc, "provider_id": pid}
+            enr = {"linkedin_url": url, "profile": profile, "recent_posts": [],
+                   "company_signals": {"site_text": site, "site_url": scrape.normalize_url(domain)}}
+            hooks = draft.extract_hooks(enr, campaign=camp(cid))
+            with conn.cursor() as wc:
+                wc.execute(
+                    """
+                    insert into enrichments (lead_id, profile_json, company_signals_json,
+                        recent_posts_json, hooks_json, enriched_at)
+                    values (%s,%s,%s,%s,%s, now())
+                    on conflict (lead_id) do update set profile_json=excluded.profile_json,
+                        company_signals_json=excluded.company_signals_json,
+                        recent_posts_json=excluded.recent_posts_json,
+                        hooks_json=excluded.hooks_json, enriched_at=now()
+                    """,
+                    (lid, Jsonb(profile), Jsonb(enr["company_signals"]), Jsonb([]),
+                     Jsonb([h.__dict__ for h in hooks])),
+                )
+            conn.commit()
+            done += 1
+        except Exception:  # noqa: BLE001
+            fail += 1
+    conn.close()
+    return {"enriched": done, "failed": fail, "total": len(leads)}
+
+
+@app.function(secrets=secrets, timeout=60)
+def notify_all_test() -> dict:
+    """Fire ONE of each notification type through its real code path to prove they all deliver.
+    `modal run modal_app.py::notify_all_test`. Check your inbox for 3 test emails."""
+    from alerts import alert
+    from workers.email_sender import notify
+
+    out = {
+        "1_error_alert": alert(
+            "notify_all_test", "test failure — please ignore", "This is a scheduled self-test.",
+            cooldown_hours=0,  # bypass the throttle for the test
+        ),
+        "2_email_reply": notify(
+            subject="New reply from Test Lead (email self-test)",
+            body="Self-test: a lead replied by email. Open the Replies page to respond.",
+        ),
+        "3_linkedin_reply": notify(
+            subject="New LinkedIn reply from Test Lead (self-test)",
+            body="Self-test: a lead replied on LinkedIn. Open the Replies page to respond.",
+        ),
+    }
+    print("NOTIFY_ALL " + str(out))
+    return out
+
+
+@app.function(secrets=secrets, timeout=180)
+def deliverability_probe() -> dict:
+    """Send ONE plain email per sending domain to NOTIFY_EMAIL so we can see which domains
+    actually deliver (and where). `modal run modal_app.py::deliverability_probe`."""
+    import json as _json
+
+    import psycopg
+
+    from clients import smtp_email
+    from config import Config, require
+
+    dest = Config.notify_email
+    if not dest:
+        return {"error": "NOTIFY_EMAIL not set"}
+    with psycopg.connect(require("DATABASE_URL")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select distinct on (domain) email, from_name, smtp_host, smtp_port, username, app_password, domain
+                from mailboxes where status in ('active', 'warming')
+                order by domain, email
+                """
+            )
+            boxes = cur.fetchall()
+    out = []
+    for email, fn, sh, sp, user, pw, domain in boxes:
+        try:
+            smtp_email.send(
+                smtp_host=sh, smtp_port=sp, username=user, password=pw,
+                from_email=email, from_name=fn or "Chance Beyer", to_email=dest,
+                subject=f"Quick question from {domain.split('.')[0]}",
+                body=f"Hi — testing a quick note from {email}. "
+                "If you see this, reply and let me know where it landed (inbox or spam). Thanks!",
+            )
+            out.append({"domain": domain, "via": email, "sent": True})
+        except Exception as e:  # noqa: BLE001
+            out.append({"domain": domain, "via": email, "error": str(e)[:120]})
+    print("PROBE " + _json.dumps(out, default=str))
+    return out
+
+
+@app.function(secrets=secrets, timeout=120)
+def apollo_test() -> dict:
+    """Validate the Apollo key + client live. One enrich call costs ~1 credit.
+    `modal run modal_app.py::apollo_test`."""
+    from clients import apollo
+
+    res = apollo.search_people(
+        titles=["insurance agency owner", "agency principal", "president"],
+        seniorities=["owner", "founder", "c_suite"],
+        locations=["united states"],
+        num_employees_ranges=["1,10", "11,50"],
+        per_page=3,
+    )
+    out: dict = {
+        "search_total": res.get("total"),
+        "got": len(res["people"]),
+        "sample": [
+            {k: p.get(k) for k in ("name", "title", "company", "company_domain", "email", "apollo_email_status")}
+            for p in res["people"]
+        ],
+    }
+    import json as _json
+
+    if res["people"]:
+        p0 = res["people"][0]
+        enr = apollo.enrich_person(apollo_id=p0.get("apollo_id"), reveal_personal_emails=True)
+        out["enriched"] = {
+            k: enr.get(k) for k in ("name", "email", "email_kind", "work_email", "personal_emails", "apollo_email_status")
+        }
+    print("APOLLO_RESULT " + _json.dumps(out, default=str)[:1800])
+    return out
+
+
+@app.function(
+    secrets=secrets,
+    timeout=900,
+    retries=1,
+)
+def send_approved_cron() -> dict:
+    """Send first-touch drafts the operator approved in the dashboard.
+
+    Dashboard approve → drafts.status='approved' in Postgres → this cron sends the
+    cold opener (linkedin_connect / email) via Unipile, respecting the rolling-window
+    cap. The DB-driven counterpart to scripts/send_approvals.py, so first contact runs
+    on Modal without the operator's machine. Follow-ups stay with progress_sequences.
+    """
+    import time as _time
+
+    from workers.email_sender import send_email_first_touch, send_email_followups
+    from workers.sequence_send import send_approved_first_touch
+
+    # Every leg is wall-clock-bounded so the job ALWAYS returns inside the dispatcher's
+    # watchdog: the email legs each get a hard time budget (deferred work rides the next
+    # hourly tick — which also smooths the overnight quota-rollover bursts that used to
+    # drain 90+ emails in one go and trip the 600s watchdog, 2026-07-03/04). Per-leg
+    # elapsed seconds land in the meta so a slow leg is diagnosable at a glance.
+    timings: dict[str, float] = {}
+
+    def _timed(name: str, fn):
+        t0 = _time.monotonic()
+        try:
+            return fn()
+        finally:
+            timings[name] = round(_time.monotonic() - t0, 1)
+
+    # Once/day, withdraw stale (21+ day, dead) pending invites to free pending-invite ceiling
+    # headroom BEFORE the connect guard runs — otherwise a pile of dead invites blocks fresh
+    # connects. Date-guarded, so it's a cheap no-op the rest of the day.
+    try:
+        withdrew = _timed("withdraw_stale", _maybe_withdraw_stale)
+    except Exception as e:  # noqa: BLE001
+        withdrew = {"error": str(e)}
+    # Pace connects (<=4 per hourly tick) so the daily cap spreads out instead of one
+    # burst; InMail/email aren't paced — they send on their own daily caps + credits.
+    linkedin = _timed("linkedin", lambda: send_approved_first_touch(connect_per_run=4))
+    # Same tick sends EMAIL via Maildoso (rotated + ramped). FOLLOW-UPS RUN FIRST, then new
+    # openers take whatever is left of the shared daily cap — replies come from touches 2-4, so
+    # working the existing pipeline before adding cold openers is the highest-leverage ordering
+    # (previously openers ran first and starved the follow-ups). Each is wrapped so an email-side
+    # failure never aborts the rest.
+    try:
+        email_followups = _timed("email_followups", lambda: send_email_followups(time_budget_s=150))
+    except Exception as e:  # noqa: BLE001
+        email_followups = _err_meta(e)
+    try:
+        email = _timed("email", lambda: send_email_first_touch(time_budget_s=150))
+    except Exception as e:  # noqa: BLE001
+        email = _err_meta(e)
+    # Publish any LinkedIn posts the operator approved in the dashboard (via Unipile).
+    try:
+        from workers.content import publish_approved
+
+        posts = _timed("posts", publish_approved)
+    except Exception as e:  # noqa: BLE001
+        posts = {"error": str(e)}
+    # Auto-send scheduled follow-up replies that have come due ("reconnect in the fall"). Runs on
+    # this hourly tick (no extra cron — Modal's free plan caps at 5); due_at granularity is a day.
+    try:
+        from workers.scheduled import send_due_scheduled
+
+        scheduled = _timed("scheduled", send_due_scheduled)
+    except Exception as e:  # noqa: BLE001
+        scheduled = {"error": str(e)}
+    return _logged(
+        "cron_send",
+        {
+            "linkedin": linkedin, "email": email, "email_followups": email_followups,
+            "posts": posts, "scheduled": scheduled, "withdraw_stale": withdrew, "timings": timings,
+        },
+    )
+
+
+def _maybe_withdraw_stale() -> dict:
+    """Once per day, withdraw stale pending LinkedIn invites (frees the ceiling). Date-guarded in
+    app_settings so it fires exactly once across the hourly ticks."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    today = datetime.now(UTC).date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_invite_withdraw'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_invite_withdraw', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    from workers.sequence_send import withdraw_stale_invites
+
+    return withdraw_stale_invites(max_per_run=25)
+
+
+@app.function(secrets=secrets, timeout=300)
+def withdraw_stale_now(older_than_days: int = 21, max_per_run: int = 25, dry_run: bool = False) -> dict:
+    """On-demand stale-invite withdrawal (frees pending-invite headroom).
+
+        modal run modal_app.py::withdraw_stale_now --dry-run                 # preview
+        modal run modal_app.py::withdraw_stale_now --older-than-days 28      # live, conservative
+    """
+    from workers.sequence_send import withdraw_stale_invites
+
+    return withdraw_stale_invites(older_than_days=older_than_days, max_per_run=max_per_run, dry_run=dry_run)
+
+
+@app.function(secrets=secrets, timeout=600)
+def send_approved_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand first-touch send. `modal run modal_app.py::send_approved_now --dry-run`."""
+    from workers.sequence_send import send_approved_first_touch
+
+    return send_approved_first_touch(dry_run=dry_run, limit=limit)
+
+
+@app.function(
+    secrets=secrets,
+    timeout=900,
+    retries=1,
+)
+def detect_connections_cron() -> dict:
+    """Detect LinkedIn connection acceptances → mark accepted, draft + send the DM.
+
+    Pages the account's relations, matches newly-connected people to leads we invited
+    (by provider_id), flips them to accepted, and fires the post-accept DM.
+    """
+    from workers.sequence_send import progress_accepted_connections
+
+    try:
+        res = progress_accepted_connections(limit=30)
+    except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_detect_connections", res)
+
+
+@app.function(secrets=secrets, timeout=600)
+def detect_connections_now(dry_run: bool = False, limit: int | None = None) -> dict:
+    """On-demand acceptance detection. `modal run modal_app.py::detect_connections_now --dry-run`."""
+    from workers.sequence_send import progress_accepted_connections
+
+    return progress_accepted_connections(dry_run=dry_run, limit=limit)
+
+
+@app.function(secrets=secrets, timeout=300)
+def dispatch_comments_cron() -> dict:
+    """Release at most one operator-approved LinkedIn growth comment, paced to look human.
+
+    The pacer self-gates (weekday, US business-hours window, daily cap, min-gap since the last one,
+    random hold), so running it every hour just gives it the chance to drip one out when the timing
+    is right. Approved comments therefore trickle out 1 at a time across the afternoon — never in a
+    burst that LinkedIn would flag as automation.
+    """
+    from workers.comment_pacer import dispatch_due_comments
+
+    try:
+        res = dispatch_due_comments()
+    except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_dispatch_comments", res)
+
+
+@app.function(secrets=secrets, timeout=180)
+def ramp_caps_cron() -> dict:
+    """Auto-ramp per-account LinkedIn invite caps (workers/ramp.py).
+
+    Self-gating: each profile changes at most once per ~20h (li_cap_updated_at), so
+    running hourly just gives the ladder a chance to step when the account has earned
+    it — or to step DOWN fast when pending invites pile up.
+    """
+    from workers.ramp import auto_ramp
+
+    try:
+        res = auto_ramp()
+    except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_ramp_caps", res)
+
+
+@app.function(secrets=secrets, timeout=180)
+def ramp_caps_now(dry_run: bool = True) -> dict:
+    """On-demand ramp evaluation. `modal run modal_app.py::ramp_caps_now` (dry-run by default)."""
+    from workers.ramp import auto_ramp
+
+    return auto_ramp(dry_run=dry_run)
+
+
+@app.function(secrets=secrets, timeout=120)
+def dispatch_comments_now(dry_run: bool = False, force: bool = False) -> dict:
+    """On-demand pacer tick. `--dry-run` previews the next comment; `--force` posts one immediately,
+    bypassing the timing gates (for a live end-to-end test).
+
+        modal run modal_app.py::dispatch_comments_now --dry-run
+        modal run modal_app.py::dispatch_comments_now --force
+    """
+    from workers.comment_pacer import dispatch_due_comments
+
+    return dispatch_due_comments(dry_run=dry_run, force=force)
+
+
+def _error_digest_due() -> bool:
+    """True at most once per day, first tick at/after 14:00 UTC — the daily error-digest gate."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.hour < 14:
+        return False
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_error_digest'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return False
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_error_digest', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    return True
+
+
+@app.function(secrets=secrets, timeout=600)
+def error_agent_cron() -> dict:
+    """Collect + root-cause new failures, open fix PRs, and once/day email the consolidated digest.
+
+    This is the self-healing loop: it turns the per-error alert spam into one analyzed digest and a
+    set of ready-to-merge PRs. Runs every hour (analysis is near-instant once errors are known);
+    the digest fires once daily via the date guard.
+    """
+    from workers.error_agent import run
+
+    try:
+        res = run(do_prs=True, do_digest=_error_digest_due())
+    except Exception:  # noqa: BLE001 — surface a crash so it logs (agent failing is worth knowing)
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_error_agent", res)
+
+
+@app.function(secrets=secrets, timeout=600)
+def error_agent_now(dry_run: bool = False, digest: bool = False) -> dict:
+    """On-demand error-agent pass.
+
+        modal run modal_app.py::error_agent_now --dry-run --digest   # collect+analyze, preview digest, no PRs
+        modal run modal_app.py::error_agent_now                      # live: analyze + open PRs
+        modal run modal_app.py::error_agent_now --digest             # live + send the digest now
+    """
+    from workers.error_agent import run
+
+    return run(do_prs=not dry_run, do_digest=digest, dry_run=dry_run)
+
+
+def _run_job(name: str, fn, timeout: int = 600, stragglers: list | None = None) -> str:
+    """Run one dispatcher job under a hard wall-clock cap.
+
+    The jobs run via `.local()`, so Modal's per-function timeouts do NOT apply — one hung call (a
+    stalled SMTP/Unipile socket, a DB lock) would otherwise block every job after it and burn the
+    whole dispatcher timeout (the 2026-07 incident: an intermittent `cron_send` stall hung ~80 min
+    and killed the tick). Running each job in a daemon thread and joining with a timeout means a
+    hang is abandoned after `timeout` seconds; the remaining jobs still run and the next hourly tick
+    retries it. Normal jobs finish in seconds, so this only ever trips on a real hang.
+
+    An abandoned thread keeps running while the later jobs proceed; `stragglers` collects it so
+    the dispatcher can grace-join at the very end — giving an un-stuck leg time to finish its
+    in-flight send record instead of being killed mid-write by container teardown."""
+    import threading
+
+    box: dict = {}
+
+    def _target():
+        try:
+            box["r"] = fn.local()
+        except Exception:  # noqa: BLE001
+            import traceback
+
+            box["e"] = traceback.format_exc()[:1500]
+
+    t = threading.Thread(target=_target, name=f"job-{name}", daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        if stragglers is not None:
+            stragglers.append(t)
+        _logged(f"cron_dispatcher_{name}", {"error": f"job hung >{timeout}s, abandoned this tick"})
+        return "timed_out"
+    if "e" in box:
+        _logged(f"cron_dispatcher_{name}", {"error": box["e"]})
+        return "crashed"
+    r = box.get("r")
+    return "error" if isinstance(r, dict) and "error" in r else "ok"
+
+
+@app.function(
+    schedule=modal.Cron("0 * * * *"),  # the ONE scheduled function for this app
+    secrets=secrets,
+    timeout=4800,  # backstop only — the per-job caps in _run_job keep the real total well under this
+    retries=0,  # each job alerts + logs on failure; the next tick is an hour away
+)
+def hourly_dispatcher() -> dict:
+    """Run the hourly jobs sequentially, in their old minute order.
+
+    Replaces separate crons (Modal Starter caps the workspace at 5 scheduled
+    functions; the trading-bot app needs a slot). Sequential execution preserves
+    the non-overlap the old minute offsets provided — these jobs share
+    Unipile/LinkedIn rate windows and DB send caps. `.local()` runs each in this
+    container; every job already does its own activity logging + operator alerting
+    via `_logged`. The comment pacer runs last and self-gates on timing, so most
+    ticks it's a no-op.
+    """
+    # replenish_queue is the one legitimately-bulk job (sourcing + enrich/score/draft for
+    # every low campaign queue, plus the Apollo email leg) — it gets a higher cap; its
+    # LinkedIn leg additionally self-limits via time_budget_s so slow ticks defer work
+    # instead of being abandoned mid-campaign.
+    jobs = (
+        ("pull_replies", pull_replies_cron, 600),
+        ("detect_connections", detect_connections_cron, 600),
+        ("progress_sequences", progress_sequences_cron, 600),
+        ("replenish_queue", replenish_queue_cron, 1500),
+        ("send_approved", send_approved_cron, 600),
+        ("dispatch_comments", dispatch_comments_cron, 600),
+        ("ramp_caps", ramp_caps_cron, 180),
+        ("error_agent", error_agent_cron, 600),
+    )
+    results: dict = {}
+    stragglers: list = []
+    for name, fn, cap in jobs:
+        results[name] = _run_job(name, fn, timeout=cap, stragglers=stragglers)
+    # Grace-join abandoned threads before returning: once the dispatcher returns, Modal tears
+    # the container down and an un-stuck leg would die mid-write. 60s covers an in-flight
+    # SMTP send + its DB record; a truly-hung thread just burns the grace and dies as before.
+    for t in stragglers:
+        t.join(60)
+    return _logged("cron_dispatcher", results)
 
 
 @app.function(secrets=secrets, timeout=600)
@@ -137,22 +1423,85 @@ def pull_replies_now(limit: int = 100, include_read: bool = False) -> dict:
     return _pull_replies_impl(limit=limit, only_with_unread=not include_read)
 
 
+def _reply_accounts() -> list[dict]:
+    """The connected LinkedIn accounts to pull replies for, one entry each.
+
+    One entry per distinct profiles.unipile_account_id, plus the env-global account
+    exactly once (deduped when a profile already carries it — the owner's does).
+    user_id scopes lead matching to that owner (None → all leads); the global email
+    mailbox rides with the env-global LinkedIn account so it's polled exactly once.
+    """
+    from config import Config
+
+    targets: list[dict] = []
+    seen_accounts: set[str] = set()
+    rows: list = []
+    if Config.database_url:
+        try:
+            import psycopg
+
+            with psycopg.connect(Config.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select id, unipile_account_id, unipile_email_account_id "
+                        "from profiles where unipile_account_id is not null"
+                    )
+                    rows = cur.fetchall()
+        except Exception:  # noqa: BLE001 — a profiles hiccup must not stop the global pull
+            rows = []
+    for uid, acct, email_acct in rows:
+        if acct in seen_accounts:
+            continue
+        seen_accounts.add(acct)
+        targets.append({"user_id": str(uid), "account_id": acct, "email_account_id": email_acct})
+
+    global_acct = Config.unipile_linkedin_account_id
+    if global_acct and global_acct not in seen_accounts:
+        targets.append({"user_id": None, "account_id": global_acct, "email_account_id": None})
+    # The env mailbox belongs to the operator's (env-global) LinkedIn account.
+    for t in targets:
+        if t["account_id"] == global_acct and not t["email_account_id"]:
+            t["email_account_id"] = Config.unipile_email_account_id or None
+    if not targets:  # no profiles + no env account id — legacy single-account behavior
+        targets.append({"user_id": None, "account_id": None, "email_account_id": None})
+    return targets
+
+
 def _pull_replies_impl(*, limit: int, only_with_unread: bool) -> dict:
-    """Shared body — runs inside the Modal container, so backend/* is on path."""
+    """Shared body — runs inside the Modal container, so backend/* is on path.
+
+    Loops every connected account (see _reply_accounts) so each user's LinkedIn
+    inbox + mailbox is pulled with lead matching scoped to their own leads. One
+    account erroring doesn't block the others.
+    """
     from workers.replies import fetch_and_classify_new_replies
     from workers.replies_db import existing_external_ids, insert_replies
 
     seen = existing_external_ids(limit=5000)
-    new_records = fetch_and_classify_new_replies(
-        seen_message_ids=seen,
-        limit=limit,
-        only_with_unread=only_with_unread,
-    )
+    new_records: list[dict] = []
+    per_account: dict[str, int | str] = {}
+    for t in _reply_accounts():
+        key = t["account_id"] or "global"
+        try:
+            recs = fetch_and_classify_new_replies(
+                seen_message_ids=seen,
+                limit=limit,
+                only_with_unread=only_with_unread,
+                account_id=t["account_id"],
+                email_account_id=t["email_account_id"],
+                user_id=t["user_id"],
+            )
+        except Exception as e:  # noqa: BLE001 — one broken account must not starve the rest
+            per_account[key] = f"error: {str(e)[:160]}"
+            continue
+        seen |= {r["message_id"] for r in recs if r.get("message_id")}
+        new_records.extend(recs)
+        per_account[key] = len(recs)
     if not new_records:
-        return {"new_records": 0, "inserted": 0}
+        return {"new_records": 0, "inserted": 0, "per_account": per_account}
 
     counts = insert_replies(new_records)
-    return {"new_records": len(new_records), **counts}
+    return {"new_records": len(new_records), "per_account": per_account, **counts}
 
 
 # ---------------------------------------------------------------------------
@@ -162,17 +1511,31 @@ def _pull_replies_impl(*, limit: int, only_with_unread: bool) -> dict:
 
 @app.function(secrets=secrets, timeout=60)
 def health() -> dict:
-    """Verify env, deps, and DB connectivity. No external API calls."""
+    """Verify env, deps, DB connectivity, and Unipile reachability."""
     import os
 
     from config import Config
 
     checks = {
         "anthropic_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "heyreach_api_key": bool(Config.heyreach_api_key),
+        "unipile_api_key": bool(Config.unipile_api_key),
+        "unipile_dsn": bool(Config.unipile_dsn),
+        "unipile_linkedin_account_id": bool(Config.unipile_linkedin_account_id),
+        "unipile_email_account_id": bool(Config.unipile_email_account_id),
         "database_url": bool(Config.database_url),
         "claude_model_draft": Config.claude_model_draft,
     }
+
+    # Unipile ping — lists connected accounts.
+    if Config.unipile_api_key and Config.unipile_dsn:
+        try:
+            from clients import unipile
+
+            accounts = unipile.health()
+            items = accounts.get("items", accounts) if isinstance(accounts, dict) else accounts
+            checks["unipile_accounts"] = len(items) if isinstance(items, list) else None
+        except Exception as e:  # noqa: BLE001
+            checks["unipile_error"] = str(e)
 
     # Quick DB ping
     if Config.database_url:
@@ -190,126 +1553,201 @@ def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Webhook receivers — sub-15-min reply latency
+# Webhook receiver — near-real-time reply latency (replaces the hourly poll)
 # ---------------------------------------------------------------------------
 #
-# Configure Heyreach to POST to the URL printed by `modal deploy`:
-#   https://<workspace>--consultancy-outreach-heyreach-webhook.modal.run
+# Configure Unipile (Webhooks in the dashboard, or POST /webhooks) to send
+# `message_received` (messaging) and `mail_received` (email) events to the URL
+# printed by `modal deploy`:
+#   https://<workspace>--consultancy-outreach-unipile-webhook.modal.run
 #
-# Auth: Heyreach signs the payload with a shared secret in the
-# `X-HeyReach-Signature` header (HMAC-SHA256 over the raw body). Set
-# HEYREACH_WEBHOOK_SECRET in your `outreach` Modal secret, then the
-# receiver verifies before processing.
+# Auth: Unipile lets you attach custom headers to a webhook. Set a shared secret
+# as a header (e.g. X-Unipile-Secret) and put the same value in
+# UNIPILE_WEBHOOK_SECRET; the receiver rejects mismatches. If the secret is
+# unset, the check is skipped (rotate the URL on any leak).
+
+
+@app.function(secrets=secrets, timeout=150)
+def handle_meta_lead_bg(leadgen_id: str, form_id: str | None = None) -> dict:
+    """Spawned per Meta lead: fetch + ingest it, then send the instant SMS/email response.
+
+    Runs off the webhook's request thread so Meta gets a fast 200 (it retries slow/failed
+    deliveries, which would otherwise double-send our response)."""
+    from workers.inbound import ingest_meta_lead, respond_to_inbound_lead
+
+    try:
+        lead_id = ingest_meta_lead(leadgen_id, form_id)
+        if not lead_id:
+            return _logged("inbound_meta_lead", {"leadgen_id": leadgen_id, "skipped": "dupe/unroutable"})
+        res = respond_to_inbound_lead(lead_id)
+    except Exception:  # noqa: BLE001
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500], "leadgen_id": leadgen_id}
+    return _logged("inbound_meta_lead", res)
 
 
 @app.function(secrets=secrets, timeout=60)
-@modal.fastapi_endpoint(method="POST")
-def heyreach_webhook(request_body: dict) -> dict:
-    """Receive Heyreach inbound-reply webhooks. Verifies signature, classifies
-    the message, persists to Postgres.
+@modal.asgi_app()
+def meta_leads_webhook():
+    """Meta Lead Ads webhook — GET verifies the subscription, POST ingests leadgen events.
 
-    Expected payload (Heyreach v1):
-      {
-        "event": "reply.received" | "lead.replied",
-        "data": {
-          "conversationId": "...",
-          "leadLinkedinUrl": "...",
-          "firstName": "...",
-          "lastName": "...",
-          "companyName": "...",
-          "campaignId": "...",
-          "message": { "id": "...", "body": "...", "sentAt": "..." }
-        }
-      }
+    Advantage+ runs the ads; this turns each submitted lead form into a pipeline lead + an
+    instant SMS/email response. In the Meta app dashboard, point Webhooks (Page → `leadgen`
+    field) at this URL and set the Verify Token to META_VERIFY_TOKEN. POST bodies are
+    HMAC-verified against META_APP_SECRET (X-Hub-Signature-256). One URL serves both methods,
+    which is why this is an ASGI app.
+
+    Built on raw Starlette (not FastAPI): Meta's verify params are dotted (hub.mode) and the
+    POST HMAC needs the EXACT raw body — Starlette hands the handler the request object
+    positionally, so there's no FastAPI dependency-injection guessing over `Request`.
     """
     import hashlib
     import hmac
-    import json
-    import os
+    import json as _json
 
-    from fastapi import HTTPException, Header, Request
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse, PlainTextResponse
+    from starlette.routing import Route
 
-    from workers.replies import _classify_one, _find_last_outbound
-    from workers.replies_db import insert_replies
+    from config import Config
 
-    # Signature verification is currently a soft check until the request
-    # object is wired through. If you expose this publicly with no auth,
-    # rotate the URL on any leak.
-    secret = os.environ.get("HEYREACH_WEBHOOK_SECRET")
-    if secret:
-        # Modal's @fastapi_endpoint can wrap a FastAPI Request via type hint,
-        # but the simple dict form above gives us the parsed body directly.
-        # For full HMAC verification, switch the signature to take a Request
-        # parameter and compute hmac over `await request.body()`.
-        pass
+    async def verify(request):
+        p = request.query_params
+        if (
+            p.get("hub.mode") == "subscribe"
+            and Config.meta_verify_token
+            and p.get("hub.verify_token") == Config.meta_verify_token
+        ):
+            return PlainTextResponse(p.get("hub.challenge", ""))
+        return PlainTextResponse("forbidden", status_code=403)
 
-    event = request_body.get("event", "")
-    if event not in {"reply.received", "lead.replied"}:
-        return {"ok": True, "skipped": f"event={event}"}
+    async def ingest(request):
+        raw = await request.body()
+        if Config.meta_app_secret:
+            expected = "sha256=" + hmac.new(
+                Config.meta_app_secret.encode(), raw, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(request.headers.get("x-hub-signature-256", ""), expected):
+                return PlainTextResponse("bad signature", status_code=403)
+        try:
+            body = _json.loads(raw or b"{}")
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"ok": True, "skipped": "unparseable"})
 
-    data = request_body.get("data") or {}
-    message = data.get("message") or {}
-    if not message.get("body"):
-        return {"ok": True, "skipped": "empty body"}
+        spawned = 0
+        for entry in body.get("entry", []) or []:
+            for change in entry.get("changes", []) or []:
+                if change.get("field") != "leadgen":
+                    continue
+                val = change.get("value") or {}
+                lg = val.get("leadgen_id")
+                if lg:
+                    handle_meta_lead_bg.spawn(str(lg), val.get("form_id"))
+                    spawned += 1
+        return JSONResponse({"ok": True, "spawned": spawned})
 
-    convo = {
-        "id": data.get("conversationId"),
-        "leadLinkedinUrl": data.get("leadLinkedinUrl"),
-        "firstName": data.get("firstName"),
-        "lastName": data.get("lastName"),
-        "companyName": data.get("companyName"),
-        "campaignId": data.get("campaignId"),
-    }
-    # Webhook payload doesn't carry the prior outbound; classifier still
-    # works without it (the classifier prompt tolerates None original_message).
-    record = _classify_one(convo, message, original_message=None)
-    if record is None:
-        raise HTTPException(status_code=500, detail="classifier failed")
-
-    counts = insert_replies([record])
-    return {"ok": True, "record_id": record["message_id"], **counts}
+    return Starlette(routes=[
+        Route("/", verify, methods=["GET"]),
+        Route("/", ingest, methods=["POST"]),
+    ])
 
 
 @app.function(secrets=secrets, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def smartlead_webhook(request_body: dict) -> dict:
-    """Receive Smartlead reply / unsubscribe / bounce webhooks.
+def unipile_webhook(request_body: dict, x_unipile_secret: str | None = None) -> dict:
+    """Receive Unipile inbound-message + inbound-email webhooks.
 
-    Smartlead's v1 webhook payload:
-      {
-        "event_type": "lead_replied" | "lead_unsubscribed" | "email_bounced",
-        "lead": { "email": "...", "first_name": "...", ... },
-        "campaign_id": "...",
-        "reply_message": { "body": "...", "received_at": "..." }
-      }
+    Classifies the message and persists to Postgres. One endpoint handles both
+    channels — we branch on the event type.
+
+    Messaging payload (LinkedIn DM):
+      { "event": "message_received", "account_id", "chat_id", "message_id",
+        "message": "<text>", "sender": {"attendee_name": "...",
+        "attendee_provider_id": "..."}, "timestamp": "..." }
+
+    Email payload:
+      { "event": "mail_received", "email_id" | "id",
+        "from_attendee": {"identifier": "...", "display_name": "..."},
+        "subject": "...", "body_plain" | "body": "...", "date": "..." }
     """
-    from workers.replies import _classify_one
-    from workers.replies_db import insert_replies
+    import os
 
-    event = request_body.get("event_type") or request_body.get("event")
-    if event not in {"lead_replied", "reply.received"}:
+    from fastapi import HTTPException
+
+    from workers.replies import classify_message
+    from workers.replies_db import insert_replies, is_known_lead
+
+    secret = os.environ.get("UNIPILE_WEBHOOK_SECRET")
+    if secret and x_unipile_secret != secret:
+        raise HTTPException(status_code=401, detail="bad webhook secret")
+
+    event = (request_body.get("event") or request_body.get("event_type") or "").lower()
+    email_events = {"mail_received", "email_received", "mail.received", "email.received"}
+    message_events = {"message_received", "message.received", "message"}
+
+    if event in email_events:
+        from_attendee = request_body.get("from_attendee") or {}
+        body = request_body.get("body_plain") or request_body.get("body") or ""
+        if not body:
+            return {"ok": True, "skipped": "empty body"}
+        record = classify_message(
+            channel="email",
+            external_id=str(
+                request_body.get("email_id") or request_body.get("id") or ""
+            ),
+            text=body,
+            lead_name=from_attendee.get("display_name"),
+            received_at=request_body.get("date"),
+        )
+    elif event in message_events:
+        text = request_body.get("message") or request_body.get("text") or ""
+        if not text:
+            return {"ok": True, "skipped": "empty body"}
+        sender = request_body.get("sender") or {}
+        provider_id = sender.get("attendee_provider_id") or sender.get("provider_id")
+        # Multi-account: the payload's account_id says WHOSE connected account received
+        # the message — scope lead matching to that owner's leads. An unknown/unmapped
+        # account_id logs and falls back to global matching (never drop a message).
+        acct = request_body.get("account_id")
+        user_id: str | None = None
+        if acct:
+            try:
+                import psycopg
+
+                from config import Config
+
+                if Config.database_url:
+                    with psycopg.connect(Config.database_url) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "select id from profiles where unipile_account_id = %s limit 1",
+                                (str(acct),),
+                            )
+                            row = cur.fetchone()
+                            user_id = str(row[0]) if row else None
+                if user_id is None and str(acct) != Config.unipile_linkedin_account_id:
+                    print(f"unipile_webhook: unknown account_id {str(acct)[:40]!r} — global lead matching")
+            except Exception:  # noqa: BLE001 — routing lookup must never drop a message
+                user_id = None
+        # Skip messages from people we haven't contacted — no LLM call on inbox noise.
+        if provider_id and not is_known_lead(provider_id=provider_id, user_id=user_id):
+            return {"ok": True, "skipped": "not a tracked lead"}
+        record = classify_message(
+            channel="linkedin_dm",
+            external_id=str(
+                request_body.get("message_id") or request_body.get("id") or ""
+            ),
+            text=text,
+            provider_id=provider_id,
+            lead_name=sender.get("attendee_name") or sender.get("name"),
+            received_at=request_body.get("timestamp"),
+        )
+    else:
         return {"ok": True, "skipped": f"event={event}"}
 
-    lead = request_body.get("lead") or {}
-    reply = request_body.get("reply_message") or request_body.get("message") or {}
-    body = reply.get("body") or reply.get("text") or ""
-    if not body:
-        return {"ok": True, "skipped": "empty body"}
-
-    convo = {
-        "id": request_body.get("campaign_id"),  # no notion of conversation in Smartlead
-        "leadLinkedinUrl": None,                 # email-only
-        "firstName": lead.get("first_name"),
-        "lastName": lead.get("last_name"),
-        "companyName": lead.get("company_name"),
-        "campaignId": request_body.get("campaign_id"),
-    }
-    msg = {"id": reply.get("id"), "body": body, "sentAt": reply.get("received_at")}
-    record = _classify_one(convo, msg, original_message=None)
     if record is None:
-        return {"ok": False, "error": "classifier failed"}
+        raise HTTPException(status_code=500, detail="classifier failed")
 
-    # Mark channel as email so the dashboard renders correctly.
-    record["channel"] = "email"
     counts = insert_replies([record])
     return {"ok": True, "record_id": record["message_id"], **counts}

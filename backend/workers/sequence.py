@@ -37,6 +37,7 @@ LINKEDIN_STEPS: list[tuple[str, int]] = [
     ("linkedin_connect", 0),
     ("linkedin_dm", 4),
     ("linkedin_followup_1", 7),
+    ("linkedin_followup_2", 6),
 ]
 
 EMAIL_STEPS: list[tuple[str, int]] = [
@@ -104,9 +105,11 @@ def determine_next_action(
         sends = sorted(sends, key=lambda s: _parse(s["sent_at"]))
         latest = sends[-1]
 
-        # Pause: any reply after the most-recent send?
-        replies = replies_by_lead.get(lead_id, [])
-        if any(_parse(r["received_at"]) > _parse(latest["sent_at"]) for r in replies):
+        # Stop the sequence for good the moment the lead replies — ANY reply, ever. The old
+        # test ("a reply newer than our last send") let a single stray follow-up un-pause the
+        # sequence: once a nudge went out after their reply, the reply looked "old" and the
+        # next nudge scheduled anyway. One reply now halts all further auto follow-ups.
+        if replies_by_lead.get(lead_id):
             continue
 
         seq_name = _channel_to_sequence(latest["channel"])

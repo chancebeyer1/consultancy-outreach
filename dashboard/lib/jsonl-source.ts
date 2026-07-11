@@ -43,9 +43,9 @@ interface PipelineRecord {
     profile?: Record<string, unknown>;
     recent_posts?: Array<{ text?: string }>;
     company_signals?: Record<string, Array<{ title?: string }>>;
-    github?: { top_repos?: Array<{ topics?: string[] }> };
     company?: string;
   };
+  campaign_slug?: string | null;
   score?: PipelineScore;
   hooks?: PipelineHook[];
   chosen_hook?: PipelineHook | null;
@@ -109,6 +109,7 @@ function mapRecord(rec: PipelineRecord, idx: number): DraftReviewRow | null {
       ((profile.city as string) ?? "") +
         (profile.country_full_name ? `, ${profile.country_full_name as string}` : "") ||
       null,
+    campaign_id: rec.campaign_slug ?? null,
     segment: rec.score?.segment ?? null,
     source: null,
     trigger: "list",
@@ -161,11 +162,6 @@ function mapRecord(rec: PipelineRecord, idx: number): DraftReviewRow | null {
         .flatMap((arr) => arr.map((r) => r.title ?? ""))
         .filter((t) => t.length > 0)
         .slice(0, 6),
-      github_topics: Array.from(
-        new Set(
-          (rec.enrichment?.github?.top_repos ?? []).flatMap((r) => r.topics ?? []),
-        ),
-      ).slice(0, 10),
     },
   };
 }

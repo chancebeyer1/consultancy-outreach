@@ -1,12 +1,35 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
+
+import { AuthStatus } from "./AuthStatus";
+import { CampaignSelector } from "./CampaignSelector";
+import { NavLinks } from "./NavLinks";
+import { getCurrentProfile } from "../lib/auth";
+import { CAMPAIGN_COOKIE } from "../lib/campaign-filter";
+import { getCampaigns } from "../lib/queries";
 import { dataSource } from "../lib/supabase";
 
 const links = [
-  { href: "/drafts", label: "Drafts" },
+  { href: "/content", label: "Content" },
+  { href: "/comments", label: "Comments" },
+  { href: "/newsletter", label: "Newsletter" },
   { href: "/replies", label: "Replies" },
+  { href: "/sends", label: "Sends" },
+  { href: "/pipeline", label: "Pipeline" },
+  { href: "/bids", label: "Bids" },
   { href: "/leads", label: "Leads" },
   { href: "/sequences", label: "Sequences" },
+  { href: "/mailboxes", label: "Mailboxes" },
+  { href: "/campaigns", label: "Campaigns" },
   { href: "/analytics", label: "Analytics" },
+  { href: "/activity", label: "Activity" },
+];
+
+// Simplified surface for non-admin teammates: just their leads and their
+// replies (/drafts and /inbox redirect into these two).
+const memberLinks = [
+  { href: "/leads", label: "Leads" },
+  { href: "/replies", label: "Replies" },
 ];
 
 const sourceColor = {
@@ -15,23 +38,63 @@ const sourceColor = {
   supabase: "text-emerald-400",
 } as const;
 
-export function Nav() {
-  return (
-    <header className="border-b border-neutral-800">
-      <div className="mx-auto flex max-w-7xl items-center gap-8 px-6 py-3">
-        <Link href="/" className="font-mono text-sm font-bold tracking-wide">
-          OUTREACH
-        </Link>
-        <nav className="flex gap-5 text-sm text-neutral-400">
-          {links.map((l) => (
-            <Link key={l.href} href={l.href} className="hover:text-white">
-              {l.label}
-            </Link>
-          ))}
-        </nav>
-        <div className={`ml-auto font-mono text-[10px] uppercase tracking-wide ${sourceColor[dataSource]}`}>
-          source · {dataSource}
+export async function Nav() {
+  const [profile, cookieStore] = await Promise.all([getCurrentProfile(), cookies()]);
+  const selected = cookieStore.get(CAMPAIGN_COOKIE)?.value ?? "all";
+
+  // Signed out (supabase mode, e.g. rendering /login): brand-only header — no
+  // tabs, no campaign selector (fetching campaigns here would leak names to
+  // logged-out visitors, and tabs would all bounce to /login anyway).
+  if (dataSource === "supabase" && !profile) {
+    return (
+      <header className="sticky top-0 z-30 border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-7xl items-center px-4 sm:px-6">
+          <span className="flex shrink-0 items-center gap-2 font-mono text-sm font-bold tracking-wide text-white">
+            <span className="h-2 w-2 rounded-full bg-sky-400" />
+            OUTREACH
+          </span>
         </div>
+      </header>
+    );
+  }
+
+  // Campaigns are scoped to the signed-in user (non-admins only see their own).
+  const campaigns = await getCampaigns(profile);
+
+  const userEmail = profile?.email ?? null;
+  // Mock/file mode has no auth — treat the local operator as admin (full nav).
+  const isAdmin = dataSource !== "supabase" || Boolean(profile?.isAdmin);
+
+  // Admins get the full nav + the Team (invite/onboarding) link; members get
+  // the simplified two-tab surface.
+  const navLinks = isAdmin ? [...links, { href: "/team", label: "Team" }] : memberLinks;
+
+  return (
+    <header className="sticky top-0 z-30 border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6">
+        {/* Row 1 — brand + utilities. Kept light so the tab bar below has room to breathe. */}
+        <div className="flex h-14 items-center justify-between gap-4">
+          <Link
+            href="/"
+            className="flex shrink-0 items-center gap-2 font-mono text-sm font-bold tracking-wide text-white"
+          >
+            <span className="h-2 w-2 rounded-full bg-sky-400" />
+            OUTREACH
+          </Link>
+          <div className="flex min-w-0 items-center gap-3">
+            <CampaignSelector campaigns={campaigns} selected={selected} />
+            <span
+              className={`hidden font-mono text-[10px] uppercase tracking-wide sm:inline ${sourceColor[dataSource]}`}
+            >
+              {dataSource}
+            </span>
+            {dataSource === "supabase" && <AuthStatus email={userEmail} />}
+          </div>
+        </div>
+        {/* Row 2 — primary navigation as a full-width tab bar (scrolls horizontally on mobile). */}
+        <nav className="-mx-4 -mb-px flex gap-0.5 overflow-x-auto px-4 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:px-0">
+          <NavLinks links={navLinks} />
+        </nav>
       </div>
     </header>
   );

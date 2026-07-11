@@ -56,21 +56,6 @@ export function EnrichmentPanel({ row }: Props) {
         </Section>
       )}
 
-      {enrichment_summary.github_topics.length > 0 && (
-        <Section title="GitHub topics">
-          <div className="flex flex-wrap gap-1">
-            {enrichment_summary.github_topics.map((t) => (
-              <span
-                key={t}
-                className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-[10px] text-neutral-400"
-              >
-                {t}
-              </span>
-            ))}
-          </div>
-        </Section>
-      )}
-
       {score?.strong_signals && score.strong_signals.length > 0 && (
         <Section title="Strong signals">
           <ul className="space-y-0.5 text-xs text-emerald-400">

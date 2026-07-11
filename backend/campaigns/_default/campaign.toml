@@ -1,0 +1,24 @@
+# Default campaign — the AI-agent consultancy persona this system shipped with.
+#
+# This is the is_default campaign: run_pipeline / draft_one / reply_triage use it
+# when no --campaign is passed. The audience (icp.md) and the offer (offer.md)
+# live alongside this file and are seeded into the `campaigns` DB table by
+# `scripts.sync_campaigns`.
+#
+# style.md and voice_corpus are intentionally NOT set here. They're personal
+# (how *you* write), not audience-specific, so they fall back to the global
+# defaults in backend/prompts/{style,voice_corpus}.md. Add a style.md / voice.md
+# to a campaign folder only to override your voice for a specific audience.
+
+name = "AI-Agent Consultancy (default)"
+slug = "_default"
+is_default = true
+
+# Paused: this seed persona doesn't source or auto-send. Keep it paused so a sync
+# never accidentally re-activates it (auto_send defaults to false when omitted).
+status = "paused"
+
+# landing_url / calcom_url fall back to LANDING_URL / CALCOM_URL in .env when
+# omitted. Set them here to point a campaign at its own sales asset / booking link.
+# landing_url = "https://your-domain.com"
+# calcom_url  = "https://cal.com/your-handle"

@@ -18,6 +18,33 @@ body {
   background: var(--bg);
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+::selection {
+  background: rgba(125, 211, 252, 0.25);
+  color: #fff;
+}
+
+/* Subtle, on-brand scrollbars (dark, thin) instead of the chunky default. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2b2b2b transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2b2b2b;
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
 }
 
 @layer components {

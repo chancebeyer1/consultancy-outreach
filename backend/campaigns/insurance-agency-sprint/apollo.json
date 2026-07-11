@@ -1,0 +1,6 @@
+{
+  "titles": ["insurance agency owner", "agency principal", "agency president", "principal agent", "insurance broker owner", "founder"],
+  "seniorities": ["owner", "founder", "c_suite"],
+  "locations": ["united states"],
+  "num_employees_ranges": ["11,50", "51,200"]
+}

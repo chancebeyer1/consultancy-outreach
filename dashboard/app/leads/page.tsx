@@ -1,13 +1,16 @@
-export default function LeadsPage() {
-  return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <h1 className="text-2xl font-semibold">Leads</h1>
-      <p className="mt-2 text-neutral-500">
-        Filterable list of all leads with status, segment, fit score, trigger.
-      </p>
-      <div className="mt-8 rounded-md border border-dashed border-neutral-800 p-6 text-sm text-neutral-500">
-        TODO Phase 2: table view with filters. Import-from-CSV button.
-      </div>
-    </div>
-  );
+import { getCurrentProfile } from "../../lib/auth";
+import { getSelectedCampaignId } from "../../lib/campaign-filter";
+import { getCampaigns, getLeadRows } from "../../lib/queries";
+import { LeadsClient } from "./_components/LeadsClient";
+
+// Full list of every lead, filterable by campaign (via the global selector) and
+// by derived lifecycle status (queued / sent / connected / replied).
+// Non-admins only see their own leads + campaigns.
+export default async function LeadsPage() {
+  const [campaignId, profile] = await Promise.all([getSelectedCampaignId(), getCurrentProfile()]);
+  const [rows, campaigns] = await Promise.all([
+    getLeadRows(campaignId, profile),
+    getCampaigns(profile),
+  ]);
+  return <LeadsClient rows={rows} campaigns={campaigns} />;
 }

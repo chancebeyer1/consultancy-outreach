@@ -1,0 +1,27 @@
+# Real Estate Sprint — research-led outreach to US real-estate team leads and
+# broker-owners. Demand validation for the lead-nurture vertical: an AI agent that
+# answers, qualifies, and books inbound leads before they go cold. Pilot customers
+# here decide whether the vertical becomes a product.
+# Target explicitly:
+#   uv run python -m scripts.run_pipeline leads.csv --campaign real-estate-sprint
+
+name = "Real Estate Sprint"
+slug = "real-estate-sprint"
+is_default = false
+
+# Manual review first: approve the first batches in /drafts to validate the voice
+# against this ICP, then flip to true once the notes read right.
+auto_send = false
+
+# LinkedIn-only until the email deliverability audit lands. To add email later:
+# drop an apollo.json in this folder and add "email" here, then re-sync.
+channels = ["linkedin_connect", "linkedin_dm"]
+
+# Sourcing via structured CLASSIC search filters in `search.json` (team-lead /
+# broker-owner keywords @ Real Estate industry, US). Classic, not sales_navigator:
+# the Unipile plan 403s the Sales Nav search API (feature_not_subscribed) as of
+# 2026-07 — classic has no seniority/headcount filters, so the ICP scorer does that
+# gating. Switch back to sales_navigator params if the Unipile feature is enabled.
+
+# Top-fit team leads get a cold InMail (Sales Nav credit) instead of a connect request.
+inmail_min_fit = 85

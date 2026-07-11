@@ -1,68 +1,110 @@
 # Draft: Cold email
 
-Used when we have an email (Apollo/ProxyCurl-enriched) and either no LinkedIn relationship or LinkedIn DM didn't get a reply after follow-up.
+Used when we have an email address for the prospect and either no LinkedIn relationship or
+the LinkedIn DM didn't get a reply after follow-up.
+
+Write it **reader-first**: their situation comes before anything about you. Confident, human,
+peer-to-peer — like a note you'd send a busy person in Slack, not a marketing email.
 
 ## Hard constraints
 
-- **Subject line ≤ 50 chars**, lowercase preferred, no clickbait
-- **Body ≤ 120 words** including the soft ask
-- **One link only** (LANDING_URL)
-- **CAN-SPAM / GDPR**: include a one-line unsubscribe at the bottom
-- Format the output exactly as below.
+- **Subject ≤ 50 chars**, lowercase preferred, specific to them, no clickbait.
+- **3–5 sentences total**, ≤ ~90 words. The more you write, the more they have to dig through.
+- **Link optional** — include the `landing_url` as the single link ONLY if one is provided in
+  the payload; if it's null/empty, write a clean reply-based ask with NO link. Never invent a URL.
+- One-line opt-out at the bottom; the inbound List-Unsubscribe header is added automatically.
+- **Sign off on its own line with `my_first_name` from the payload (the sender's real name) —
+  never invent a sender name, never leave a `{{...}}` placeholder.**
+- Format the output EXACTLY as in "Output format" below.
+
+## Framework (reader-first, 3–5 sentences)
+
+1. **Open on THEM.** Lead with a specific detail about their world OR a question about a
+   challenge they likely feel. Never open with "I'm reaching out because I saw…" or "hope you're
+   well." The first line is about them, not you.
+2. **Name the problem/grind** they actually feel — in "you" language ("running your own desk,
+   sourcing lands on you"), not "we" language.
+3. **Your angle, in one line** — pulled from the Offer in the system prompt. If the campaign is
+   research-led, this is *what you're trying to learn*, not a pitch. If it's a value pitch, make
+   it concrete (a real outcome / number), never "we offer a solution that helps…".
+4. **A reply-able question as the CTA** — ONE specific question they can answer in a single
+   line by hitting reply ("do you chase those by hand or does your AMS do it?"). Do NOT ask
+   for a call/meeting in a cold email — "worth 15 min?" from a stranger is the most
+   pattern-matched ask in the inbox; the call offer comes after they reply. Sweeten with
+   give-first: you'll share what you're hearing from others you've asked.
+5. **(Optional) one light credibility line** if it genuinely fits — draw on `operator_background`
+   (TRUE facts about you, e.g. you've built production AI agents like iinfii.ai) for a real,
+   relevant proof point. Never fabricate, never name-drop clients ("we've already helped companies
+   like [Name]…"), keep it to one line.
+
+## Avoid (kills replies + deliverability)
+
+- Clichés: "I'm reaching out because I saw…", "We offer a solution that helps…", "We've already
+  helped companies like…", "hope this finds you well", "quick question", "circling back" (in a
+  first email).
+- **The 2026 AI-outreach skeleton** — recipients pattern-match and delete it: flattery +
+  artifact name ("came across your X, thought it was great"), unnamed social proof ("I've been
+  helping others like you"), the disclaimer ("this isn't a pitch" / "not selling anything" /
+  "not pitching"), and the stranger meeting ask ("quick 15-minute call this week?"). None of
+  these may ever appear. A no-pitch email doesn't need to say it's not a pitch.
+- "We/our/I" openers. Deficit or insulting framing ("here's why your X is broken").
+- Spam-trigger words (free, guarantee, act now, limited time, $$$, "increase revenue", click here),
+  ALL CAPS, multiple exclamation marks.
+- Heavy signature: **first name only** — no phone, title, company line, links, or logo.
+- Images, HTML, tracking pixels — plain text only.
+
+## A/B variant (use the angle matching `variant` in the payload)
+
+We're split-testing two cold-email angles — apply the one matching `variant`. This shapes BOTH
+the subject line and the opening, since that's what drives whether they open and read:
+
+- **variant "a" — problem/grind-led:** the subject names the specific grind they feel (e.g.
+  "back-office grind at {{company}}"); the body opens on that pain in "you" language. Direct,
+  concrete, outcome-oriented.
+- **variant "b" — curiosity/question-led:** the subject is a genuine question or a curiosity hook
+  (e.g. "how does {{company}} handle ACORDs?"); the body opens by asking how they handle a specific
+  thing today, framed as something you're researching. Warmer, lower-key, lower-commitment.
+
+If `variant` is null, use "a".
 
 ## Structure
 
 ```
-Subject: <subject line>
+Subject: <specific, lowercase, ≤50 chars>
 
-<one-sentence specific hook from their world>
+<line 1 — about THEM: a specific detail or a question about their problem>
 
-<one-sentence about what I built, anchored to their problem>
+<the angle + the ask, woven tight — pulled from the Offer; include the link ONLY if landing_url
+was provided>
 
-<soft ask + link>
-
-—{{my_first_name}}
-
-(reply "no thanks" and I'll never write again)
-```
-
-## Examples (target voice)
-
-✅
-```
-Subject: agent eval at {{company}}
-
-your post on eval flakes lands — hit the same wall on a recent agent build
-last quarter.
-
-I was the agent engineer on contract there. ended up building a labeled
-trace-replay layer so we could ship without playing whack-a-mole — wrote up
-how it works at {{landing_url}}.
-
-worth a chat if your team is hiring contractors. either way, no follow-up.
-
-—{{my_first_name}}
+{{my_first_name}}
 
 (reply "no thanks" and I'll never write again)
 ```
 
-## Rules
+## Example (target voice — illustrates structure, NOT the domain; match the active Offer)
 
-- Subject: reference one specific thing. NOT "quick question" or "exploring an opportunity."
-- Opening line: never "I hope this finds you well." Lead with the hook.
-- The pitch sentence is the only place you sell. ONE sentence.
-- Soft ask only. No calendar links in the cold email — that's for the reply.
-- Sign-off uses my first name only.
-- The "reply 'no thanks'" line is intentional — feels respectful + handles unsubscribe.
+```
+Subject: back-office grind at {{company}}
+
+{{first_name}}, running a multi-carrier independent shop, the doc chase never really stops,
+dec pages, ACORDs and renewals all landing on the same few people by hand.
+
+I'm asking every independent owner I can find the same thing this month: does your team
+chase those by hand, or does your AMS actually handle it? one line back is plenty, and I'll
+send you what I'm hearing from the other shops.
+
+{{my_first_name}}
+
+(reply "no thanks" and I'll never write again)
+```
 
 ## Output format
 
-Return the email body in EXACTLY the format shown above:
+Return the email in EXACTLY this format — no surrounding code fences, no preamble:
 
 ```
 Subject: <subject>
 
 <body>
 ```
-
-No surrounding code fences, no preamble.

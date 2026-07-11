@@ -1,7 +1,7 @@
-import { getDraftReviewRows } from "../../lib/queries";
-import { DraftsClient } from "./_components/DraftsClient";
+import { redirect } from "next/navigation";
 
-export default async function DraftsPage() {
-  const rows = await getDraftReviewRows();
-  return <DraftsClient initialRows={rows} />;
+// /drafts retired — every campaign now auto-approves (auto_send), so there's no manual review
+// queue. Old links land on /leads (where you can see who's queued/sent).
+export default function DraftsPage() {
+  redirect("/leads");
 }

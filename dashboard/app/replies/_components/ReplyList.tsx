@@ -25,7 +25,7 @@ const intentLabel: Record<Intent | "other", string> = {
   referral: "REFERRAL",
   objection: "OBJECTION",
   not_now: "NOT NOW",
-  oof: "OOF",
+  oof: "OOO",
   unsubscribe: "DROP",
   other: "OTHER",
 };

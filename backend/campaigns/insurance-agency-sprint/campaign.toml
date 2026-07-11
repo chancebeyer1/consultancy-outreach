@@ -1,0 +1,24 @@
+# Insurance Agency Sprint — research-led outreach to independent insurance agency
+# owners/principals. The near-twin of the mortgage campaign: doc-heavy back office,
+# owner-operated, US-only. Target explicitly:
+#   uv run python -m scripts.run_pipeline leads.csv --campaign insurance-agency-sprint
+
+name = "Insurance Agency Sprint"
+slug = "insurance-agency-sprint"
+is_default = false
+
+# Auto-send: approved first-touch openers go out without manual review (fit-gated >=60).
+auto_send = true
+
+# LinkedIn (Sales Nav leads) + email (Apollo-sourced leads). Same ICP, both channels,
+# so the dashboard can compare LinkedIn vs email head-to-head within the campaign.
+channels = ["linkedin_connect", "linkedin_dm", "email"]
+
+# Sourcing is driven by the structured Sales-Navigator filters in `search.json`
+# (owner/partner seniority @ "Insurance Agencies and Brokerages", US, 1-50 employees) —
+# far higher-ICP than a broad keyword URL. The replenish worker prefers search_params
+# over search_url, so we leave search_url unset.
+# search_url = '...'  # legacy broad keyword search, superseded by search.json
+
+# Top-fit principals get a cold InMail (Sales Nav credit) instead of a connect request.
+inmail_min_fit = 85
