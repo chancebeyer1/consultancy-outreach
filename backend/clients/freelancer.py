@@ -162,6 +162,24 @@ def place_bid(
     return result
 
 
+def get_my_bids(*, bid_ids: list[int] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    """Fetch the token owner's bids (optionally narrowed to specific bid ids — we store the
+    id of every bid we place). Used by the tracker to poll award status. Each bid carries
+    `award_status` (pending | awarded | rejected | revoked | canceled) plus project_id.
+    Raises on HTTP errors so the tracker can log-and-retry next tick."""
+    params: list[tuple[str, str]] = [
+        ("bidders[]", str(my_user_id())),
+        ("limit", str(limit)),
+    ]
+    for b in bid_ids or []:
+        params.append(("bids[]", str(b)))
+    with httpx.Client(timeout=45.0) as c:
+        r = c.get(_BIDS, params=params, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token})
+        r.raise_for_status()
+        data = r.json()
+    return ((data.get("result") or {}).get("bids")) or []
+
+
 def fetch_opportunities(*, query: str = DEFAULT_QUERY, limit: int = 50) -> list[dict[str, Any]]:
     """Recent AI/software Freelancer projects open for bidding. [] if no token / on error."""
     if not Config.freelancer_oauth_token:

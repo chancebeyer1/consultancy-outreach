@@ -19,7 +19,7 @@ import { NextResponse } from "next/server";
 import { requireApiUser } from "@/lib/auth";
 import { dataSource, serverAdminClient } from "@/lib/supabase";
 
-type BidAction = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api";
+type BidAction = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api" | "won" | "lost";
 
 interface BidDecisionPayload {
   opportunity_id: string;
@@ -46,7 +46,16 @@ interface BulkPassPayload {
   opportunity_ids: string[];
 }
 
-const ACTIONS: BidAction[] = ["save", "approve", "reject", "submit", "pass", "submit_api"];
+const ACTIONS: BidAction[] = [
+  "save",
+  "approve",
+  "reject",
+  "submit",
+  "pass",
+  "submit_api",
+  "won",
+  "lost",
+];
 
 function isValid(p: unknown): p is BidDecisionPayload {
   if (!p || typeof p !== "object") return false;
@@ -90,6 +99,9 @@ function bidPatch(action: BidAction, payload: BidDecisionPayload): Record<string
       return null; // opportunity-only
     case "submit_api":
       return null; // handled before the patch path (relayed to Modal, which owns the flips)
+    case "won":
+    case "lost":
+      return null; // outcome lives on the opportunity; the bid stays 'submitted'
   }
 }
 
@@ -102,6 +114,8 @@ function oppStatus(action: BidAction): string | null {
       submit: "submitted",
       pass: "passed",
       submit_api: null,
+      won: "won",
+      lost: "lost",
     }[action] ?? null
   );
 }

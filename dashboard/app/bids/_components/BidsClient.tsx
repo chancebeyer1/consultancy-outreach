@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { BidReviewRow, OpportunitySource } from "@/lib/types";
 
-type Action = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api";
+type Action = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api" | "won" | "lost";
 
 const SOURCE_META: Record<OpportunitySource, { label: string; cls: string }> = {
   sam_gov: { label: "SAM.gov", cls: "bg-blue-500/15 text-blue-300 ring-blue-500/30" },
@@ -46,9 +46,10 @@ function amountFromEstPrice(estPrice: string | null): string {
   return m ? m[0] : "";
 }
 
-type Bucket = "needs_approval" | "approved" | "low_fit";
+type Bucket = "needs_approval" | "approved" | "submitted" | "low_fit";
 
 function bucketOf(r: BidReviewRow): Bucket {
+  if (r.bid?.status === "submitted") return "submitted";
   if (r.bid?.status === "approved") return "approved";
   if (r.bid) return "needs_approval";
   return "low_fit";
@@ -72,6 +73,7 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   );
   const needsApproval = visible.filter((r) => bucketOf(r) === "needs_approval");
   const approved = visible.filter((r) => bucketOf(r) === "approved");
+  const submitted = visible.filter((r) => bucketOf(r) === "submitted");
   const lowFit = visible.filter((r) => bucketOf(r) === "low_fit");
 
   function removeRow(oppId: string) {
@@ -200,6 +202,16 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
             ))}
           </Section>
           <Section
+            title="Submitted — awaiting response"
+            hint="Freelancer outcomes auto-track hourly (you're emailed on an award); mark the rest won/lost as replies come in"
+            count={submitted.length}
+            accent="text-sky-300"
+          >
+            {submitted.map((row) => (
+              <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
+            ))}
+          </Section>
+          <Section
             title="Low fit — no bid drafted"
             hint="Scored below the draft gate; pass them or pursue by hand"
             count={lowFit.length}
@@ -281,6 +293,7 @@ function BidCard({
   const dl = deadlineLabel(o.deadline);
   const flags = o.fit_flags ?? {};
   const isApproved = bid?.status === "approved";
+  const isSubmitted = bid?.status === "submitted";
   const canApiSubmit = isApproved && API_SUBMITTABLE.has(o.source);
 
   const [body, setBody] = useState(bid?.edited_body ?? bid?.body ?? "");
@@ -324,7 +337,7 @@ function BidCard({
         setSavedBody(body);
         onApproved(o.id);
       } else {
-        onRemoved(o.id); // reject / pass / submit / submit_api clear the row
+        onRemoved(o.id); // reject / pass / submit / submit_api / won / lost clear the row
       }
     } catch (err) {
       setNote(`error: ${err instanceof Error ? err.message : String(err)}`);
@@ -412,11 +425,31 @@ function BidCard({
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            rows={Math.min(16, Math.max(6, body.split("\n").length + 1))}
-            className="w-full resize-y rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-[13px] leading-relaxed text-neutral-100 outline-none focus:border-neutral-600"
+            disabled={isSubmitted}
+            rows={isSubmitted ? 4 : Math.min(16, Math.max(6, body.split("\n").length + 1))}
+            className="w-full resize-y rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-[13px] leading-relaxed text-neutral-100 outline-none focus:border-neutral-600 disabled:opacity-60"
           />
+          {isSubmitted && (
+            <p className="mt-2 text-xs text-neutral-400">
+              Submitted {bid.submitted_at ? new Date(bid.submitted_at).toLocaleDateString() : ""}
+              {bid.submitted_via === "api" ? " via API" : ""}
+              {API_SUBMITTABLE.has(o.source)
+                ? " — outcome auto-tracks hourly; you'll be emailed if awarded."
+                : " — mark the outcome when they respond."}
+            </p>
+          )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {!isApproved && (
+            {isSubmitted && (
+              <>
+                <ActionBtn tone="primary" busy={busy === "won"} onClick={() => act("won")}>
+                  Won 🎉
+                </ActionBtn>
+                <ActionBtn tone="danger" busy={busy === "lost"} onClick={() => act("lost")}>
+                  Lost
+                </ActionBtn>
+              </>
+            )}
+            {!isApproved && !isSubmitted && (
               <ActionBtn tone="primary" busy={busy === "approve"} onClick={() => act("approve")}>
                 Approve
               </ActionBtn>
@@ -441,15 +474,19 @@ function BidCard({
                 Mark submitted
               </ActionBtn>
             )}
-            <ActionBtn tone="ghost" busy={busy === "save"} disabled={!dirty} onClick={() => act("save")}>
-              {dirty ? "Save edits" : "Saved"}
-            </ActionBtn>
+            {!isSubmitted && (
+              <ActionBtn tone="ghost" busy={busy === "save"} disabled={!dirty} onClick={() => act("save")}>
+                {dirty ? "Save edits" : "Saved"}
+              </ActionBtn>
+            )}
             <ActionBtn tone="ghost" onClick={copy}>
               Copy
             </ActionBtn>
-            <ActionBtn tone="danger" busy={busy === "reject"} onClick={() => act("reject")}>
-              Reject
-            </ActionBtn>
+            {!isSubmitted && (
+              <ActionBtn tone="danger" busy={busy === "reject"} onClick={() => act("reject")}>
+                Reject
+              </ActionBtn>
+            )}
             {o.url && (
               <a
                 href={o.url}

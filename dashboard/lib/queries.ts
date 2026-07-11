@@ -900,11 +900,12 @@ async function loadBidReviewRowsFromSupabase(scope?: Scope): Promise<BidReviewRo
   const supabase = await serverClient();
   const uid = scopeUserId(scope);
 
-  // Opportunities the operator hasn't dispositioned yet (submitted/passed drop off the queue).
+  // Working set: everything not yet terminally dispositioned. `submitted` stays visible
+  // (the Submitted section tracks responses until won/lost); passed/won/lost drop off.
   let oppQ = supabase
     .from("opportunities")
     .select("*")
-    .in("status", ["new", "scored", "drafted", "approved"])
+    .in("status", ["new", "scored", "drafted", "approved", "submitted"])
     .order("fit_score", { ascending: false, nullsFirst: false })
     .order("discovered_at", { ascending: false })
     .limit(400);

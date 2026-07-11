@@ -485,6 +485,16 @@ def bid_submit_now(opportunity_id: str, amount: float = 0.0, period_days: int = 
 
 
 @app.function(secrets=secrets, timeout=120)
+def track_bids_cron() -> dict:
+    """Poll platform APIs for outcomes on submitted bids (Freelancer award status). Hourly
+    because awards are accept-within-a-window; zero API calls when nothing is outstanding.
+    `modal run modal_app.py::track_bids_cron` for an ad-hoc check."""
+    from workers.bids_track import poll_freelancer_bids
+
+    return _logged("cron_track_bids", poll_freelancer_bids())
+
+
+@app.function(secrets=secrets, timeout=120)
 def bids_sources_check(sources: str = "") -> dict:
     """Fetch-only connectivity check for bidding sources — no scoring, no drafting, no DB
     writes. `modal run modal_app.py::bids_sources_check --sources freelancer,remoteok`.
@@ -1620,6 +1630,9 @@ def hourly_dispatcher() -> dict:
         ("send_approved", send_approved_cron, 600),
         ("dispatch_comments", dispatch_comments_cron, 600),
         ("ramp_caps", ramp_caps_cron, 180),
+        # Bid outcomes: hourly because a Freelancer award must be accepted within their
+        # window; no-op (zero API calls) when no submitted bids are outstanding.
+        ("track_bids", track_bids_cron, 120),
         ("error_agent", error_agent_cron, 600),
     )
     results: dict = {}

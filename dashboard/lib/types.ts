@@ -271,6 +271,8 @@ export interface Bid {
   generated_at: string;
   decided_at: string | null;
   submitted_at: string | null;
+  external_id?: string | null; // provider bid id (0039) — set on API submission
+  submitted_via?: "api" | "manual" | null; // 0039
 }
 
 // Aggregate view for /bids: an opportunity joined with its drafted bid (if any).

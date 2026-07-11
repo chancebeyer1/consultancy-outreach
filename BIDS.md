@@ -58,9 +58,16 @@ guarded to **once a day** (SAM.gov quota). On-demand: `modal run modal_app.py::o
 
 ## Review & submit
 
-Open the dashboard **/bids** tab — three sections: **Needs approval** (drafted proposals
-awaiting your call), **Approved — ready to submit**, and **Low fit — no bid drafted**.
-Approving moves the card to the Approved section (it stays until submitted or rejected).
+Open the dashboard **/bids** tab — four sections: **Needs approval** (drafted proposals
+awaiting your call), **Approved — ready to submit**, **Submitted — awaiting response**, and
+**Low fit — no bid drafted**. Approving moves the card to the Approved section; submitting
+moves it to Submitted, where it stays until the outcome lands.
+
+**Response tracking:** Freelancer outcomes auto-track hourly through their API (an award
+triggers an immediate email — accept it on Freelancer promptly, awards expire); everything
+else you mark **Won/Lost** on the card as replies arrive. Upwork proposal tracking needs API
+scopes we haven't been granted; SAM award-notice watching becomes worthwhile once federal
+submission is possible.
 
 - **Approve** — move to the ready-to-submit list.
 - **Submit on Freelancer** — places the bid through Freelancer's official API (amount
