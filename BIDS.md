@@ -67,9 +67,11 @@ high-fit software work) an editable drafted proposal. Actions:
 - **Reject / Pass** — drop it from the queue.
 - **Pass N low-fit** — one click clears every undecided, undrafted row under fit 40.
 
-You don't need to check /bids speculatively: whenever a sweep drafts new proposals you get an
-**email alert** listing them (set the optional `DASHBOARD_URL` env for clickable links), and
-opportunities whose response deadline lapses are auto-passed out of the queue daily.
+You don't need to check /bids speculatively: when the **daily sweep** drafts new proposals it
+emails you the list (requires `NOTIFY_EMAIL` + Resend, same as reply alerts; set the optional
+`DASHBOARD_URL` env for clickable links — a delivery failure is surfaced through the normal
+failure-alert path). Manual `sweep_opportunities` runs print to the terminal instead. Rows
+whose response deadline lapses before you decide are auto-passed out of the queue daily.
 
 You submit on SAM.gov / Upwork / etc. **by hand** — federal solicitations require a formal
 submission and Upwork's ToS forbids automated proposals. This system gets you a fit-ranked

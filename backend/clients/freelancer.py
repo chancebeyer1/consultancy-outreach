@@ -17,6 +17,7 @@ with the module's never-auto-submit rule).
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -79,12 +80,16 @@ def _normalize(p: dict[str, Any]) -> dict[str, Any] | None:
     skills = [j.get("name") for j in (p.get("jobs") or []) if isinstance(j, dict) and j.get("name")]
     desc = p.get("description") or p.get("preview_description") or ""
     submitted = p.get("submitdate") or p.get("time_submitted")
-    # epoch seconds → ISO so the worker's _ts validator accepts it
+    # epoch seconds → ISO so the worker's _ts validator accepts them. The bid window closes
+    # at submitdate + bidperiod (integer DAYS) — store it as the deadline so _expire_stale
+    # auto-clears gigs that are no longer open for bidding (NULL would never expire).
     posted_at = None
+    deadline = None
     if isinstance(submitted, (int, float)) and submitted > 0:
-        from datetime import UTC, datetime
-
         posted_at = datetime.fromtimestamp(int(submitted), tz=UTC).isoformat()
+        bidperiod = p.get("bidperiod")
+        if isinstance(bidperiod, int) and bidperiod > 0:
+            deadline = datetime.fromtimestamp(int(submitted) + bidperiod * 86400, tz=UTC).isoformat()
     bid_stats = p.get("bid_stats") or {}
     return {
         "source": "freelancer",
@@ -95,7 +100,7 @@ def _normalize(p: dict[str, Any]) -> dict[str, Any] | None:
         "url": url,
         "budget": _budget_str(p),
         "location": "Remote",
-        "deadline": None,
+        "deadline": deadline,
         "posted_at": posted_at,
         "naics": None,
         "psc": None,

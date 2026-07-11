@@ -80,23 +80,32 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const lowFitCount = rows.filter(isLowFit).length;
 
   async function bulkPass() {
-    if (!window.confirm(`Pass ${lowFitCount} low-fit opportunities (fit < ${BULK_PASS_FIT})?`)) return;
+    // Snapshot the ids at click time — the server only passes THESE rows, so the count the
+    // user confirms is exactly what happens even if the queue mutates mid-flight.
+    const ids = rows.filter(isLowFit).map((r) => r.opportunity.id);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Pass ${ids.length} low-fit opportunities (fit < ${BULK_PASS_FIT})?`)) return;
     setBulkBusy(true);
     setBulkNote(null);
     try {
       const res = await fetch("/api/bids", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "bulk_pass", max_fit: BULK_PASS_FIT }),
+        body: JSON.stringify({ action: "bulk_pass", max_fit: BULK_PASS_FIT, opportunity_ids: ids }),
       });
       const data = (await res.json()) as { persisted?: boolean; passed?: number; error?: string; reason?: string };
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setRows((prev) => prev.filter((r) => !isLowFit(r)));
-      if (sourceFilter !== "all" && !rows.filter((r) => !isLowFit(r)).some((r) => r.opportunity.source === sourceFilter)) {
-        setSourceFilter("all");
-      }
+      const removed = new Set(ids);
+      setRows((prev) => {
+        const next = prev.filter((r) => !removed.has(r.opportunity.id));
+        // Reset inside the updater (fresh `next`, not a stale closure) — mirrors removeRow.
+        if (sourceFilter !== "all" && !next.some((r) => r.opportunity.source === sourceFilter)) {
+          setSourceFilter("all");
+        }
+        return next;
+      });
       setBulkNote(
-        data.persisted === false ? `cleared locally (${data.reason ?? "mock mode"})` : `passed ${data.passed ?? lowFitCount}`,
+        data.persisted === false ? `cleared locally (${data.reason ?? "mock mode"})` : `passed ${data.passed ?? ids.length}`,
       );
     } catch (err) {
       setBulkNote(`error: ${err instanceof Error ? err.message : String(err)}`);

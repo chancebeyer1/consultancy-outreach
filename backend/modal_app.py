@@ -338,17 +338,26 @@ def _maybe_sweep_opportunities() -> dict:
 
     result = source_all(dry_run=False, time_budget_s=500)
     # Email the operator ONLY when the sweep actually drafted proposals — so /bids never
-    # needs speculative checking. Best-effort: a mail hiccup must not fail the sweep.
+    # needs speculative checking. A mail hiccup must not fail the sweep, but it MUST be
+    # visible: notify() reports most failures by returning {"sent": False} (not raising),
+    # and alerts.scan_result only pages on `*_failed` int keys — so surface both shapes.
     try:
         items = result.get("drafted_items") or []
         if items:
-            _email_bid_alert(items)
+            res = _email_bid_alert(items)
+            result["bid_alert"] = res
+            if not res.get("sent"):
+                result.setdefault("errors", []).append(
+                    f"bid alert email not sent: {res.get('reason', 'unknown')}"
+                )
+                result["alert_email_failed"] = 1
     except Exception as e:  # noqa: BLE001
         result.setdefault("errors", []).append(f"bid alert email: {e}")
+        result["alert_email_failed"] = 1
     return result
 
 
-def _email_bid_alert(items: list) -> None:
+def _email_bid_alert(items: list) -> dict:
     """One email listing today's drafted bids, via the same Resend-first notify() path the
     reply/digest alerts use. DASHBOARD_URL (optional env) makes the review link clickable."""
     import os
@@ -374,7 +383,7 @@ def _email_bid_alert(items: list) -> None:
         + (f"{dash}/bids" if dash else "/bids")
         + "\n(Nothing is ever auto-submitted.)"
     )
-    notify(f"{n} new bid draft{'s' if n != 1 else ''} ready to review", body)
+    return notify(f"{n} new bid draft{'s' if n != 1 else ''} ready to review", body)
 
 
 @app.function(secrets=secrets, timeout=900)

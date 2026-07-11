@@ -29,11 +29,15 @@ interface BidDecisionPayload {
   rejection_reason?: string | null;
 }
 
-// Queue hygiene: pass every still-undecided, undrafted opportunity under a fit threshold in
-// one call. Only touches status new/scored — drafted/approved rows always need human eyes.
+// Queue hygiene: pass the low-fit rows the client is DISPLAYING, by explicit id. The client
+// sends the ids so the confirm dialog's count is exactly what gets passed — a filter-only
+// update would also hit rows beyond the page's 400-row read that the user never saw. The
+// status/fit guards are kept server-side so a stale client can't pass a row that has since
+// been drafted or decided.
 interface BulkPassPayload {
   action: "bulk_pass";
   max_fit: number;
+  opportunity_ids: string[];
 }
 
 const ACTIONS: BidAction[] = ["save", "approve", "reject", "submit", "pass"];
@@ -47,7 +51,16 @@ function isValid(p: unknown): p is BidDecisionPayload {
 function isBulkPass(p: unknown): p is BulkPassPayload {
   if (!p || typeof p !== "object") return false;
   const o = p as Record<string, unknown>;
-  return o.action === "bulk_pass" && typeof o.max_fit === "number" && o.max_fit >= 0 && o.max_fit <= 100;
+  return (
+    o.action === "bulk_pass" &&
+    typeof o.max_fit === "number" &&
+    o.max_fit >= 0 &&
+    o.max_fit <= 100 &&
+    Array.isArray(o.opportunity_ids) &&
+    o.opportunity_ids.length > 0 &&
+    o.opportunity_ids.length <= 1000 &&
+    o.opportunity_ids.every((x) => typeof x === "string")
+  );
 }
 
 // Map an action → (bid fields, opportunity.status). Some actions touch only one table.
@@ -95,18 +108,27 @@ export async function POST(request: Request) {
   const admin = serverAdminClient();
 
   if (isBulkPass(payload)) {
-    let q = admin
-      .from("opportunities")
-      .update({ status: "passed" }, { count: "exact" })
-      .in("status", ["new", "scored"])
-      .lt("fit_score", payload.max_fit);
-    if (!gate.profile.isAdmin) q = q.eq("user_id", gate.profile.id);
-    const { error, count } = await q;
-    if (error) {
-      console.error("[bids] bulk pass failed", error);
-      return NextResponse.json({ persisted: false, error: error.message }, { status: 500 });
+    let passed = 0;
+    for (let i = 0; i < payload.opportunity_ids.length; i += 200) {
+      const chunk = payload.opportunity_ids.slice(i, i + 200);
+      let q = admin
+        .from("opportunities")
+        .update({ status: "passed" }, { count: "exact" })
+        .in("id", chunk)
+        .in("status", ["new", "scored"])
+        .lt("fit_score", payload.max_fit);
+      if (!gate.profile.isAdmin) q = q.eq("user_id", gate.profile.id);
+      const { error, count } = await q;
+      if (error) {
+        console.error("[bids] bulk pass failed", error);
+        return NextResponse.json(
+          { persisted: passed > 0, passed, error: error.message },
+          { status: 500 },
+        );
+      }
+      passed += count ?? 0;
     }
-    return NextResponse.json({ persisted: true, passed: count ?? 0 });
+    return NextResponse.json({ persisted: true, passed });
   }
 
   // Owner check: non-admins may only decide on opportunities they own.

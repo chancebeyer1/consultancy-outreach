@@ -324,23 +324,28 @@ def source_all(*, dry_run: bool = False, time_budget_s: float = 500.0) -> dict[s
             bid = _draft(opp, fit, prefix, owner_id)
             if bid:
                 drafted += 1
-                drafted_items.append({
-                    "title": (opp.get("title") or "")[:100],
-                    "source": opp.get("source"),
-                    "fit": int(fit.get("fit_score") or 0),
-                    "est_price": bid.get("est_price") or fit.get("suggested_price"),
-                    "deadline": opp.get("deadline"),
-                    "url": opp.get("url"),
-                })
 
         title = (opp.get("title") or "")[:60]
         print(f"  [{opp.get('source')}] fit={fit.get('fit_score')} "
               f"sw={fit.get('is_software')} ai={fit.get('is_ai_agent')} "
               f"{'DRAFTED' if bid else ''}  {title}")
 
+        ingest_ok = True  # dry-run / no-DB counts as ok so the summary still lists drafts
         if not dry_run and Config.database_url:
-            if _ingest(opp, fit, bid, owner_id):
+            ingest_ok = _ingest(opp, fit, bid, owner_id)
+            if ingest_ok:
                 ingested += 1
+        # Only advertise a bid AFTER it's actually in the DB — a failed/raced ingest must not
+        # email the operator about a proposal that never appears on /bids.
+        if bid and ingest_ok:
+            drafted_items.append({
+                "title": (opp.get("title") or "")[:100],
+                "source": opp.get("source"),
+                "fit": int(fit.get("fit_score") or 0),
+                "est_price": bid.get("est_price") or fit.get("suggested_price"),
+                "deadline": opp.get("deadline"),
+                "url": opp.get("url"),
+            })
 
     return {
         "dry_run": dry_run,
