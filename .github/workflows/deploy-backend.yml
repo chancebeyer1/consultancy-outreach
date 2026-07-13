@@ -1,0 +1,46 @@
+# Auto-deploy the Modal backend when backend code lands on main — the piece that makes a merged
+# error-agent PR actually reach production (until now, deploys only happened from the operator's
+# machine). Requires two repo secrets (Settings → Secrets and variables → Actions):
+#   MODAL_TOKEN_ID / MODAL_TOKEN_SECRET   (modal.com → Settings → API Tokens → New Token)
+# Until those exist the workflow runs green and skips, so it never spams failure emails.
+name: Deploy Modal backend
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: modal-deploy
+  cancel-in-progress: false # never kill a mid-flight deploy; queue instead
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Modal credentials
+        id: creds
+        run: echo "ok=${{ secrets.MODAL_TOKEN_ID != '' && secrets.MODAL_TOKEN_SECRET != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Skip (secrets not configured yet)
+        if: steps.creds.outputs.ok != 'true'
+        run: echo "MODAL_TOKEN_ID/MODAL_TOKEN_SECRET not set — skipping deploy. Add them in repo Settings → Secrets to enable auto-deploy."
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.creds.outputs.ok == 'true'
+
+      - name: Deploy to Modal
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: backend
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: |
+          uv sync --extra worker
+          uv run modal deploy modal_app.py
