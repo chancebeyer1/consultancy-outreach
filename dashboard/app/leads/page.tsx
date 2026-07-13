@@ -27,10 +27,26 @@ export default async function LeadsPage({
   const page = Math.max(1, Number.parseInt(one(sp.page), 10) || 1);
 
   const [campaignId, profile] = await Promise.all([getSelectedCampaignId(), getCurrentProfile()]);
-  const [result, campaigns] = await Promise.all([
-    getLeadRowsPage(campaignId, profile, { page, pageSize: PAGE_SIZE, status, channel, q }),
-    getCampaigns(profile),
-  ]);
+  let result;
+  let campaigns;
+  try {
+    [result, campaigns] = await Promise.all([
+      getLeadRowsPage(campaignId, profile, { page, pageSize: PAGE_SIZE, status, channel, q }),
+      getCampaigns(profile),
+    ]);
+  } catch (e) {
+    // Surface the real failure on the page — an empty table with working chips cost us two
+    // debugging round-trips; a visible error costs zero.
+    const msg = e instanceof Error ? e.message : JSON.stringify(e);
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-8">
+        <h1 className="text-xl font-semibold text-white">Leads</h1>
+        <div className="mt-6 rounded-lg border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          Failed to load leads: {msg}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <LeadsClient

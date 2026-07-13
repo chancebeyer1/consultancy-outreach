@@ -341,33 +341,32 @@ export async function getLeadRowsPage(
   // get the explicit user_id filter below — RLS was never the scoping mechanism here.
   const supabase = serverAdminClient();
   const uid = scopeUserId(scope);
-  // PostgREST or() filters are comma/paren-delimited — strip those (and %) from the needle.
+  // Wildcards would be user-controlled ILIKE syntax; strip them (and PostgREST delimiters).
   const q = f.q.trim().replace(/[,()%]/g, " ").trim();
 
-  let rowsQ = supabase.from("lead_rows_v").select("*", { count: "exact" });
-  if (uid) rowsQ = rowsQ.eq("user_id", uid);
-  if (campaignId) rowsQ = rowsQ.eq("campaign_id", campaignId);
-  if (q) {
-    rowsQ = rowsQ.or(
-      `name.ilike.%${q}%,company.ilike.%${q}%,role.ilike.%${q}%,email.ilike.%${q}%,location.ilike.%${q}%`,
-    );
-  }
-  if (f.status !== "all") rowsQ = rowsQ.eq("display_status", f.status);
-  if (f.channel !== "all") rowsQ = rowsQ.contains("channels", [f.channel]);
-  const from = (f.page - 1) * f.pageSize;
-  rowsQ = rowsQ.order("updated_at", { ascending: false }).range(from, from + f.pageSize - 1);
-
-  const [rowsRes, countsRes] = await Promise.all([
-    rowsQ,
+  // BOTH calls are RPCs on purpose: the REST select against the lead_rows_v view returned an
+  // accurate count with an empty rows array in the deployed runtime (a PostgREST/view quirk we
+  // could not reproduce anywhere else), while the RPC path has worked everywhere from day one.
+  const [pageRes, countsRes] = await Promise.all([
+    supabase.rpc("lead_rows_page", {
+      p_campaign: campaignId ?? null,
+      p_user: uid ?? null,
+      p_q: q || null,
+      p_status: f.status === "all" ? null : f.status,
+      p_channel: f.channel === "all" ? null : f.channel,
+      p_limit: f.pageSize,
+      p_offset: (f.page - 1) * f.pageSize,
+    }),
     supabase.rpc("lead_page_counts", {
       p_campaign: campaignId ?? null,
       p_user: uid ?? null,
       p_q: q || null,
     }),
   ]);
-  if (rowsRes.error) throw rowsRes.error;
+  if (pageRes.error) throw pageRes.error;
   if (countsRes.error) throw countsRes.error;
 
+  const page = (pageRes.data ?? {}) as { filtered_total?: number; rows?: unknown[] };
   const counts = (countsRes.data ?? {}) as {
     total?: number;
     status?: Record<string, number>;
@@ -380,7 +379,7 @@ export async function getLeadRowsPage(
     display_status: LeadDisplayStatus;
     channels: LeadChannelKind[];
   };
-  const rows: LeadRow[] = ((rowsRes.data ?? []) as ViewRow[]).map((r) => {
+  const rows: LeadRow[] = ((page.rows ?? []) as ViewRow[]).map((r) => {
     const { fit_score, last_sent_at, display_status, channels, ...lead } = r;
     return {
       lead: lead as Lead,
@@ -393,8 +392,8 @@ export async function getLeadRowsPage(
 
   return {
     rows,
-    total: counts.total ?? rowsRes.count ?? 0,
-    filteredTotal: rowsRes.count ?? 0,
+    total: counts.total ?? page.filtered_total ?? 0,
+    filteredTotal: page.filtered_total ?? 0,
     statusCounts: counts.status ?? {},
     channelCounts: counts.channels ?? {},
   };
