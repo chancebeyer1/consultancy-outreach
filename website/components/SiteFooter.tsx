@@ -36,7 +36,7 @@ export function SiteFooter() {
           </span>
           {VERTICALS.slice(0, 6).map((v) => (
             <Link key={v.slug} href={`/ai-agents-for/${v.slug}`} className="hover:text-white">
-              {v.name}
+              {v.title.replace(/^AI Agents for /, "")}
             </Link>
           ))}
           <Link href="/ai-agents-for" className="text-sky-400 hover:text-sky-300">

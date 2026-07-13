@@ -31,11 +31,13 @@ export default function IndustriesPage() {
             href={`/ai-agents-for/${v.slug}`}
             className="group flex flex-col rounded-2xl border border-neutral-800 bg-neutral-950 p-6 transition-colors hover:border-neutral-600"
           >
-            <h2 className="text-lg font-semibold text-white">{v.h1.replace("AI agents for ", "")}</h2>
+            <h2 className="text-lg font-semibold text-white">
+              {v.title.replace(/^AI Agents for /, "")}
+            </h2>
             <p className="mt-2 flex-1 text-[14px] leading-relaxed text-neutral-400">
               {v.useCases
                 .slice(0, 3)
-                .map((u) => u.title.toLowerCase())
+                .map((u) => u.title)
                 .join(" · ")}
             </p>
             <span className="mt-4 text-sm font-medium text-sky-400 transition-transform group-hover:translate-x-0.5">
