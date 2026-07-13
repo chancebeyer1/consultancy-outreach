@@ -281,6 +281,121 @@ export async function getLeadRows(campaignId?: string, scope?: Scope): Promise<L
   return loadLeadRowsFromSupabase(campaignId, scope);
 }
 
+// ---------------------------------------------------------------------------
+// Leads — SERVER-PAGINATED page for /leads (backed by the lead_rows_v view)
+// ---------------------------------------------------------------------------
+
+export type LeadsPageFilters = {
+  page: number; // 1-based
+  pageSize: number;
+  status: "all" | LeadDisplayStatus;
+  channel: "all" | LeadChannelKind;
+  q: string;
+};
+
+export type LeadsPageResult = {
+  rows: LeadRow[];
+  total: number; // total under current campaign/search scope (all statuses)
+  filteredTotal: number; // total matching the active status+channel filter (drives pagination)
+  statusCounts: Record<string, number>;
+  channelCounts: Record<string, number>;
+};
+
+// One page of /leads, filtered + counted in SQL. lead_rows_v computes each lead's derived
+// status/channels/fit in Postgres, so this replaces the old load-EVERY-lead-then-filter-in-the-
+// browser path that lagged hard past ~1,500 leads. The chip counts come from one RPC scan.
+export async function getLeadRowsPage(
+  campaignId: string | undefined,
+  scope: Scope | undefined,
+  f: LeadsPageFilters,
+): Promise<LeadsPageResult> {
+  if (dataSource !== "supabase") {
+    // Mock/file mode: reuse the legacy loader and slice in JS (tiny datasets).
+    const all = await getLeadRows(campaignId, scope);
+    const needle = f.q.trim().toLowerCase();
+    const filtered = all.filter((r) => {
+      if (f.status !== "all" && r.display_status !== f.status) return false;
+      if (f.channel !== "all" && !r.channels.includes(f.channel)) return false;
+      if (!needle) return true;
+      const hay =
+        `${r.lead.name ?? ""} ${r.lead.company ?? ""} ${r.lead.role ?? ""} ${r.lead.email ?? ""}`.toLowerCase();
+      return hay.includes(needle);
+    });
+    const statusCounts: Record<string, number> = {};
+    for (const r of all) statusCounts[r.display_status] = (statusCounts[r.display_status] ?? 0) + 1;
+    const channelCounts: Record<string, number> = { linkedin: 0, email: 0 };
+    for (const r of all) for (const k of r.channels) channelCounts[k] = (channelCounts[k] ?? 0) + 1;
+    const from = (f.page - 1) * f.pageSize;
+    return {
+      rows: filtered.slice(from, from + f.pageSize),
+      total: all.length,
+      filteredTotal: filtered.length,
+      statusCounts,
+      channelCounts,
+    };
+  }
+
+  const supabase = await serverClient();
+  const uid = scopeUserId(scope);
+  // PostgREST or() filters are comma/paren-delimited — strip those (and %) from the needle.
+  const q = f.q.trim().replace(/[,()%]/g, " ").trim();
+
+  let rowsQ = supabase.from("lead_rows_v").select("*", { count: "exact" });
+  if (uid) rowsQ = rowsQ.eq("user_id", uid);
+  if (campaignId) rowsQ = rowsQ.eq("campaign_id", campaignId);
+  if (q) {
+    rowsQ = rowsQ.or(
+      `name.ilike.%${q}%,company.ilike.%${q}%,role.ilike.%${q}%,email.ilike.%${q}%,location.ilike.%${q}%`,
+    );
+  }
+  if (f.status !== "all") rowsQ = rowsQ.eq("display_status", f.status);
+  if (f.channel !== "all") rowsQ = rowsQ.contains("channels", [f.channel]);
+  const from = (f.page - 1) * f.pageSize;
+  rowsQ = rowsQ.order("updated_at", { ascending: false }).range(from, from + f.pageSize - 1);
+
+  const [rowsRes, countsRes] = await Promise.all([
+    rowsQ,
+    supabase.rpc("lead_page_counts", {
+      p_campaign: campaignId ?? null,
+      p_user: uid ?? null,
+      p_q: q || null,
+    }),
+  ]);
+  if (rowsRes.error) throw rowsRes.error;
+  if (countsRes.error) throw countsRes.error;
+
+  const counts = (countsRes.data ?? {}) as {
+    total?: number;
+    status?: Record<string, number>;
+    channels?: Record<string, number>;
+  };
+
+  type ViewRow = Lead & {
+    fit_score: number | null;
+    last_sent_at: string | null;
+    display_status: LeadDisplayStatus;
+    channels: LeadChannelKind[];
+  };
+  const rows: LeadRow[] = ((rowsRes.data ?? []) as ViewRow[]).map((r) => {
+    const { fit_score, last_sent_at, display_status, channels, ...lead } = r;
+    return {
+      lead: lead as Lead,
+      fit_score,
+      display_status,
+      last_sent_at,
+      channels: channels?.length ? channels : lead.email ? ["email"] : ["linkedin"],
+    };
+  });
+
+  return {
+    rows,
+    total: counts.total ?? rowsRes.count ?? 0,
+    filteredTotal: rowsRes.count ?? 0,
+    statusCounts: counts.status ?? {},
+    channelCounts: counts.channels ?? {},
+  };
+}
+
 // Supabase returns 400 ("Bad Request") when a request URL gets too long, which happens once an
 // `.in(column, ids)` filter carries a few hundred ids. Run the query over small id chunks and
 // merge — each chunk keeps the URL short and stays under the default row cap. Returns the same

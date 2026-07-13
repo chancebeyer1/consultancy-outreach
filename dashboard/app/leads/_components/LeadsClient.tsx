@@ -1,10 +1,13 @@
 "use client";
 
 import clsx from "clsx";
-import { Fragment, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { PageHeader } from "../../../components/PageHeader";
 import type { Campaign, LeadChannelKind, LeadDisplayStatus, LeadRow } from "../../../lib/types";
+
+export const PAGE_SIZE = 50;
 
 // Detail payload for an expanded row (from /api/lead-detail).
 interface LeadDetail {
@@ -70,6 +73,14 @@ const CHANNELS: Array<{ key: "all" | LeadChannelKind; label: string }> = [
 interface Props {
   rows: LeadRow[];
   campaigns: Campaign[];
+  total: number;
+  filteredTotal: number;
+  statusCounts: Record<string, number>;
+  channelCounts: Record<string, number>;
+  page: number;
+  status: "all" | LeadDisplayStatus;
+  channel: "all" | LeadChannelKind;
+  q: string;
 }
 
 // Email + a verification dot: green = deliverable, red = bad, amber = risky/unknown.
@@ -89,12 +100,52 @@ function emailCell(email?: string | null, status?: string | null) {
   );
 }
 
-export function LeadsClient({ rows, campaigns }: Props) {
-  const [filter, setFilter] = useState<"all" | LeadDisplayStatus>("all");
-  const [chan, setChan] = useState<"all" | LeadChannelKind>("all");
-  const [q, setQ] = useState("");
+export function LeadsClient({
+  rows,
+  campaigns,
+  total,
+  filteredTotal,
+  statusCounts,
+  channelCounts,
+  page,
+  status,
+  channel,
+  q,
+}: Props) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const [search, setSearch] = useState(q);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, LeadDetail | "loading" | "error">>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Build a URL for a filter/page change; page resets whenever a filter changes.
+  function hrefFor(next: Partial<{ status: string; channel: string; q: string; page: number }>) {
+    const p = new URLSearchParams();
+    const s = next.status ?? status;
+    const c = next.channel ?? channel;
+    const query = next.q ?? q;
+    const pg = next.page ?? 1;
+    if (s !== "all") p.set("status", s);
+    if (c !== "all") p.set("channel", c);
+    if (query) p.set("q", query);
+    if (pg > 1) p.set("page", String(pg));
+    const qs = p.toString();
+    return qs ? `${pathname}?${qs}` : pathname;
+  }
+
+  // Debounced search → URL (server re-queries). Keeps typing snappy at any lead count.
+  useEffect(() => {
+    if (search === q) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      router.replace(hrefFor({ q: search, page: 1 }), { scroll: false });
+    }, 350);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   async function toggleRow(leadId: string) {
     if (expandedId === leadId) {
@@ -123,39 +174,22 @@ export function LeadsClient({ rows, campaigns }: Props) {
     return (id: string | null) => (id ? (m.get(id) ?? "—") : "—");
   }, [campaigns]);
 
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: rows.length };
-    for (const r of rows) c[r.display_status] = (c[r.display_status] ?? 0) + 1;
-    return c;
-  }, [rows]);
+  const lastPage = Math.max(1, Math.ceil(filteredTotal / PAGE_SIZE));
+  const showFrom = filteredTotal === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const showTo = Math.min(page * PAGE_SIZE, filteredTotal);
 
-  const chanCounts = useMemo(() => {
-    const c: Record<string, number> = { all: rows.length, linkedin: 0, email: 0 };
-    for (const r of rows) for (const k of r.channels) c[k] = (c[k] ?? 0) + 1;
-    return c;
-  }, [rows]);
-
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (filter !== "all" && r.display_status !== filter) return false;
-      if (chan !== "all" && !r.channels.includes(chan)) return false;
-      if (!needle) return true;
-      const hay =
-        `${r.lead.name ?? ""} ${r.lead.company ?? ""} ${r.lead.role ?? ""} ${r.lead.location ?? ""} ${r.lead.email ?? ""}`.toLowerCase();
-      return hay.includes(needle);
-    });
-  }, [rows, filter, chan, q]);
+  const statusCount = (k: string) => (k === "all" ? total : (statusCounts[k] ?? 0));
+  const channelCount = (k: string) => (k === "all" ? total : (channelCounts[k] ?? 0));
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
       <PageHeader
         title="Leads"
-        description={`${rows.length} total · filter by status, or use the campaign selector up top.`}
+        description={`${total.toLocaleString()} total · filter by status, or use the campaign selector up top.`}
       >
         <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
           placeholder="Search name, company, role, email…"
           className="w-56 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-100 focus:border-sky-500 focus:outline-none sm:w-64"
         />
@@ -165,15 +199,15 @@ export function LeadsClient({ rows, campaigns }: Props) {
         {FILTERS.map((f) => (
           <button
             key={f.key}
-            onClick={() => setFilter(f.key)}
+            onClick={() => router.push(hrefFor({ status: f.key, page: 1 }), { scroll: false })}
             className={clsx(
               "rounded-full px-3 py-1 text-xs font-medium",
-              filter === f.key
+              status === f.key
                 ? "bg-neutral-200 text-neutral-900"
                 : "border border-neutral-700 text-neutral-400 hover:bg-neutral-900",
             )}
           >
-            {f.label} <span className="opacity-60">{counts[f.key] ?? 0}</span>
+            {f.label} <span className="opacity-60">{statusCount(f.key).toLocaleString()}</span>
           </button>
         ))}
 
@@ -182,15 +216,15 @@ export function LeadsClient({ rows, campaigns }: Props) {
         {CHANNELS.map((c) => (
           <button
             key={c.key}
-            onClick={() => setChan(c.key)}
+            onClick={() => router.push(hrefFor({ channel: c.key, page: 1 }), { scroll: false })}
             className={clsx(
               "rounded-full px-3 py-1 text-xs font-medium",
-              chan === c.key
+              channel === c.key
                 ? "bg-neutral-200 text-neutral-900"
                 : "border border-neutral-700 text-neutral-400 hover:bg-neutral-900",
             )}
           >
-            {c.label} <span className="opacity-60">{chanCounts[c.key] ?? 0}</span>
+            {c.label} <span className="opacity-60">{channelCount(c.key).toLocaleString()}</span>
           </button>
         ))}
       </div>
@@ -211,7 +245,7 @@ export function LeadsClient({ rows, campaigns }: Props) {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r) => {
+            {rows.map((r) => {
               const meta = STATUS_META[r.display_status];
               const isOpen = expandedId === r.lead.id;
               const detail = details[r.lead.id];
@@ -336,11 +370,38 @@ export function LeadsClient({ rows, campaigns }: Props) {
             })}
           </tbody>
         </table>
-        {filtered.length === 0 && (
+        {rows.length === 0 && (
           <div className="px-4 py-16 text-center text-sm text-neutral-500">
             No leads match this filter.
           </div>
         )}
+      </div>
+
+      {/* Pagination — server-side pages of PAGE_SIZE. */}
+      <div className="mt-4 flex items-center justify-between text-sm text-neutral-400">
+        <span>
+          {showFrom.toLocaleString()}–{showTo.toLocaleString()} of {filteredTotal.toLocaleString()}
+          {status !== "all" || channel !== "all" || q ? " matching" : ""}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => router.push(hrefFor({ page: page - 1 }), { scroll: false })}
+            disabled={page <= 1}
+            className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-900 disabled:opacity-40"
+          >
+            ← Prev
+          </button>
+          <span className="text-xs text-neutral-500">
+            Page {page} of {lastPage}
+          </span>
+          <button
+            onClick={() => router.push(hrefFor({ page: page + 1 }), { scroll: false })}
+            disabled={page >= lastPage}
+            className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-900 disabled:opacity-40"
+          >
+            Next →
+          </button>
+        </div>
       </div>
     </div>
   );
