@@ -335,7 +335,11 @@ export async function getLeadRowsPage(
     };
   }
 
-  const supabase = await serverClient();
+  // Admin client (service role): the user-context path returned counts but empty rows against the
+  // security_invoker view (an RLS interaction in the view's lateral subqueries). Access control is
+  // the same as every other dashboard page: the page requires a signed-in profile and non-admins
+  // get the explicit user_id filter below — RLS was never the scoping mechanism here.
+  const supabase = serverAdminClient();
   const uid = scopeUserId(scope);
   // PostgREST or() filters are comma/paren-delimited — strip those (and %) from the needle.
   const q = f.q.trim().replace(/[,()%]/g, " ").trim();
