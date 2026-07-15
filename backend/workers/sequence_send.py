@@ -543,11 +543,17 @@ def send_approved_first_touch(
                   and d.channel in ('linkedin_connect', 'linkedin_inmail')
                   and (c.status is null or c.status = 'active')  -- paused/archived campaigns don't send
                   and not exists (select 1 from sends s where s.draft_id = d.id)
+                  -- "First touch" is per-CHANNEL: a lead already emailed (no reply) is exactly who
+                  -- the LinkedIn-first rebalance targets next. The old lead-level check silently
+                  -- blocked every connect drafted for the email-contacted pool (all inventory dead,
+                  -- variant c never sent). Only a prior LINKEDIN send excludes.
                   and not exists (
                       select 1 from sends s2
                       join drafts d2 on d2.id = s2.draft_id
-                      where d2.lead_id = d.lead_id
+                      where d2.lead_id = d.lead_id and d2.channel like 'linkedin%%'
                   )
+                  -- Never cold-connect someone already in a conversation (any reply, any channel).
+                  and not exists (select 1 from replies r where r.lead_id = d.lead_id)
                 order by d.generated_at asc
                 """
             )
