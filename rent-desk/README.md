@@ -38,7 +38,7 @@ Address → jurisdiction + vintage resolver → correct allowable increase + not
 
 `site/index.html` is fully self-contained (no build step, no dependencies).
 
-**Deployed 2026-07-16:** Vercel project `la-rent-desk` → production at https://la-rent-desk.vercel.app. Custom domain `rentdesk.contentdrip.ai` is attached to the project but needs one DNS record at Namecheap (contentdrip.ai runs on registrar-servers nameservers): **A record · host `rentdesk` · value `76.76.21.21` · TTL automatic**. Vercel verifies automatically (email confirmation) and the HTTPS cert auto-issues once DNS resolves.
+**LIVE 2026-07-16: https://rentdesk.contentdrip.ai** — Vercel project `la-rent-desk` (also answers at la-rent-desk.vercel.app), DNS A record at Namecheap (`rentdesk` → 76.76.21.21), HTTPS issued. Formspree (`f/xjgngpev`) and the Stripe Payment Link are wired into the constants — form posts live. ⚠ Confirm the Stripe link is configured as save-card / trial-until-launch: the page promises "$0 today, first charge at launch," and the link config must match.
 
 Redeploy after edits:
 
