@@ -38,10 +38,13 @@ Address → jurisdiction + vintage resolver → correct allowable increase + not
 
 `site/index.html` is fully self-contained (no build step, no dependencies).
 
+**Deployed 2026-07-16:** Vercel project `la-rent-desk` → production at https://la-rent-desk.vercel.app. Custom domain `rentdesk.contentdrip.ai` is attached to the project but needs one DNS record at Namecheap (contentdrip.ai runs on registrar-servers nameservers): **A record · host `rentdesk` · value `76.76.21.21` · TTL automatic**. Vercel verifies automatically (email confirmation) and the HTTPS cert auto-issues once DNS resolves.
+
+Redeploy after edits:
+
 ```powershell
 cd rent-desk/site
-vercel          # preview
-vercel --prod   # production
+vercel --prod
 ```
 
 Before sharing the link anywhere public, wire the two constants at the top of the `<script>` block in `index.html`:
