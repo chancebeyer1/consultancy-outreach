@@ -2,7 +2,7 @@
 
 Testing one assumption: **small LA landlords will pay for rent-increase compliance rather than winging it or assuming their PM handles it.**
 
-Working name "LA Rent Desk" — run a trademark/name search before any paid launch (there are adjacent "rent desk"-ish products; five minutes on USPTO TESS + Google before buying a domain).
+Working name "LA Rent Desk" — name-checked Jul 16, 2026: "RentDesk"/"Rent Desk" is already used by several landlord-software products (rentdesk.pro, a Danish Rentdesk SaaS, a Play Store app), but the exact phrase "LA Rent Desk" has no collisions. Fine for validation; run a USPTO search and consider a more distinct brand before any paid launch.
 
 ## The product being tested (not yet built)
 

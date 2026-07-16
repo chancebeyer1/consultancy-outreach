@@ -46,6 +46,9 @@ Ask in this order. Follow the story wherever it goes; these are checkpoints, not
 1. **"When did you last raise rent on [property]? How'd you land on the number?"**
    *(Listen for: guessed, copied a neighbor, asked their agent, called AAGLA, paid a lawyer, or — common — haven't raised since before COVID.)*
 
+   **If they raised this year AND pay any tenant's gas or electric:** "When did you serve that notice — before or after February 2nd? Did it include the old +1% utility add-on?"
+   *(The add-on was eliminated Feb 2, 2026. A post-Feb-2 notice that includes it is over the cap right now — rollback plus treble-damages exposure. Deliver it gently: be the one who caught it, not the one gloating. Details in the answer bank.)*
+
 2. **"Walk me through how you checked what was allowed. How long did that take?"**
    *(Hours on Google and LAHD's site = pain. "My PM does it" = pivot to Q7.)*
 

@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LA Rent Desk — 2026 rent-increase rules for Los Angeles landlords</title>
+<meta name="description" content="The City rewrote its rent formula in February. The state cap resets August 1. Find your building's legal rent increase in 20 seconds — free, verified against LAHD, County, and Civil Code sources.">
+<style>
+  :root{
+    --paper:#F6F5F1; --ink:#1B1E24; --muted:#5B606B; --accent:#96690A; --accent-ink:#7A5608;
+    --line:#DEDCD3; --card:#FDFCFA; --good:#2F7D4F; --bad:#AF3B28; --warn-bg:#F4EBDA;
+    --stamp-bg:#F1EDE2;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#14171C; --ink:#E9E7E0; --muted:#9CA1AB; --accent:#E2A93B; --accent-ink:#EBB756;
+      --line:#2B2F37; --card:#1B1F26; --good:#5FBF8A; --bad:#E07B5F; --warn-bg:#2A2417;
+      --stamp-bg:#22262E;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14171C; --ink:#E9E7E0; --muted:#9CA1AB; --accent:#E2A93B; --accent-ink:#EBB756;
+    --line:#2B2F37; --card:#1B1F26; --good:#5FBF8A; --bad:#E07B5F; --warn-bg:#2A2417;
+    --stamp-bg:#22262E;
+  }
+  :root[data-theme="light"]{
+    --paper:#F6F5F1; --ink:#1B1E24; --muted:#5B606B; --accent:#96690A; --accent-ink:#7A5608;
+    --line:#DEDCD3; --card:#FDFCFA; --good:#2F7D4F; --bad:#AF3B28; --warn-bg:#F4EBDA;
+    --stamp-bg:#F1EDE2;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} *{transition:none!important;animation:none!important} }
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size:17px; line-height:1.65;
+  }
+  .ui{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+  .num{font-variant-numeric:tabular-nums}
+  a{color:var(--accent-ink)}
+  h1,h2,h3{line-height:1.15; text-wrap:balance; margin:0 0 .5em; font-weight:700}
+  h1{font-size:clamp(1.9rem,5vw,3rem)}
+  h2{font-size:clamp(1.4rem,3.4vw,1.9rem); margin-top:0}
+  h3{font-size:1.1rem}
+  p{margin:.6em 0}
+  .eyebrow{
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    font-size:.68rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent-ink); font-weight:600; margin-bottom:.9rem;
+  }
+  .wrap{max-width:60rem; margin:0 auto; padding:0 1.25rem}
+  .prose{max-width:42rem}
+  section{padding:3.5rem 0; border-top:1px solid var(--line)}
+  .mutedtx{color:var(--muted)}
+  .small{font-size:.85rem}
+
+  /* top bar */
+  .bar{
+    position:sticky; top:0; z-index:50; background:var(--paper);
+    border-bottom:1px solid var(--line);
+  }
+  .bar-in{display:flex; align-items:center; gap:1rem; padding:.55rem 1.25rem; max-width:60rem; margin:0 auto}
+  .wordmark{font-weight:700; letter-spacing:.02em; white-space:nowrap}
+  .verified{
+    font-size:.72rem; color:var(--muted); border:1px solid var(--line);
+    padding:.15rem .55rem; border-radius:2px; white-space:nowrap;
+  }
+  .verified b{color:var(--good); font-weight:600}
+  .bar .spacer{flex:1}
+  .btn{
+    display:inline-block; border:1px solid var(--ink); background:var(--ink); color:var(--paper);
+    padding:.55rem 1.1rem; text-decoration:none; font-size:.9rem; font-weight:600;
+    border-radius:2px; cursor:pointer;
+  }
+  .btn:focus-visible,.choice input:focus-visible+label, a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  .btn.ghost{background:transparent; color:var(--ink)}
+  .btn.sm{padding:.35rem .8rem; font-size:.8rem}
+  .btn:hover{opacity:.88}
+
+  /* hero */
+  .hero{padding:4.5rem 0 3.5rem; border-top:none}
+  .hero-num{
+    font-size:clamp(5rem,17vw,10rem); font-weight:700; color:var(--accent);
+    line-height:.9; letter-spacing:-.02em; margin:.5rem 0 .2rem;
+  }
+  .hero-num small{font-size:.35em; color:var(--muted); font-weight:400; letter-spacing:0}
+  .stamps{display:flex; flex-wrap:wrap; gap:.6rem; margin:1.4rem 0 2rem}
+  .stamp{
+    border:1px solid var(--line); background:var(--stamp-bg); padding:.45rem .8rem;
+    font-size:.8rem; border-radius:2px;
+  }
+  .stamp b{font-weight:700}
+  .cta-row{display:flex; flex-wrap:wrap; gap:.8rem; align-items:center}
+
+  /* regime cards */
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1rem; margin-top:1.5rem}
+  .card{
+    border:1px solid var(--line); background:var(--card); padding:1.25rem; border-radius:2px;
+    display:flex; flex-direction:column; gap:.35rem;
+  }
+  .card .pct{font-size:2.4rem; font-weight:700; line-height:1}
+  .card .cond{font-size:.85rem; color:var(--muted)}
+  .cities-strip{margin-top:1rem; font-size:.9rem; color:var(--muted)}
+
+  /* timeline */
+  .tl{list-style:none; margin:1.5rem 0 0; padding:0; max-width:46rem}
+  .tl li{display:grid; grid-template-columns:9.5rem 1fr; gap:1rem; padding:.8rem 0; border-top:1px solid var(--line)}
+  .tl .d{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; font-size:.8rem; font-weight:600; color:var(--accent-ink); padding-top:.15rem; white-space:nowrap}
+  .tl p{margin:0}
+  @media (max-width:540px){ .tl li{grid-template-columns:1fr} .tl .d{padding-top:0} }
+
+  /* penalty panel */
+  .pen{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:1rem; margin-top:1.5rem}
+  .pen .card b.big{font-size:1.25rem}
+  .callout{
+    border-left:3px solid var(--accent); background:var(--warn-bg); padding:.9rem 1.1rem;
+    margin-top:1.25rem; font-size:.95rem; max-width:46rem;
+  }
+
+  /* calculator */
+  .calc{border:1px solid var(--line); background:var(--card); padding:1.5rem; border-radius:2px; margin-top:1.5rem}
+  fieldset{border:none; margin:0 0 1.1rem; padding:0}
+  legend{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; font-weight:600; font-size:.95rem; padding:0; margin-bottom:.5rem}
+  .choice{display:flex; flex-wrap:wrap; gap:.5rem}
+  .choice input{position:absolute; opacity:0; pointer-events:none}
+  .choice label{
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; font-size:.85rem;
+    border:1px solid var(--line); padding:.45rem .8rem; cursor:pointer; border-radius:2px; background:var(--paper);
+  }
+  .choice input:checked+label{border-color:var(--ink); background:var(--ink); color:var(--paper)}
+  .result{
+    border-top:2px solid var(--ink); margin-top:1.25rem; padding-top:1.25rem; display:none;
+  }
+  .result.show{display:block; animation:rise .25s ease}
+  @keyframes rise{from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none}}
+  .r-stamp{
+    display:inline-block; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; font-weight:700;
+    border:1.5px solid var(--accent); color:var(--accent-ink); padding:.25rem .6rem; border-radius:2px;
+    transform:rotate(-1deg); margin-bottom:.6rem;
+  }
+  .r-big{font-size:clamp(2.6rem,8vw,4rem); font-weight:700; line-height:1; margin:.2rem 0}
+  .r-big .arrow{color:var(--muted); font-weight:400}
+  .r-window{color:var(--muted); font-size:.9rem; margin-bottom:.9rem}
+  .r-rows{margin:.8rem 0; padding:0; list-style:none; max-width:44rem}
+  .r-rows li{display:grid; grid-template-columns:8.5rem 1fr; gap:.8rem; padding:.45rem 0; border-top:1px dashed var(--line); font-size:.92rem}
+  .r-rows .k{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); padding-top:.15rem}
+  .r-warn{border-left:3px solid var(--bad); background:var(--warn-bg); padding:.7rem .9rem; font-size:.9rem; margin:.8rem 0}
+  .r-src{font-size:.78rem; color:var(--muted); margin-top:.8rem}
+  .r-cta{margin-top:1.1rem}
+
+  /* deadlines */
+  .dl{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1rem; margin-top:1.5rem}
+  .dl .card .when{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; font-size:.75rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+
+  /* product + pricing */
+  .feat{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1rem; margin-top:1.5rem}
+  .price-card{
+    border:2px solid var(--ink); background:var(--card); padding:1.75rem; border-radius:2px; max-width:30rem;
+  }
+  .price-big{font-size:3rem; font-weight:700; line-height:1}
+  .price-big small{font-size:1rem; color:var(--muted); font-weight:400}
+  .strike{text-decoration:line-through; color:var(--muted)}
+  .price-points{margin:.9rem 0 1.2rem; padding-left:1.1rem; font-size:.92rem}
+  .price-points li{margin:.3rem 0}
+  .pm-strip{border:1px solid var(--line); background:var(--stamp-bg); padding:1rem 1.25rem; margin-top:1.25rem; font-size:.92rem; max-width:44rem}
+
+  /* form */
+  .form{max-width:30rem; margin-top:1.25rem}
+  .form label{display:block; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; font-size:.8rem; font-weight:600; margin:.7rem 0 .25rem}
+  .form input,.form select{
+    width:100%; padding:.6rem .7rem; border:1px solid var(--line); background:var(--paper); color:var(--ink);
+    font-size:.95rem; border-radius:2px; font-family:inherit;
+  }
+  .form input:focus-visible,.form select:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .form .btn{margin-top:1rem; width:100%}
+  .form-msg{margin-top:.8rem; font-size:.9rem; display:none}
+  .form-msg.ok{display:block; color:var(--good)}
+  .form-msg.err{display:block; color:var(--bad)}
+  .demo-tag{font-size:.75rem; color:var(--muted)}
+
+  /* faq */
+  details{border-top:1px solid var(--line); padding:.9rem 0; max-width:44rem}
+  details summary{cursor:pointer; font-weight:700; font-size:1rem}
+  details p{font-size:.95rem}
+
+  footer{border-top:1px solid var(--line); padding:2.5rem 0 3.5rem; font-size:.82rem; color:var(--muted)}
+  footer .srcs{margin:.8rem 0; padding-left:1.1rem}
+  footer .srcs li{margin:.2rem 0}
+</style>
+</head>
+<body>
+
+<div class="bar ui">
+  <div class="bar-in">
+    <span class="wordmark">LA&nbsp;Rent&nbsp;Desk</span>
+    <span class="verified num">rules verified <b>Jul 16, 2026</b></span>
+    <span class="spacer"></span>
+    <a class="btn sm" href="#join">Founding — $49/mo</a>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Los Angeles · rent-increase rules · 2026–27</div>
+    <h1 class="prose">How much can you legally raise the rent this year?</h1>
+    <div class="hero-num num">3%<small>&nbsp;…or 8.7%. Or zero.</small></div>
+    <p class="prose">Depends which of LA's <strong>three rulebooks</strong> owns your building — and half the county's owners are wrong about which one that is. The City just rewrote its formula for the first time in forty years. The state cap resets August&nbsp;1. Your "exempt" rental might not be.</p>
+    <div class="stamps ui num">
+      <span class="stamp"><b>3%</b> — City of LA RSO (pre-'78)</span>
+      <span class="stamp" id="stamp-county"><b>1.919%</b> — county RSTPO (unincorporated)</span>
+      <span class="stamp"><b>8.0% → 8.7%</b> — state cap, resets Aug 1</span>
+    </div>
+    <div class="cta-row ui">
+      <a class="btn" href="#calc">Get my building's number — free</a>
+      <a class="btn ghost" href="#join">Reserve founding membership</a>
+    </div>
+  </div>
+</header>
+
+<section id="rulebooks">
+  <div class="wrap">
+    <div class="eyebrow">The problem</div>
+    <h2 class="prose">Three rulebooks. One building. Real penalties.</h2>
+    <p class="prose">Which cap applies is decided by <strong>where the parcel sits</strong> and <strong>when it was built</strong> — not by what your lease says or what a neighbor pays. Guess wrong in either direction and you're leaving permanent money on the table or signing up for a rollback.</p>
+    <div class="cards num">
+      <div class="card">
+        <div class="eyebrow" style="margin-bottom:.2rem">City of Los Angeles · RSO</div>
+        <div class="pct">3%</div>
+        <div class="cond">Inside City limits (most of the Valley counts), certificate of occupancy on or before <b>Oct 1, 1978</b>, generally 2+ units. One increase per 12 months. Utility add-ons: <b>eliminated Feb 2, 2026</b>.</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow" style="margin-bottom:.2rem">LA County · RSTPO</div>
+        <div class="pct" id="card-county-pct">1.919%</div>
+        <div class="cond" id="card-county-cond"><b>Unincorporated areas only</b> — Altadena, East LA, View Park, Hacienda Heights… 2+ units or ADUs permitted on or before <b>Feb 1, 1995</b>. Small self-certified landlords 2.919%, luxury tier 3.919%. Nobody lands on 1.919% by guessing.</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow" style="margin-bottom:.2rem">California · AB 1482</div>
+        <div class="pct">8.0<span style="font-size:1rem">%</span> <span style="color:var(--muted);font-weight:400">→</span> 8.7<span style="font-size:1rem">%</span></div>
+        <div class="cond">Everything 15+ years old the local laws don't reach. 5% + CPI. <b>Resets every August 1</b> — this year 8.0% becomes 8.7%. Sunsets 2030 unless renewed.</div>
+      </div>
+    </div>
+    <p class="cities-strip prose num">And that's before your city's own overlay: <strong>Santa Monica 2.3%</strong> (max $60/mo), <strong>West Hollywood 2.25%</strong>, <strong>Culver City 3.25%</strong>, <strong>Inglewood 3.7%</strong> (5+ units) or 8.7% (1–4), <strong>Pasadena 2.25%</strong>, <strong>Beverly Hills 3–3.6%</strong> — plus Baldwin Park, Bell Gardens, Commerce, Cudahy, Maywood, and Pomona, each with their own caps, registries, and deadlines.</p>
+  </div>
+</section>
+
+<section id="changes">
+  <div class="wrap">
+    <div class="eyebrow">Why owners get it wrong</div>
+    <h2 class="prose">The rules changed five times in thirty months.</h2>
+    <p class="prose">Every one of these was announced in a bulletin, a council file, or an executive order — not a letter to you.</p>
+    <ul class="tl">
+      <li><span class="d num">Feb 1, 2024</span><p>The City's COVID rent freeze ends after nearly four years. Increases resume on RSO units.</p></li>
+      <li><span class="d num">Jan 7, 2025</span><p>Wildfire emergencies trigger the Penal Code 396 price-gouging cap countywide — 10% over pre-fire advertised rent, extended again and again into 2026.</p></li>
+      <li><span class="d num">Dec 12, 2025</span><p>City Council adopts <strong>Ordinance 188795</strong> — the first rewrite of the RSO increase formula in ~40 years: 90% of CPI, floor 1%, ceiling 4%.</p></li>
+      <li><span class="d num">Feb 2, 2026</span><p>The ordinance takes effect. The +1% gas / +1% electric surcharges are <strong>eliminated</strong>; any increase noticed from this date through June is capped at a flat 3%.</p></li>
+      <li><span class="d num">May 29, 2026</span><p>The wildfire price-gouging cap <strong>expires</strong> after the Board of Supervisors declines another extension. Normal caps govern again.</p></li>
+      <li><span class="d num">Jul 1, 2026</span><p>First annual number under the new City formula: <strong>3%</strong>.</p></li>
+      <li><span class="d num">Aug 1, 2026</span><p>The state cap resets: <strong>8.0% → 8.7%</strong> for LA County (5% + April's 3.7% CPI).</p></li>
+    </ul>
+    <div class="callout"><strong>The February trap:</strong> if you pay a tenant's gas or electric and served an increase notice on or after Feb 2, 2026 with the old +1–2% add-on, that increase is over the cap <em>right now</em>. Rollback territory.</div>
+  </div>
+</section>
+
+<section id="penalties">
+  <div class="wrap">
+    <div class="eyebrow">The downside</div>
+    <h2 class="prose">Getting it wrong isn't a rounding error.</h2>
+    <div class="pen">
+      <div class="card">
+        <h3>City RSO violations</h3>
+        <p class="small">Collect over the cap and the tenant can sue for <b class="big">3× the overcharge</b> plus attorney's fees (LAMC 151.10(a)). Skip registration and rent isn't lawfully demandable at all (LAMC 151.05(a)) — it's also an eviction defense.</p>
+      </div>
+      <div class="card">
+        <h3>State-cap violations</h3>
+        <p class="small">Since April 2024, tenants can sue for the overcharge plus attorney's fees — and <b class="big">treble damages</b> if the violation was willful. The Attorney General and city attorneys can enforce directly (Civ. Code 1947.12(k)).</p>
+      </div>
+      <div class="card">
+        <h3>The quiet penalty</h3>
+        <p class="small">Under the RSO there's <b class="big">no banking</b>. Every year you skip an increase because you weren't sure of the number, that money is gone permanently. On a fourplex at $1,900/unit, this year's 3% is ≈ <span class="num">$2,700/yr</span> — forever.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="calc">
+  <div class="wrap">
+    <div class="eyebrow">Free — no email needed</div>
+    <h2 class="prose">Your building's number, in 20 seconds.</h2>
+    <p class="prose mutedtx small">Four questions. Verified against LAHD, the County, and the Civil Code as of <span class="num">July 16, 2026</span>.</p>
+
+    <div class="calc ui">
+      <fieldset>
+        <legend>1 · Where is the property?</legend>
+        <div class="choice" id="q-loc"></div>
+      </fieldset>
+      <fieldset>
+        <legend>2 · What is it?</legend>
+        <div class="choice" id="q-units"></div>
+      </fieldset>
+      <fieldset>
+        <legend>3 · When was it built? (first certificate of occupancy)</legend>
+        <div class="choice" id="q-vintage"></div>
+      </fieldset>
+      <fieldset id="f-own" style="display:none">
+        <legend>4 · Who owns it?</legend>
+        <div class="choice" id="q-own"></div>
+      </fieldset>
+      <fieldset id="f-notice" style="display:none">
+        <legend>5 · Does the lease contain the AB 1482 exemption notice? (exact statutory paragraph)</legend>
+        <div class="choice" id="q-notice"></div>
+      </fieldset>
+
+      <div class="result" id="result" aria-live="polite"></div>
+    </div>
+    <p class="small mutedtx prose" style="margin-top:1rem">Edge cases exist — replacement units, ADUs on rent-stabilized lots, Ellis re-rentals, luxury-tier county units. That's what the full desk resolves per parcel.</p>
+  </div>
+</section>
+
+<section id="deadlines">
+  <div class="wrap">
+    <div class="eyebrow">It's not just percentages</div>
+    <h2 class="prose">The calendar is half the compliance.</h2>
+    <div class="dl">
+      <div class="card"><span class="when">January · City of LA</span><p class="small" style="margin:.4rem 0 0">Annual RSO/SCEP bill lands: registration <b class="num">$38.75</b>/unit (RSO) or <b class="num">$31.05</b> (JCO), SCEP <b class="num">$67.94</b>/unit. <b>Delinquent after the last day of February.</b> Unregistered RSO units can't lawfully collect rent.</p></div>
+      <div class="card"><span class="when">Every ~4 years</span><p class="small" style="margin:.4rem 0 0">SCEP inspection cycle. You don't pick the year — LAHD does.</p></div>
+      <div class="card"><span class="when">July 1 · City</span><p class="small" style="margin:.4rem 0 0">New RSO percentage takes effect (now 90% of CPI, 1–4% band). This is also when formula changes tend to bite.</p></div>
+      <div class="card"><span class="when">August 1 · State</span><p class="small" style="margin:.4rem 0 0">AB 1482 cap resets on April CPI. This year: 8.0% → <b class="num">8.7%</b>. Time an increase wrong by a day and you've mispriced it for a year.</p></div>
+      <div class="card"><span class="when">Per unit · rolling</span><p class="small" style="margin:.4rem 0 0">One increase per 12 months (RSO), 30/90-day notice windows (+5 by mail), and each newer building "ages into" the state cap on its 15th birthday.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="product">
+  <div class="wrap">
+    <div class="eyebrow">What we're building</div>
+    <h2 class="prose">A compliance desk, not another PDF of tips.</h2>
+    <div class="feat">
+      <div class="card"><h3>Jurisdiction resolver</h3><p class="small">Address in → which rulebook owns each unit: City RSO, county RSTPO, city overlay, or state cap. Parcel-level, vintage-aware.</p></div>
+      <div class="card"><h3>Rule watcher</h3><p class="small">We read the LAHD bulletins, council files, county actions, and CPI releases so a February surprise can't reach you first.</p></div>
+      <div class="card"><h3>Per-unit deadline calendar</h3><p class="small">Registration, SCEP, notice windows, increase anniversaries, the August 1 reset — per unit, ahead of time.</p></div>
+      <div class="card"><h3>Notice drafter</h3><p class="small">The correct increase notice, drafted on attorney-reviewed templates, checked against the current rules before it goes out.</p></div>
+    </div>
+    <p class="prose small mutedtx" style="margin-top:1rem">We prepare documents and track deadlines on attorney-reviewed templates. We're not a law firm and this is never legal advice — when something needs a lawyer, the desk says so.</p>
+  </div>
+</section>
+
+<section id="join">
+  <div class="wrap">
+    <div class="eyebrow">Founding cohort · 25 spots</div>
+    <h2 class="prose">$49/month, locked for life.</h2>
+    <div class="price-card">
+      <div class="price-big num">$49<small>/mo · <span class="strike">$79 at launch</span></small></div>
+      <ul class="price-points">
+        <li><b>$0 today.</b> Card saved via Stripe; first charge only when your desk goes live this fall.</li>
+        <li>Cancel anytime — before launch or after.</li>
+        <li>Founding rate locked for life, every unit you own included.</li>
+        <li>Direct line to the builders; founding members shape what ships first.</li>
+      </ul>
+      <div class="ui">
+        <a class="btn" id="stripe-btn" href="#" style="display:none">Reserve with card — $0 today</a>
+        <form class="form" id="waitlist-form">
+          <label for="f-name">Name</label>
+          <input id="f-name" name="name" required autocomplete="name">
+          <label for="f-email">Email</label>
+          <input id="f-email" name="email" type="email" required autocomplete="email">
+          <label for="f-units">Rental units you own/manage</label>
+          <select id="f-units" name="units"><option>1</option><option>2–4</option><option>5–15</option><option>16–50</option><option>50+</option></select>
+          <label for="f-zip">Property ZIP (first one)</label>
+          <input id="f-zip" name="zip" inputmode="numeric" pattern="[0-9]{5}" maxlength="5">
+          <button class="btn" type="submit" id="form-btn">Join the founding list</button>
+          <p class="form-msg" id="form-msg" role="status"></p>
+          <p class="demo-tag" id="demo-tag" style="display:none">Preview mode — submissions aren't being saved yet.</p>
+        </form>
+      </div>
+    </div>
+    <div class="pm-strip">
+      <b>Property management firm?</b> We're taking three LA shops as design partners: 60 days, up to 50 doors, free — then founding pricing at $15–25/door/yr. Reply to the email on this page with "PM pilot" and your door count.
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="eyebrow">Questions</div>
+    <h2>Fair questions, straight answers.</h2>
+    <details><summary>Is this legal advice?</summary><p>No. LA Rent Desk is document preparation and deadline tracking built on attorney-reviewed templates — the TurboTax model, not a law firm. For a live dispute, an eviction, or anything contested, you want an attorney, and the desk will tell you exactly that.</p></details>
+    <details><summary>Which areas does it cover?</summary><p>At launch: City of Los Angeles (RSO + JCO), unincorporated LA County (RSTPO), the state cap everywhere, and the own-ordinance cities — Santa Monica, West Hollywood, Culver City, Inglewood, Pasadena, Beverly Hills. Resolution is per parcel, not per ZIP.</p></details>
+    <details><summary>I have a property manager. Why would I need this?</summary><p>Then you have someone to hold accountable — with an audit trail. Owners are the ones who eat rollbacks, refunds, and treble-damages exposure, not managers. Plenty of our early users run it alongside a PM as a second set of eyes; several PMs are joining as design partners themselves.</p></details>
+    <details><summary>Why do you want a card for a waitlist?</summary><p>Because maybes are worthless — to you and to us. A saved card with $0 charged tells us the demand is real before we build. You're charged nothing until launch and can cancel anytime with one click.</p></details>
+    <details><summary>When does it go live?</summary><p>The founding cohort onboards first, targeted this fall. Until then, founding members get the verified numbers by email whenever anything changes — starting with the August 1 state reset.</p></details>
+    <details><summary>My single-family rental is exempt… right?</summary><p>Only if the owner is an individual (not a corporation, REIT, or LLC with a corporate member) <em>and</em> the lease contains the exact statutory exemption paragraph. No paragraph, no exemption — the state cap applies. The calculator above walks you through it.</p></details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><b>LA Rent Desk</b> (working name) · Los Angeles, CA · <a href="mailto:chanceb323@gmail.com">chanceb323@gmail.com</a></p>
+    <p>Document preparation and deadline tracking on attorney-reviewed templates. Not a law firm. Nothing on this page is legal advice, and no attorney-client relationship is formed. Rules change; verify anything you act on with the agency or your counsel.</p>
+    <p class="num">Figures verified July 16, 2026 against primary sources:</p>
+    <ul class="srcs">
+      <li>LAHD — housing.lacity.gov (RSO increase, registration &amp; SCEP fees, updated 07/01/2026)</li>
+      <li>LA City Clerk — Ordinance 188795, Council File 23-1134 (new RSO formula, utility add-on elimination)</li>
+      <li>LA County DCBA — dcba.lacounty.gov (AB 1482 regional figures; RSTPO bulletin rev. 3/2/2026)</li>
+      <li>CA Attorney General local rent-law chart; city rent-program pages (Santa Monica, West Hollywood, Culver City, Inglewood, Pasadena, Beverly Hills)</li>
+      <li>California Civil Code §§ 827, 1947.12; CCP § 1013 — leginfo.legislature.ca.gov</li>
+      <li>BLS — Los Angeles–Long Beach–Anaheim CPI, April 2026 release</li>
+    </ul>
+    <p>© 2026 LA Rent Desk.</p>
+  </div>
+</footer>
+
+<script>
+/* ======== WIRE THESE BEFORE SHARING PUBLICLY (see rent-desk/README.md) ======== */
+const STRIPE_LINK   = "";   // Stripe Payment Link (setup mode / $0-trial subscription). Empty = email form only.
+const FORM_ENDPOINT = "";   // Formspree/Tally endpoint, e.g. "https://formspree.io/f/xxxxxxx". Empty = preview mode.
+/* ============================================================================== */
+
+const NOW = new Date();
+const CUT_YEAR = NOW.getFullYear() - 15;          // AB 1482 rolling 15-year line
+const AUG1 = new Date(NOW.getFullYear(), 7, 1);   // Aug 1 this year
+const DAYS_TO_AUG1 = Math.ceil((AUG1 - NOW) / 86400000);
+
+const RULES = {
+  asOf: "July 16, 2026",
+  rso:    { pct: "3%", window: "Jul 1, 2026 – Jun 30, 2027", src: "LAHD · housing.lacity.gov" },
+  ab1482: { now: "8.0%", next: "8.7%", nextFrom: "Aug 1, 2026", window: "through Jul 31, 2026", src: "LA County DCBA · Civ. Code 1947.12" },
+  county: {
+    pending: false, pct: "1.919%", small: "2.919%", luxury: "3.919%",
+    window: "Jul 1, 2026 – Jun 30, 2027",
+    formula: "60% of CPI (12 months ending September), ceiling 3%",
+    src: "LA County DCBA bulletin (rev. 3/2/2026)"
+  },
+  cities: {
+    sm:       { name:"Santa Monica",   line:{ big:"2.3%", window:"Sep 1, 2025 – Aug 31, 2026 · max $60/mo", detail:"75% of CPI with a dollar ceiling. Already announced for next year: 2.6% (max $70/mo) from Sep 1, 2026.", src:"santamonica.gov" } },
+    weho:     { name:"West Hollywood", line:{ big:"2.25%", window:"Sep 1, 2025 – Aug 31, 2026", detail:"75% of May-to-May CPI, rounded to the nearest ¼%, 3% ceiling. Announced next: 2.75% from Sep 1, 2026.", src:"weho.org" } },
+    culver:   { name:"Culver City",    line:{ big:"3.25%", window:"Jun 1, 2026 – Jun 30, 2027", detail:"100% of CPI, floor 2%, ceiling 5%. The city switched from monthly to annual announcements July 2026.", src:"culvercity.gov" } },
+    inglewood:{ name:"Inglewood",      line:{ big:"3.7% / 8.7%", window:"FY 2026–27 · city CPI posted May 12, 2026", detail:"3.7% for properties of 5+ units (greater of 3% or CPI); 8.7% for 1–4 units (5% + CPI). Below-market units may add up to 5 points; absolute ceiling 10%.", src:"cityofinglewood.org" } },
+    pasadena: { name:"Pasadena",       line:{ big:"2.25%", window:"Oct 1, 2025 – Sep 30, 2026", detail:"Measure H: 75% of CPI (12 months ending March). Announced next: 2.5% from Oct 1, 2026.", src:"cityofpasadena.net" } },
+    bh:       { name:"Beverly Hills",  line:{ big:"3–3.6%", window:"city posting updated June 2026", detail:"Chapter 6: the greater of 3% or CPI — the city posts 3.6%; whether that governs a July notice or starts Aug 1 is worth one call to the city program. (Legacy Chapter 5 units: lesser of 8% or CPI, ~3.34%.)", src:"beverlyhills.org" } }
+  }
+};
+
+const NOTICE_CAPPED = "30-day written notice (+5 days if served by mail) — Civ. Code 827";
+const NOTICE_OPEN   = "≤10%: 30 days · >10%: 90 days (+5 by mail) — Civ. Code 827";
+
+const Q = {
+  loc: [
+    ["lacity","City of Los Angeles"], ["county","Unincorporated LA County"],
+    ["sm","Santa Monica"], ["weho","West Hollywood"], ["culver","Culver City"],
+    ["inglewood","Inglewood"], ["pasadena","Pasadena"], ["bh","Beverly Hills"],
+    ["othercity","Another city in LA County"], ["outside","Outside LA County"]
+  ],
+  units: [ ["multi","2+ units on the lot"], ["sfh","Single-family home / condo"], ["adu","ADU"] ],
+  vintage: [
+    ["pre1978","Before Oct 1978"], ["y1978_1995","Oct 1978 – Jan 1995"],
+    ["mid",`Feb 1995 – ${CUT_YEAR}`], ["newer",`After ${CUT_YEAR} (≤15 yrs old)`]
+  ],
+  own: [ ["individual","Individual / family trust"], ["entity","Corp, REIT, or LLC with a corporate member"] ],
+  notice: [ ["yes","Yes — the exact paragraph is in there"], ["no","No / not sure"] ]
+};
+
+const state = { loc:null, units:null, vintage:null, own:null, notice:null };
+
+function renderChoices(id, key){
+  const el = document.getElementById(id);
+  el.innerHTML = Q[key].map(([v,label],i)=>
+    `<span><input type="radio" name="${key}" id="${key}-${v}" value="${v}">`+
+    `<label for="${key}-${v}">${label}</label></span>`).join("");
+  el.addEventListener("change", e=>{ state[key]=e.target.value; update(); });
+}
+["q-loc|loc","q-units|units","q-vintage|vintage","q-own|own","q-notice|notice"]
+  .forEach(s=>{ const [id,key]=s.split("|"); renderChoices(id,key); });
+
+function row(k,v){ return `<li><span class="k">${k}</span><span>${v}</span></li>`; }
+function card({stamp, big, window: win, rows=[], warn=null, note=null, src}){
+  return `<div class="r-stamp">${stamp}</div>`
+    + (big?`<div class="r-big num">${big}</div>`:"")
+    + (win?`<div class="r-window num">${win}</div>`:"")
+    + (rows.length?`<ul class="r-rows">${rows.join("")}</ul>`:"")
+    + (warn?`<div class="r-warn">${warn}</div>`:"")
+    + (note?`<p class="small">${note}</p>`:"")
+    + `<p class="r-src">Verified ${RULES.asOf} · ${src} · Edge cases exist — this is information, not legal advice.</p>`
+    + `<div class="r-cta"><a class="btn" href="#join">Watch this for me year-round — $49/mo founding</a></div>`;
+}
+
+function resolve(){
+  const {loc, units, vintage, own, notice} = state;
+  if(!loc || !units) return null;
+
+  if(loc==="outside") return card({stamp:"Outside v1 coverage", big:null,
+    rows:[row("Status","LA Rent Desk v1 covers LA County. Santa Monica-style expansion cities come next — join the list and tell us where you own.")],
+    src:"—"});
+
+  if(units==="adu") return card({stamp:"ADU — parcel-specific",
+    rows:[
+      row("Usually","A recent certificate of occupancy means exempt from the state cap until the unit turns 15 (rolling)."),
+      row("But","ADUs on rent-stabilized lots and converted spaces are genuinely case-by-case; City registration and just-cause rules can still apply. In unincorporated county, ADUs permitted on or before Feb 1, 1995 fall under the county's 1.919% cap."),
+      row("Notices", NOTICE_OPEN)
+    ],
+    note:"This is exactly the kind of unit the desk resolves per parcel.", src:"Civ. Code 1947.12; LAHD"});
+
+  if(!vintage) return null;
+
+  // Single-family / condo path
+  if(units==="sfh"){
+    if(!own) { show("f-own"); return null; }
+    if(own==="individual" && !notice){ show("f-notice"); return null; }
+    const localNote = ["sm","weho","culver","inglewood","pasadena","bh"].includes(loc)
+      ? `${RULES.cities[loc].name} has its own ordinance and single-family coverage varies by city — if the local law reaches your rental, the lower local cap controls.` : null;
+    if(own==="entity"){
+      return card({stamp:"State cap · AB 1482", big:`${RULES.ab1482.now} <span class="arrow">→</span> ${RULES.ab1482.next}`,
+        window:`${RULES.ab1482.now} ${RULES.ab1482.window} · ${RULES.ab1482.next} from ${RULES.ab1482.nextFrom}${DAYS_TO_AUG1>0?` (${DAYS_TO_AUG1} days away)`:""}`,
+        rows:[ row("Why","Entity ownership (corp, REIT, or LLC with a corporate member) voids the single-family exemption."),
+               row("Notices", NOTICE_CAPPED),
+               row("Cadence","Up to two increases per 12 months, combined total under the cap.") ],
+        warn: localNote, src: RULES.ab1482.src});
+    }
+    if(notice==="yes"){
+      return card({stamp:"Exempt — no % cap", big:"No cap",
+        rows:[ row("Why","Individually owned single-family/condo with the statutory exemption notice in the lease (Civ. Code 1947.12(d)(5))."),
+               row("Notices", NOTICE_OPEN),
+               row("Keep it","The exemption only holds while that exact paragraph is in the lease and ownership stays non-corporate.") ],
+        warn: localNote, src:"Civ. Code 1947.12"});
+    }
+    return card({stamp:"Capped — missing notice", big:`${RULES.ab1482.now} <span class="arrow">→</span> ${RULES.ab1482.next}`,
+      window:`${RULES.ab1482.now} ${RULES.ab1482.window} · ${RULES.ab1482.next} from ${RULES.ab1482.nextFrom}`,
+      rows:[ row("The gap","Without the exact statutory paragraph in the lease, the single-family exemption doesn't apply — the state cap does."),
+             row("The fix","Usually a one-paragraph, attorney-reviewed addendum going forward. That template ships with the desk."),
+             row("Notices", NOTICE_CAPPED) ],
+      warn: localNote, src:"Civ. Code 1947.12(d)(5)(B)", });
+  }
+
+  // Multifamily paths
+  hide("f-own"); hide("f-notice");
+  if(loc==="lacity"){
+    if(vintage==="pre1978"){
+      return card({stamp:"City of LA · RSO", big:RULES.rso.pct, window:RULES.rso.window,
+        rows:[ row("Cadence","One increase per 12 months. No banking — skipped years are gone."),
+               row("Notices", NOTICE_CAPPED),
+               row("Obligations","Registration $38.75/unit (delinquent after last day of Feb) · SCEP $67.94/unit · inspections ~every 4 yrs. Unregistered units can't lawfully collect rent.") ],
+        warn:"Utility add-ons (+1% gas / +1% electric) were <b>eliminated Feb 2, 2026</b>. A notice served on/after that date that includes them is over the cap.",
+        src: RULES.rso.src});
+    }
+    if(vintage==="newer"){
+      return card({stamp:"Exempt by age — for now", big:"No cap",
+        rows:[ row("Why",`First certificate of occupancy within 15 years (after ~${CUT_YEAR}) — exempt from the state cap until the building ages in, unit by unit.`),
+               row("Notices", NOTICE_OPEN),
+               row("Still applies","City of LA registration (JCO $31.05/unit) and just-cause rules.") ],
+        note:"The desk pings you the year each unit ages into coverage.", src:"Civ. Code 1947.12(d)(4); LAHD"});
+    }
+    return card({stamp:"State cap · AB 1482", big:`${RULES.ab1482.now} <span class="arrow">→</span> ${RULES.ab1482.next}`,
+      window:`${RULES.ab1482.now} ${RULES.ab1482.window} · ${RULES.ab1482.next} from ${RULES.ab1482.nextFrom}${DAYS_TO_AUG1>0?` (${DAYS_TO_AUG1} days away)`:""}`,
+      rows:[ row("Why","City of LA, built after Oct 1978 → not RSO; 15+ years old → state cap applies."),
+             row("Notices", NOTICE_CAPPED),
+             row("Cadence","Up to two increases per 12 months, combined total under the cap."),
+             row("Obligations","City JCO registration $31.05/unit; just-cause rules apply.") ],
+      src: RULES.ab1482.src});
+  }
+  if(loc==="county"){
+    if(vintage==="pre1978" || vintage==="y1978_1995"){
+      if(RULES.county.pending){
+        return card({stamp:"LA County · RSTPO",
+          rows:[ row("Status","Your building is under the county's own ordinance (unincorporated area, pre-1995). We're re-verifying this quarter's county figure right now — it's stricter than the state cap."),
+                 row("Notices", NOTICE_CAPPED) ],
+          note:"Join the list and we'll email your exact number the moment it's confirmed.", src: RULES.county.src});
+      }
+      return card({stamp:"LA County · RSTPO", big:RULES.county.pct, window:RULES.county.window,
+        rows:[ row("Coverage","Unincorporated LA County — 2+ units or ADUs with a certificate of occupancy on or before Feb 1, 1995."),
+               row("Formula", RULES.county.formula),
+               row("Tiers",`Self-certified small landlords: ${RULES.county.small} · Luxury units (≤2 BR, building of 25+ units, rent ≥ $4,000 as of 9/11/2018): ${RULES.county.luxury}`),
+               row("Notices", NOTICE_CAPPED) ],
+        src: RULES.county.src});
+    }
+    if(vintage==="newer"){
+      return card({stamp:"Exempt by age — for now", big:"No cap",
+        rows:[ row("Why",`Certificate of occupancy within 15 years (after ~${CUT_YEAR}).`), row("Notices", NOTICE_OPEN) ],
+        src:"Civ. Code 1947.12(d)(4)"});
+    }
+    return card({stamp:"State cap · AB 1482", big:`${RULES.ab1482.now} <span class="arrow">→</span> ${RULES.ab1482.next}`,
+      window:`${RULES.ab1482.now} ${RULES.ab1482.window} · ${RULES.ab1482.next} from ${RULES.ab1482.nextFrom}`,
+      rows:[ row("Why","Unincorporated county, built after Feb 1995 → outside RSTPO; 15+ years old → state cap."),
+             row("Notices", NOTICE_CAPPED),
+             row("Cadence","Up to two increases per 12 months, combined total under the cap.") ],
+      src: RULES.ab1482.src});
+  }
+  if(["sm","weho","culver","inglewood","pasadena","bh"].includes(loc)){
+    const c = RULES.cities[loc];
+    if(vintage==="newer"){
+      return card({stamp:`${c.name} · exempt by age`, big:"No cap",
+        rows:[ row("Why",`Certificate of occupancy within 15 years (after ~${CUT_YEAR}) — outside both the local ordinance and the state cap, unit by unit.`),
+               row("Notices", NOTICE_OPEN) ], src:"Civ. Code 1947.12(d)(4)"});
+    }
+    return card({stamp:`${c.name} · local ordinance`,
+      big: c.line ? c.line.big : null,
+      window: c.line ? c.line.window : null,
+      rows:[ row("Status", c.line ? c.line.detail
+              : `${c.name} runs its own rent stabilization program with its own cap, registry, and deadlines — we're re-verifying this cycle's figure now. It's typically well below the state cap.`),
+             row("Backstop","Anything the local law doesn't reach falls to the state cap (8.0% → 8.7% Aug 1)."),
+             row("Notices", NOTICE_CAPPED) ],
+      note: c.line ? null : "Join the list and we'll email your exact number the moment it's confirmed.",
+      src: c.line ? c.line.src : "city rent program"});
+  }
+  // other incorporated city
+  if(vintage==="newer"){
+    return card({stamp:"Exempt by age — for now", big:"No cap",
+      rows:[ row("Why",`Certificate of occupancy within 15 years (after ~${CUT_YEAR}).`), row("Notices", NOTICE_OPEN) ],
+      src:"Civ. Code 1947.12(d)(4)"});
+  }
+  return card({stamp:"State cap · AB 1482", big:`${RULES.ab1482.now} <span class="arrow">→</span> ${RULES.ab1482.next}`,
+    window:`${RULES.ab1482.now} ${RULES.ab1482.window} · ${RULES.ab1482.next} from ${RULES.ab1482.nextFrom}${DAYS_TO_AUG1>0?` (${DAYS_TO_AUG1} days away)`:""}`,
+    rows:[ row("Why","No LA-County-wide local ordinance reaches incorporated cities without their own — the state cap governs 15+ year buildings."),
+           row("Notices", NOTICE_CAPPED),
+           row("Cadence","Up to two increases per 12 months, combined total under the cap.") ],
+    warn:"Baldwin Park, Bell Gardens, Commerce, Cudahy, Maywood, and Pomona (flat 5%, sunsets Dec 31, 2026) all run their own caps — confirm your city hasn't joined them. The desk resolves this per parcel.",
+    src: RULES.ab1482.src});
+}
+
+function show(id){ document.getElementById(id).style.display=""; }
+function hide(id){ const el=document.getElementById(id); el.style.display="none"; }
+
+function update(){
+  // conditional questions
+  if(state.units==="sfh"){ show("f-own"); if(state.own==="individual") show("f-notice"); else hide("f-notice"); }
+  else { hide("f-own"); hide("f-notice"); state.own=null; state.notice=null;
+         document.querySelectorAll('input[name="own"],input[name="notice"]').forEach(i=>i.checked=false); }
+  const r = resolve();
+  const el = document.getElementById("result");
+  if(r){ el.innerHTML=r; el.classList.add("show"); } else { el.classList.remove("show"); }
+}
+
+/* ---- waitlist form ---- */
+const stripeBtn = document.getElementById("stripe-btn");
+if(STRIPE_LINK){ stripeBtn.href=STRIPE_LINK; stripeBtn.style.display="inline-block"; }
+if(!FORM_ENDPOINT){ document.getElementById("demo-tag").style.display="block"; }
+
+document.getElementById("waitlist-form").addEventListener("submit", async e=>{
+  e.preventDefault();
+  const f=e.target, msg=document.getElementById("form-msg"), btn=document.getElementById("form-btn");
+  const data=Object.fromEntries(new FormData(f).entries());
+  btn.disabled=true;
+  try{
+    if(FORM_ENDPOINT){
+      const res=await fetch(FORM_ENDPOINT,{method:"POST",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify(data)});
+      if(!res.ok) throw new Error("bad status");
+    }else{
+      const k="rentdesk-waitlist"; const arr=JSON.parse(localStorage.getItem(k)||"[]"); arr.push({...data,at:new Date().toISOString()});
+      localStorage.setItem(k,JSON.stringify(arr));
+    }
+    msg.className="form-msg ok";
+    msg.textContent = "You're on the founding list. Watch your inbox before August 1 — the state cap resets and we'll send your buildings' new numbers.";
+    f.reset();
+  }catch(err){
+    msg.className="form-msg err";
+    msg.textContent="That didn't go through — email us instead: chanceb323@gmail.com";
+  }
+  btn.disabled=false;
+});
+</script>
+</body>
+</html>
