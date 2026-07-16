@@ -193,12 +193,65 @@ def _extract_detail(meta: Any) -> str:
 # collect
 # ---------------------------------------------------------------------------
 
+def _trading_summary(subject: str, body: str) -> str | None:
+    """Ticket summary for one trading-bot alert — or None for non-failures we don't ticket.
+
+    'stop hit: X' is normal risk management (a trade, not an error). 'worker failure' alerts get
+    the exception class appended so distinct failure modes (403 vs ReadTimeout) become distinct
+    tickets instead of one blurred bucket."""
+    s = re.sub(r"^\[trading-bot ALERT\]\s*", "", subject or "").strip()
+    if s.lower().startswith("stop hit"):
+        return None
+    if s.lower().startswith("worker failure"):
+        m = re.search(r"([A-Za-z]+(?:Error|Timeout|Exception))", body or "")
+        return f"worker failure: {m.group(1)}" if m else "worker failure"
+    return s[:150] or None
+
+
+def summarize_trading_alerts(alerts: list[tuple]) -> list[tuple]:
+    """Group raw (ts, subject, body) trading alerts into agent ticket rows.
+
+    Shared by the live collector and the one-off backfill so signatures always match.
+    Returns (sig, source, summary, count, first_seen, last_sent, detail_latest_body)."""
+    import hashlib
+
+    grouped: dict[str, dict] = {}
+    for ts, subject, body in alerts:
+        summary = _trading_summary(subject or "", body or "")
+        if not summary:
+            continue
+        g = grouped.setdefault(summary, {"count": 0, "first": ts, "last": ts, "body": body})
+        g["count"] += 1
+        if ts < g["first"]:
+            g["first"] = ts
+        if ts >= g["last"]:
+            g["last"], g["body"] = ts, body
+    out = []
+    for summary, g in grouped.items():
+        sig = hashlib.sha1(f"trading-bot|{summary}".encode("utf-8", "ignore")).hexdigest()[:20]
+        out.append((sig, "trading-bot", summary, g["count"], g["first"], g["last"], (g["body"] or "")[:4000]))
+    return out
+
+
 def _read_app_failures(app: str, db_url: str) -> list[tuple]:
     """(sig, source, summary, count, first_seen, last_sent, detail) rows from one app's DB.
     Empty on any failure — a missing table or unreachable DB must never break the other apps."""
     rows_out: list[tuple] = []
     try:
         with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+            if app == "trading-bot":
+                # Different stack: one `activity(ts, kind, detail jsonb)` table; alerts are
+                # kind='alert' rows with {subject, body} in detail. No alert_log/activity_log.
+                cur.execute(
+                    "select ts, detail from activity where kind in ('alert','notify_error') "
+                    "and ts > now() - (%s || ' days')::interval order by ts",
+                    (LOOKBACK_DAYS,),
+                )
+                raw = []
+                for ts, detail in cur.fetchall():
+                    d = detail if isinstance(detail, dict) else json.loads(detail or "{}")
+                    raw.append((ts, d.get("subject") or "", d.get("body") or ""))
+                return summarize_trading_alerts(raw)
             cur.execute(
                 "select signature, source, summary, count, first_seen, last_sent_at from alert_log "
                 "where last_sent_at > now() - (%s || ' days')::interval order by last_sent_at desc",
