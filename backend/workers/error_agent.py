@@ -233,9 +233,30 @@ def summarize_trading_alerts(alerts: list[tuple]) -> list[tuple]:
     return out
 
 
-def _read_app_failures(app: str, db_url: str) -> list[tuple]:
+def _trading_alerts_remote() -> list[tuple]:
+    """Trading alerts via the `trading_failures_fetch` Modal function (which carries the
+    `trading` secret) — no credential copying between secrets. [] on any failure."""
+    try:
+        import modal
+
+        fn = modal.Function.from_name("consultancy-outreach", "trading_failures_fetch")
+        res = fn.remote(days=LOOKBACK_DAYS)
+        out: list[tuple] = []
+        for ts, subject, body in (res.get("alerts") if isinstance(res, dict) else None) or []:
+            out.append((datetime.fromisoformat(ts), subject or "", body or ""))
+        return out
+    except Exception as e:  # noqa: BLE001 — trading source is best-effort, never blocks outreach
+        print(f"error_agent: trading remote fetch failed: {str(e)[:120]}")
+        return []
+
+
+def _read_app_failures(app: str, db_url: str | None) -> list[tuple]:
     """(sig, source, summary, count, first_seen, last_sent, detail) rows from one app's DB.
     Empty on any failure — a missing table or unreachable DB must never break the other apps."""
+    if app == "trading-bot" and not db_url:
+        # No TRADING_DATABASE_URL configured — fetch through the trading-secret-bearing
+        # Modal function instead (the default path; the env var remains a manual override).
+        return summarize_trading_alerts(_trading_alerts_remote())
     rows_out: list[tuple] = []
     try:
         with psycopg.connect(db_url) as conn, conn.cursor() as cur:
@@ -288,7 +309,9 @@ def collect() -> dict[str, Any]:
         )
         for app in APPS:
             db_url = _app_db_url(app)
-            if not db_url:
+            # trading-bot needs no env var: without one it reads via the trading-secret-bearing
+            # Modal function (_trading_alerts_remote). Other apps stay env-gated.
+            if not db_url and app != "trading-bot":
                 continue  # app not configured — pure config gate
             rows = _read_app_failures(app, db_url)
             per_app[app] = len(rows)

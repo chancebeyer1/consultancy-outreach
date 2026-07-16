@@ -1693,6 +1693,39 @@ def dispatch_comments_now(dry_run: bool = False, force: bool = False) -> dict:
     return dispatch_due_comments(dry_run=dry_run, force=force)
 
 
+@app.function(secrets=[modal.Secret.from_name("trading")], timeout=60)
+def trading_failures_fetch(days: int = 21) -> dict:
+    """Read the trading bot's recent alert rows using the `trading` secret's OWN DATABASE_URL.
+
+    The error agent calls this remotely (same app, different secret), so the trading DB
+    credential never has to be copied into the outreach secret — Modal dashboards don't
+    reveal secret values after creation, which made that copy step a dead end. Returns
+    {"alerts": [[ts_iso, subject, body], ...]}; degrades to an empty list on any failure.
+    """
+    import json as _json
+    import os
+
+    import psycopg
+
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        return {"error": "trading secret has no DATABASE_URL", "alerts": []}
+    try:
+        with psycopg.connect(url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "select ts, detail from activity where kind in ('alert','notify_error') "
+                "and ts > now() - (%s || ' days')::interval order by ts",
+                (int(days),),
+            )
+            alerts = []
+            for ts, detail in cur.fetchall():
+                d = detail if isinstance(detail, dict) else _json.loads(detail or "{}")
+                alerts.append([ts.isoformat(), (d.get("subject") or "")[:300], (d.get("body") or "")[:2000]])
+        return {"alerts": alerts}
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:200], "alerts": []}
+
+
 def _error_digest_due() -> bool:
     """True at most once per day, first tick at/after 14:00 UTC — the daily error-digest gate."""
     import json as _json
