@@ -11,7 +11,8 @@ export default async function RepliesPage() {
   const [campaignId, profile] = await Promise.all([getSelectedCampaignId(), getCurrentProfile()]);
   const rows = await getReplyRows(campaignId, profile);
 
-  // Pending scheduled sends ("reconnect in the fall") — shown so they can be cancelled before firing.
+  // Pending scheduled sends ("reconnect in the fall") + agent-drafted revival nudges
+  // (status='draft', kind='revival') awaiting approval. Draft rows NEVER send on their own.
   let scheduled: ScheduledRow[] = [];
   if (dataSource === "supabase") {
     const admin = serverAdminClient();
@@ -19,8 +20,8 @@ export default async function RepliesPage() {
     const uid = profile && !profile.isAdmin ? profile.id : null;
     let q = admin
       .from("scheduled_replies")
-      .select("id, channel, due_at, body, lead_id" + (uid ? ", leads!inner(user_id)" : ""))
-      .eq("status", "pending")
+      .select("id, channel, due_at, body, lead_id, status, kind" + (uid ? ", leads!inner(user_id)" : ""))
+      .in("status", ["pending", "draft"])
       .order("due_at", { ascending: true });
     if (uid) q = q.eq("leads.user_id", uid);
     const { data } = await q;
@@ -30,6 +31,8 @@ export default async function RepliesPage() {
       due_at: string;
       body: string;
       lead_id: string | null;
+      status: string;
+      kind: string | null;
     }>;
     const leadIds = Array.from(new Set(pending.map((r) => r.lead_id as string).filter(Boolean)));
     const nameById = new Map<string, string | null>();
@@ -43,6 +46,8 @@ export default async function RepliesPage() {
       due_at: r.due_at as string,
       body: r.body as string,
       lead_name: nameById.get(r.lead_id as string) ?? null,
+      status: (r.status as string) ?? "pending",
+      kind: (r.kind as string) ?? "manual",
     }));
   }
 

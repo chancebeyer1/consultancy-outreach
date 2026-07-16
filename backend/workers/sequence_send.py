@@ -608,6 +608,7 @@ def send_approved_first_touch(
     # shared cap and the cross-campaign comparison stays apples-to-apples.
     cam_window: dict[str, dict[str, int]] = {}
     cam_run: dict[tuple[str | None, str], int] = {}
+    conn_weights: dict[str, dict[str, float] | None] = {"w": None}  # lazy, once per run
 
     def _campaign_has_share(cid: str | None, ch: str) -> bool:
         if not cid or n_campaigns <= 1:
@@ -615,6 +616,20 @@ def send_approved_first_touch(
         if ch not in cam_window:
             cam_window[ch] = campaign_daily_sent(ch)
         used = cam_window[ch].get(cid, 0) + cam_run.get((cid, ch), 0)
+        # Connects: tilt the fair-share slice by matured accept rate (Thompson-sampled, stable
+        # per UTC day, floored so no campaign starves — see workers/allocator.py). A campaign
+        # missing from the weights, or an empty weights map, falls back to the even split.
+        if ch == "linkedin_connect":
+            if conn_weights["w"] is None:
+                try:
+                    from workers.allocator import campaign_connect_weights
+
+                    conn_weights["w"] = campaign_connect_weights()
+                except Exception:  # noqa: BLE001
+                    conn_weights["w"] = {}
+            w = (conn_weights["w"] or {}).get(cid)
+            if w:
+                return used < max(1, round(campaign_share(ch, 1) * w))
         return used < campaign_share(ch, n_campaigns)
 
     # InMail credit budget for this run — fetched lazily once, decremented as spent.

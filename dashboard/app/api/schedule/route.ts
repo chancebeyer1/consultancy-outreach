@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
-  // Cancel a pending scheduled send (before the cron fires it).
+  // Cancel a pending scheduled send (before the cron fires it) — or dismiss a revival draft.
   if (p.action === "cancel") {
     if (!p.id) return NextResponse.json({ error: "missing id" }, { status: 400 });
     // Non-admins may only cancel sends scheduled for their own leads.
@@ -38,9 +38,44 @@ export async function POST(req: Request) {
       .from("scheduled_replies")
       .update({ status: "cancelled" }, { count: "exact" })
       .eq("id", p.id)
-      .eq("status", "pending");
+      .in("status", ["pending", "draft"]);
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     return NextResponse.json({ ok: true, cancelled: count ?? 0 });
+  }
+
+  // Approve an agent-drafted revival nudge: draft → pending with due_at=now. The hourly
+  // scheduled-send cron then delivers it — approval is the ONLY path that arms these rows.
+  if (p.action === "approve") {
+    if (!p.id) return NextResponse.json({ error: "missing id" }, { status: 400 });
+    if (!profile.isAdmin) {
+      const { data: row } = await admin
+        .from("scheduled_replies")
+        .select("lead_id")
+        .eq("id", p.id)
+        .maybeSingle();
+      if (!row || !(await leadOwnedBy(row.lead_id as string | null, profile.id))) {
+        return NextResponse.json({ error: "not your scheduled send" }, { status: 403 });
+      }
+    }
+    const dueAt = new Date().toISOString();
+    const { error, count } = await admin
+      .from("scheduled_replies")
+      .update({ status: "pending", due_at: dueAt }, { count: "exact" })
+      .eq("id", p.id)
+      .eq("status", "draft");
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (!count) return NextResponse.json({ error: "not a draft (already approved?)" }, { status: 409 });
+    await admin
+      .from("activity_log")
+      .insert({
+        actor: "operator",
+        source: "dashboard",
+        action: "revival_approved",
+        summary: "Approved a revival nudge for sending",
+        meta: { scheduled_reply_id: p.id },
+      })
+      .then(() => {}, () => {});
+    return NextResponse.json({ ok: true, due_at: dueAt });
   }
 
   const body = (p.body || "").trim();

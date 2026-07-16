@@ -202,6 +202,9 @@ export interface ReplyReviewRow {
   reply: Reply;
   lead: Lead;
   original_message: string | null;
+  // Open deal for this lead (deals auto-create from 'interested' replies) — lets the
+  // operator jump straight from a reply to its pipeline card.
+  deal_id?: string | null;
 }
 
 // ---------------------------------------------------------------------------

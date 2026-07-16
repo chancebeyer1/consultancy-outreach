@@ -49,6 +49,9 @@ export async function POST(req: Request) {
     next_action?: string;
     body?: string;
     note_id?: string;
+    title?: string;
+    transcript?: string;
+    meeting_id?: string;
   };
   try {
     p = await req.json();
@@ -131,6 +134,62 @@ export async function POST(req: Request) {
       );
     }
     return NextResponse.json({ ok: true });
+  }
+
+  // Attach a pasted call transcript to the deal and kick off extraction (pains, signals,
+  // process candidates, follow-up draft). The Modal side spawns a background job and returns
+  // instantly; the UI polls the meeting row's status.
+  if (p.action === "add_meeting") {
+    if (!p.id) return NextResponse.json({ error: "missing id" }, { status: 400 });
+    const transcript = (p.transcript || "").trim();
+    if (transcript.length < 200) {
+      return NextResponse.json({ error: "transcript looks too short — paste the full call" }, { status: 400 });
+    }
+    if (transcript.length > 400_000) {
+      return NextResponse.json({ error: "transcript too large" }, { status: 400 });
+    }
+    const { data: deal } = await admin
+      .from("deals")
+      .select("id, lead_id, user_id")
+      .eq("id", p.id)
+      .maybeSingle();
+    if (!deal) return NextResponse.json({ error: "deal not found" }, { status: 404 });
+    const { data: meeting, error } = await admin
+      .from("meetings")
+      .insert({
+        deal_id: p.id,
+        lead_id: (deal as { lead_id?: string | null }).lead_id ?? null,
+        user_id: (deal as { user_id?: string | null }).user_id ?? null,
+        title: p.title?.trim() || null,
+        transcript,
+        status: "new",
+      })
+      .select("id")
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    const meetingId = (meeting as { id: string }).id;
+    const r = await callWebhook({ action: "process_meeting", meeting_id: meetingId });
+    if (!r.ok) {
+      // Row is saved; processing can be retried from the card.
+      return NextResponse.json({ ok: true, meeting_id: meetingId, processing: false });
+    }
+    return NextResponse.json({ ok: true, meeting_id: meetingId, processing: true });
+  }
+
+  // Re-run extraction on an existing meeting (after a failure, or to refresh).
+  if (p.action === "reprocess_meeting") {
+    if (!p.id || !p.meeting_id) return NextResponse.json({ error: "missing id" }, { status: 400 });
+    const { data: meeting } = await admin
+      .from("meetings")
+      .select("id, deal_id")
+      .eq("id", p.meeting_id)
+      .maybeSingle();
+    if (!meeting || (meeting as { deal_id?: string | null }).deal_id !== p.id) {
+      return NextResponse.json({ error: "meeting not found on this deal" }, { status: 404 });
+    }
+    await admin.from("meetings").update({ status: "new", error: null }).eq("id", p.meeting_id);
+    const r = await callWebhook({ action: "process_meeting", meeting_id: p.meeting_id });
+    return NextResponse.json({ ok: true, processing: r.ok });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });

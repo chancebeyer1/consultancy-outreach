@@ -37,12 +37,14 @@ def _headers() -> dict[str, str]:
 
 
 def open_fix_pr(
-    *, branch: str, title: str, body: str, file_path: str, old_string: str, new_string: str
+    *, branch: str, title: str, body: str, file_path: str, old_string: str, new_string: str,
+    repo: str | None = None,
 ) -> dict[str, Any]:
-    """Create a branch, apply one old→new edit to `file_path`, open a PR. Returns {pr_url} or {error}."""
+    """Create a branch, apply one old→new edit to `file_path`, open a PR. Returns {pr_url} or {error}.
+    `repo` overrides GITHUB_REPO for multi-app error-agent sources (same PAT must have access)."""
     if not enabled():
         return {"error": "github not configured (set GITHUB_TOKEN + GITHUB_REPO)"}
-    repo = _repo()
+    repo = repo or _repo()
     owner = repo.split("/")[0]
     try:
         with httpx.Client(timeout=30.0, headers=_headers()) as c:

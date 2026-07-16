@@ -234,6 +234,11 @@ export function ReplyView({ row, onMarkHandled }: Props) {
                   profile ↗
                 </a>
               )}
+              {row.deal_id && (
+                <a href={`/pipeline/${row.deal_id}`} className="text-emerald-400 hover:underline">
+                  deal ↗
+                </a>
+              )}
             </div>
           </div>
           <div className={clsx("shrink-0 rounded-md border px-4 py-3 text-center font-mono", intentColor[intent])}>

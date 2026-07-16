@@ -258,11 +258,23 @@ def replenish_queue_cron() -> dict:
         weekly = _maybe_weekly_report()
     except Exception as e:  # noqa: BLE001
         weekly = {"error": str(e)}
+    # And — once a day — draft revival nudges for open deals gone quiet. Operator-gated:
+    # drafts land on /replies with status='draft' and only send after explicit approval.
+    try:
+        revivals = _maybe_draft_revivals()
+    except Exception as e:  # noqa: BLE001
+        revivals = {"error": str(e)}
+    # And — the proof loop: testimonial asks for fresh wins (daily) + a metrics-grounded
+    # case-study post draft (~monthly). Both land in review queues, nothing auto-sends.
+    try:
+        proof = _maybe_case_studies()
+    except Exception as e:  # noqa: BLE001
+        proof = {"error": str(e)}
     return _logged(
         "cron_replenish",
         {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
          "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids,
-         "weekly_report": weekly},
+         "weekly_report": weekly, "revivals": revivals, "proof": proof},
     )
 
 
@@ -302,6 +314,111 @@ def weekly_report_now(dry_run: bool = False) -> dict:
     from workers.weekly_report import generate_weekly_report
 
     return generate_weekly_report(dry_run=dry_run)
+
+
+def _maybe_draft_revivals() -> dict:
+    """Draft revival nudges for quiet deals once a day (at/after 14:00 UTC). Date-guarded in
+    app_settings, marker stamped BEFORE the run (a mid-run crash must not retry hourly and
+    re-bill LLM drafting). The drafts themselves are inert until operator approval."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.hour < 14:
+        return {"skipped": "off-schedule"}
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_revival_scan'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_revival_scan', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    from workers.revival import draft_revivals
+
+    return draft_revivals(limit=5, time_budget_s=240)
+
+
+@app.function(secrets=secrets, timeout=600)
+def revival_now(dry_run: bool = False, limit: int = 5) -> dict:
+    """On-demand revival scan. `modal run modal_app.py::revival_now --dry-run`."""
+    from workers.revival import draft_revivals
+
+    return draft_revivals(limit=limit, dry_run=dry_run)
+
+
+def _maybe_case_studies() -> dict:
+    """Proof loop, once a day at/after 14:00 UTC (app_settings date guard, stamped before the
+    run): testimonial asks for freshly-won deals every day; the build-in-public case-study
+    post only when the last one is 28+ days old (its own marker)."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.hour < 14:
+        return {"skipped": "off-schedule"}
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_proof_scan'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_proof_scan', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        # Case-study cadence rides its own marker (28 days).
+        cur.execute("select updated_at from app_settings where key = 'last_case_study_post'")
+        cs_row = cur.fetchone()
+        cs_due = cs_row is None or (now - cs_row[0]).days >= 28
+        if cs_due:
+            cur.execute(
+                "insert into app_settings (key, value, updated_at) values ('last_case_study_post', %s::jsonb, now()) "
+                "on conflict (key) do update set value = excluded.value, updated_at = now()",
+                (_json.dumps(today),),
+            )
+        conn.commit()
+
+    from workers.case_studies import draft_testimonial_asks, generate_case_study_post
+
+    asks = draft_testimonial_asks(limit=3)
+    result: dict = {"testimonial_asks": asks}
+    if cs_due:
+        result["case_study"] = generate_case_study_post()
+    return result
+
+
+@app.function(secrets=secrets, timeout=300)
+def client_digest_now(app_name: str = "outreach", to_email: str = "", dry_run: bool = True) -> dict:
+    """Render (or send) the client-facing agent-ops report for one watched app.
+    `modal run modal_app.py::client_digest_now --app-name outreach --dry-run`."""
+    from workers.error_agent import client_digest
+
+    return client_digest(app_name, to_email=to_email or None, dry_run=dry_run)
+
+
+@app.function(secrets=secrets, timeout=600)
+def case_study_now(dry_run: bool = False) -> dict:
+    """On-demand proof loop. `modal run modal_app.py::case_study_now --dry-run`."""
+    from workers.case_studies import draft_testimonial_asks, generate_case_study_post
+
+    return {
+        "testimonial_asks": draft_testimonial_asks(limit=3, dry_run=dry_run),
+        "case_study": generate_case_study_post(dry_run=dry_run),
+    }
 
 
 def _maybe_generate_newsletter() -> dict:
@@ -737,6 +854,23 @@ def content_generate_bg(action: str, fmt: str | None = None, tool: str | None = 
     return {"error": f"unknown action {action}"}
 
 
+@app.function(secrets=secrets, timeout=600)
+def meeting_process_bg(meeting_id: str) -> dict:
+    """Background meeting-transcript processing. Spawned by content_webhook so the dashboard's
+    request returns instantly; long transcripts can take a couple of minutes to extract."""
+    from workers.meetings import process_meeting
+
+    return _logged("meeting_process", process_meeting(meeting_id))
+
+
+@app.function(secrets=secrets, timeout=600)
+def meeting_process_now(meeting_id: str) -> dict:
+    """On-demand transcript processing. `modal run modal_app.py::meeting_process_now --meeting-id X`."""
+    from workers.meetings import process_meeting
+
+    return process_meeting(meeting_id)
+
+
 @app.function(secrets=secrets, timeout=120)
 @modal.fastapi_endpoint(method="POST")
 def content_webhook(request_body: dict, x_content_token: str | None = None) -> dict:
@@ -778,6 +912,11 @@ def content_webhook(request_body: dict, x_content_token: str | None = None) -> d
         from workers.research import prepare_deal
 
         return prepare_deal(request_body.get("deal_id"))
+    if action == "process_meeting":
+        # Spawn and return — extraction on a long transcript outlives an HTTP request. The
+        # dashboard polls the meeting row's status instead.
+        meeting_process_bg.spawn(request_body.get("meeting_id") or "")
+        return {"spawned": True}
     if action == "newsletter_generate":
         from workers.newsletter import generate_issue
 
@@ -1025,6 +1164,58 @@ def concierge_chat(request_body: dict) -> dict:
         page=request_body.get("page"),
         messages=request_body.get("messages") or [],
     )
+
+
+@app.function(secrets=secrets, timeout=600)
+def assessment_synthesize_bg(session_id: str) -> dict:
+    """Background process-map synthesis for a finished assessment interview."""
+    from workers.assessment import synthesize
+
+    return _logged("assessment_synthesize", synthesize(session_id))
+
+
+@app.function(secrets=secrets, timeout=90)
+@modal.fastapi_endpoint(method="POST")
+def assessment_chat(request_body: dict) -> dict:
+    """Public guided-assessment interview — called by the site's /api/assessment proxy.
+    Open by design (like concierge); cost bounded by turn caps + small max_tokens.
+    Body: {"session_id","contact":{name,company,website,email},"messages":[...]}.
+    When the interview finishes, synthesis is spawned in the background; the client polls
+    assessment_result."""
+    from workers.assessment import interview_turn
+
+    out = interview_turn(
+        session_id=str(request_body.get("session_id") or ""),
+        contact=request_body.get("contact") or {},
+        messages=request_body.get("messages") or [],
+    )
+    if out.get("done"):
+        try:
+            assessment_synthesize_bg.spawn(str(request_body.get("session_id") or ""))
+        except Exception as e:  # noqa: BLE001 — synthesis can be retried via CLI
+            print("assessment spawn error:", str(e)[:150])
+    return out
+
+
+@app.function(secrets=secrets, timeout=30)
+@modal.fastapi_endpoint(method="GET")
+def assessment_result(session_id: str = "") -> dict:
+    """Public poll for a session's process-map PREVIEW (top 3 only — the full map is the paid
+    deliverable). Session ids are unguessable client-generated tokens, like share links."""
+    from workers.assessment import get_result
+
+    return get_result(session_id)
+
+
+@app.function(secrets=secrets, timeout=600)
+def assessment_now(session_id: str = "", report: bool = False) -> dict:
+    """Operator CLI: re-run synthesis or print the full internal report for a session.
+    `modal run modal_app.py::assessment_now --session-id X --report`."""
+    from workers.assessment import report_md, synthesize
+
+    if report:
+        return {"report": report_md(session_id)}
+    return synthesize(session_id)
 
 
 @app.function(secrets=secrets, timeout=120)

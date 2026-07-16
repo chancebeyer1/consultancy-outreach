@@ -853,8 +853,9 @@ async function loadReplyRowsFromSupabase(
   );
 
   // Pull the lead + the most recent outbound draft we sent (for context in the
-  // suggested-reply UX). We join via drafts.lead_id where status='sent'.
-  const [leadsRes, sentDraftsRes] = await Promise.all([
+  // suggested-reply UX). We join via drafts.lead_id where status='sent'. Also the
+  // lead's OPEN deal, so the reply view can deep-link into /pipeline.
+  const [leadsRes, sentDraftsRes, dealsRes] = await Promise.all([
     inChunks(leadIds, (c) => supabase.from("leads").select("*").in("id", c)),
     inChunks(leadIds, (c) =>
       supabase
@@ -864,9 +865,21 @@ async function loadReplyRowsFromSupabase(
         .eq("status", "sent")
         .order("decided_at", { ascending: false }),
     ),
+    inChunks(leadIds, (c) =>
+      supabase
+        .from("deals")
+        .select("id, lead_id, stage")
+        .in("lead_id", c)
+        .not("stage", "in", "(won,lost)"),
+    ),
   ]);
   if (leadsRes.error) throw leadsRes.error;
   if (sentDraftsRes.error) throw sentDraftsRes.error;
+
+  const openDealByLead = new Map<string, string>();
+  for (const d of (dealsRes.data ?? []) as Array<{ id: string; lead_id: string | null }>) {
+    if (d.lead_id && !openDealByLead.has(d.lead_id)) openDealByLead.set(d.lead_id, d.id);
+  }
 
   const leads = (leadsRes.data ?? []) as unknown as Lead[];
   const leadById = new Map<string, Lead>(leads.map((l) => [l.id, l]));
@@ -884,7 +897,7 @@ async function loadReplyRowsFromSupabase(
   }
 
   return replyRows
-    .map((r) => {
+    .map((r): ReplyReviewRow | null => {
       if (!r.lead_id) return null;            // orphan reply — drop for now
       const lead = leadById.get(r.lead_id);
       if (!lead) return null;
@@ -892,7 +905,8 @@ async function loadReplyRowsFromSupabase(
         reply: r as unknown as Reply,
         lead,
         original_message: lastOutboundByLead.get(r.lead_id) ?? null,
-      } satisfies ReplyReviewRow;
+        deal_id: openDealByLead.get(r.lead_id) ?? null,
+      };
     })
     .filter((r): r is ReplyReviewRow => r !== null)
     .filter((r) => !campaignId || r.lead.campaign_id === campaignId);
@@ -953,6 +967,31 @@ export type DealDetail = {
     note?: string;
     website?: string;
   } | null;
+  meetings: Array<{
+    id: string;
+    title: string | null;
+    status: string; // new | processed | failed
+    error: string | null;
+    created_at: string;
+    processed_at: string | null;
+    follow_up_draft: string | null;
+    factory_export: unknown | null;
+    extraction: {
+      summary?: string;
+      pains?: Array<{ pain: string; quote?: string | null; severity?: string }>;
+      budget_signals?: string[];
+      timeline_signals?: string[];
+      objections?: string[];
+      decision_process?: string | null;
+      next_steps?: Array<{ owner: string; action: string; due_hint?: string | null }>;
+      process_candidates?: Array<{
+        name: string;
+        description?: string;
+        scores?: { frequency?: number; time_cost?: number; automatability?: number; risk?: number };
+        open_questions?: string[];
+      }>;
+    } | null;
+  }>;
 };
 
 export async function getDealDetail(id: string, scope?: Scope): Promise<DealDetail | null> {
@@ -965,7 +1004,7 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
   const uid = scopeUserId(scope);
   if (uid && (deal as { user_id?: string | null }).user_id !== uid) return null;
 
-  const [leadRes, msgRes, notesRes, campRes, auditRes] = await Promise.all([
+  const [leadRes, msgRes, notesRes, campRes, auditRes, meetingsRes] = await Promise.all([
     deal.lead_id
       ? admin
           .from("leads")
@@ -990,6 +1029,12 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
       ? admin.from("campaigns").select("name").eq("id", deal.campaign_id).maybeSingle()
       : Promise.resolve({ data: null }),
     admin.from("audits").select("report").eq("deal_id", id).order("created_at", { ascending: false }).limit(1),
+    admin
+      .from("meetings")
+      .select("id, title, status, error, created_at, processed_at, follow_up_draft, factory_export, extraction")
+      .eq("deal_id", id)
+      .order("created_at", { ascending: false })
+      .limit(20),
   ]);
 
   const auditRow = (auditRes.data as Array<{ report?: DealDetail["auditReport"] }> | null)?.[0];
@@ -1000,6 +1045,7 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
     messages: (msgRes.data ?? []) as DealDetail["messages"],
     notes: (notesRes.data ?? []) as DealDetail["notes"],
     auditReport: auditRow?.report ?? null,
+    meetings: (meetingsRes.data ?? []) as DealDetail["meetings"],
   };
 }
 

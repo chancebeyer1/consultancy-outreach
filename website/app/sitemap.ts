@@ -10,6 +10,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
   const entries: Array<{ path: string; priority: number; freq: "daily" | "weekly" | "monthly" }> = [
     { path: "", priority: 1.0, freq: "weekly" },
+    { path: "/assessment", priority: 0.9, freq: "weekly" },
+    { path: "/agent-ops", priority: 0.9, freq: "weekly" },
     { path: "/tools", priority: 0.9, freq: "weekly" },
     { path: "/audit", priority: 0.9, freq: "weekly" },
     { path: "/roi-calculator", priority: 0.9, freq: "weekly" },

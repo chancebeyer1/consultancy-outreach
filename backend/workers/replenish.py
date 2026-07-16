@@ -194,7 +194,11 @@ def draft_connects_for_existing(
                 "recent_posts": posts or [],
                 "company": company,
             }
-            variant = draft.connect_variant(url)
+            # Thompson-sampled arm (accept-rate optimizer); deterministic per lead URL so the
+            # variant tag and the drafted body can never disagree. Falls back to mod-3 inside.
+            from workers.allocator import pick_connect_variant
+
+            variant = pick_connect_variant(campaign_id, url)
             try:
                 if variant == "c":
                     body = ""  # no-note invite arm — nothing to draft
@@ -379,7 +383,14 @@ def _process_lead(
         _url = record.get("linkedin_url")
         drafts_out: dict[str, str] = {}
         for channel in channels:
-            variant = draft.connect_variant(_url) if channel == "linkedin_connect" else None
+            variant = None
+            if channel == "linkedin_connect":
+                # Thompson-sampled arm; the record carries it so the ingest step tags the
+                # draft row with the SAME arm the body was drafted under.
+                from workers.allocator import pick_connect_variant
+
+                variant = pick_connect_variant(campaign.slug, _url)
+                record["connect_variant"] = variant
             if channel == "linkedin_connect" and variant == "c":
                 drafts_out[channel] = ""  # variant c = NO-NOTE invite; nothing to draft
                 continue
@@ -522,8 +533,14 @@ def _ingest_records(records: list[dict]) -> dict:
                     lead_url = rec.get("linkedin_url")
                     first_touch = {"linkedin_connect", "linkedin_inmail"}
                     for step_index, (channel, body) in enumerate(drafts.items()):
-                        # A/B tag the connect note (deterministic per lead); other channels stay NULL.
-                        variant = connect_variant(lead_url) if channel == "linkedin_connect" else None
+                        # A/B tag the connect note; other channels stay NULL. The record threads
+                        # the arm picked at draft time (allocator); replayed old ledger rows
+                        # lack it and fall back to the mod-3 split they were drafted under.
+                        variant = (
+                            (rec.get("connect_variant") or connect_variant(lead_url))
+                            if channel == "linkedin_connect"
+                            else None
+                        )
                         # Empty body is only legitimate for variant 'c' (the no-note invite arm).
                         if not body and variant != "c":
                             continue

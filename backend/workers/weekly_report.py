@@ -105,6 +105,23 @@ def generate_weekly_report(*, dry_run: bool = False) -> dict[str, Any]:
             where intent='interested' and handled_at is null""")
         drafts_review = _one(cur, "select count(*) from content_posts where status='draft'")
         comments_pending = _one(cur, "select count(*) from comment_queue where status='pending'")
+        nudges_pending = _one(cur, """select count(*) from scheduled_replies
+            where status='draft' and kind='revival'""")
+
+    # --- Allocator (accept-rate optimizer) — today's budget tilt + per-campaign standings ---
+    alloc_lines: list[str] = []
+    try:
+        from workers.allocator import allocator_report
+
+        rep = allocator_report()
+        for c in rep.get("campaigns", [])[:8]:
+            rate = f"{c['rate']}%" if c.get("rate") is not None else "-"
+            wt = f"{c['weight']}%" if c.get("weight") is not None else "-"
+            alloc_lines.append(
+                f"    {str(c['campaign'])[:26]:<26} {c['sends']:>4} matured  {c['accepts']:>3} acc ({rate})  share {wt}"
+            )
+    except Exception:  # noqa: BLE001 — the report must never crash on the optimizer
+        alloc_lines = []
 
     var_lines = []
     for v, sent, acc in variants:
@@ -125,6 +142,8 @@ LINKEDIN
   Pending invites: {pending_inv}/150 (auto-managed)
   Connect-note experiment:
 {chr(10).join(var_lines) if var_lines else '    (no matured variant data yet)'}
+  Allocator (accept-optimized budget tilt, today):
+{chr(10).join(alloc_lines) if alloc_lines else '    (no matured campaign data yet — even shares)'}
 
 EMAIL
   Sends: {em_sends} | Replies: {em_replies} | Interested: {em_positive}
@@ -139,6 +158,7 @@ SYSTEM
 
 == NEEDS YOU ==
   -> {interested_unhandled} interested repl{'y' if interested_unhandled == 1 else 'ies'} awaiting YOUR response: {DASH}/replies
+  -> {nudges_pending} revival nudge(s) to approve: {DASH}/replies
   -> {drafts_review} content draft(s) to review: {DASH}/content
   -> {comments_pending} growth comment(s) to approve: {DASH}/comments
 
