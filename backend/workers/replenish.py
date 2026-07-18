@@ -33,7 +33,9 @@ QUEUE_LOOKBACK_DAYS = 7  # count leads sourced in the last N days
 # EMPTY LinkedIn queue — recruiting had 915 approved emails and zero connect drafts while LinkedIn
 # was the only converting channel. Keep a per-campaign pool of ready connect drafts, filled from
 # leads ALREADY in the DB (email-sourced, enriched + scored) before ever sourcing anew.
-LI_QUEUE_THRESHOLD = 20   # unsent connect drafts to keep ready per campaign
+# 40 since 2026-07-18: the double-down concentrated Chance's whole connect budget on the one
+# winning campaign (insurance), so its ready queue must cover ~2x the old per-campaign burn.
+LI_QUEUE_THRESHOLD = 40   # unsent connect drafts to keep ready per campaign
 LI_DRAFT_BATCH = 12       # connects drafted per campaign per tick (~1 Claude call each)
 
 

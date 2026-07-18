@@ -28,7 +28,11 @@ import random
 import time
 from typing import Any
 
-VARIANTS = ("a", "b", "c")
+# 'd' added 2026-07-18 (double-down sprint): peer observation + question-first CTA. Matured data
+# then showed b (peer statement) beating a (curiosity) in EVERY campaign (pooled 21.1% vs 11.5%),
+# so d iterates on the winning peer angle. New arm cold-starts on a uniform Beta prior — Thompson
+# explores it hard for the first ~week, then the data takes over.
+VARIANTS = ("a", "b", "c", "d")
 MATURE_DAYS = 7      # a connect younger than this is unresolved, not a miss
 WINDOW_DAYS = 90     # ignore sends older than this
 PRIOR_N = 20         # pool pseudo-observations behind each campaign's Beta prior
