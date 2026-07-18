@@ -80,6 +80,10 @@ _SOURCE_HINTS: dict[str, list[str]] = {
     "email_followup": ["workers/email_sender.py"],
     "email": ["workers/email_sender.py"],
     "send_approved": ["workers/sequence_send.py", "workers/email_sender.py"],
+    # cron_send failures name the channel ("linkedin: 1 failed") — without these hints the
+    # analyzer got NO code and couldn't propose a fix (the Unipile-301 ticket, 2026-07-18).
+    "cron_send": ["workers/sequence_send.py", "clients/unipile.py"],
+    "linkedin": ["workers/sequence_send.py", "clients/unipile.py"],
     "replenish": ["workers/replenish.py", "workers/apollo_sourcing.py"],
     "detect_connection": ["workers/sequence_send.py"],
     "progress_sequences": ["workers/sequence_send.py"],
@@ -353,20 +357,23 @@ def analyze_new(*, max_n: int = 8) -> dict[str, Any]:
     """Root-cause each un-analyzed ticket with code context; store the proposed fix."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "select signature, source, summary, detail, occurrences, coalesce(app,'outreach') "
-            "from error_tickets where status = 'new' order by occurrences desc limit %s",
+            "select signature, source, summary, detail, occurrences, coalesce(app,'outreach'), "
+            "fix_summary from error_tickets where status = 'new' order by occurrences desc limit %s",
             (max_n,),
         )
         tickets = cur.fetchall()
 
     analyzed = 0
-    for sig, source, summary, detail, occ, app in tickets:
+    for sig, source, summary, detail, occ, app, prior_fix in tickets:
         # Only apps whose source tree is mounted here get code context; others are analyzed
         # from the traceback alone (root cause still lands in the digest, PR step self-skips).
         has_code = bool((APPS.get(app) or {}).get("local_code"))
         payload = {
             "source": source, "app": app, "summary": summary,
             "detail": detail or "", "occurrences": occ,
+            # A reopened ticket carries the note it was last resolved with — the analyzer
+            # judges "fix failed" vs "expected residual" instead of re-deriving from scratch.
+            "prior_fix": prior_fix or "",
             "code_context": (
                 _code_context(detail or "", source=source, summary=summary) if has_code else []
             ),
@@ -382,19 +389,31 @@ def analyze_new(*, max_n: int = 8) -> dict[str, Any]:
             print(f"error_agent: analysis failed for {sig}, will retry next run: {str(e)[:150]}")
             continue
         fix = res.get("fix") if isinstance(res, dict) else None
+        conf = float(res.get("confidence") or 0) if isinstance(res.get("confidence"), (int, float)) else None
+        # Auto-close confident non-bugs (working-as-designed alerts, gracefully-handled errors,
+        # one-off transients) instead of parking them in the digest as "needs a human look"
+        # forever. Recurrence reopens + re-analyzes as usual; they show in the digest's
+        # "Resolved since yesterday" line, so nothing is silently dropped.
+        not_a_bug = res.get("is_real_bug") is False and (conf or 0) >= 0.8
+        fix_note = (fix or {}).get("summary") if isinstance(fix, dict) else None
+        if not_a_bug and not fix_note:
+            fix_note = f"auto-closed (not a bug): {str(res.get('one_line') or res.get('root_cause') or '')[:200]}"
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "update error_tickets set status='analyzed', severity=%s, confidence=%s, risk=%s, "
+                "update error_tickets set status=%s, severity=%s, confidence=%s, risk=%s, "
                 "root_cause=%s, fix_summary=%s, fix_file=%s, analysis=%s, analyzed_at=now(), "
+                "resolved_at=case when %s then now() else resolved_at end, "
                 "updated_at=now() where signature=%s",
                 (
+                    "resolved" if not_a_bug else "analyzed",
                     str(res.get("severity") or "medium")[:20],
-                    float(res.get("confidence") or 0) if isinstance(res.get("confidence"), (int, float)) else None,
+                    conf,
                     str(res.get("risk") or "")[:20],
                     str(res.get("root_cause") or "")[:2000],
-                    (fix or {}).get("summary") if isinstance(fix, dict) else None,
+                    fix_note,
                     (fix or {}).get("file") if isinstance(fix, dict) else None,
                     json.dumps(res, default=str),
+                    not_a_bug,
                     sig,
                 ),
             )
