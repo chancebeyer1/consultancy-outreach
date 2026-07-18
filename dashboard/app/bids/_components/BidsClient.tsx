@@ -60,6 +60,8 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const [sourceFilter, setSourceFilter] = useState<OpportunitySource | "all">("all");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkNote, setBulkNote] = useState<string | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchNote, setBatchNote] = useState<string | null>(null);
 
   const sources = useMemo(() => {
     const s = new Set<OpportunitySource>();
@@ -75,6 +77,41 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
   const approved = visible.filter((r) => bucketOf(r) === "approved");
   const submitted = visible.filter((r) => bucketOf(r) === "submitted");
   const lowFit = visible.filter((r) => bucketOf(r) === "low_fit");
+  const readyFreelancer = approved.filter((r) => API_SUBMITTABLE.has(r.opportunity.source));
+
+  async function submitAllReady() {
+    if (readyFreelancer.length === 0) return;
+    if (!window.confirm(`Submit ${readyFreelancer.length} approved Freelancer bid(s) now via their API?`))
+      return;
+    setBatchBusy(true);
+    setBatchNote(null);
+    try {
+      const res = await fetch("/api/bids", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "submit_ready_freelancer" }),
+      });
+      const data = (await res.json()) as { submitted?: number; skipped?: string; error?: string };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const ids = new Set(readyFreelancer.map((r) => r.opportunity.id));
+      // Move the submitted Freelancer rows to the Submitted bucket locally.
+      setRows((prev) =>
+        prev.map((r) =>
+          ids.has(r.opportunity.id) && r.bid
+            ? {
+                opportunity: { ...r.opportunity, status: "submitted" as const },
+                bid: { ...r.bid, status: "submitted" as const, submitted_via: "api" as const },
+              }
+            : r,
+        ),
+      );
+      setBatchNote(data.skipped ? `skipped: ${data.skipped}` : `submitted ${data.submitted ?? 0}`);
+    } catch (err) {
+      setBatchNote(`error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBatchBusy(false);
+    }
+  }
 
   function removeRow(oppId: string) {
     setRows((prev) => {
@@ -196,6 +233,18 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
             hint="Freelancer submits from here; other platforms: submit on the portal, then mark submitted"
             count={approved.length}
             accent="text-emerald-300"
+            action={
+              readyFreelancer.length > 0 ? (
+                <button
+                  onClick={submitAllReady}
+                  disabled={batchBusy}
+                  className="rounded-md bg-teal-500/15 px-3 py-1 text-xs font-medium text-teal-200 ring-1 ring-teal-500/40 transition hover:bg-teal-500/25 disabled:opacity-40"
+                >
+                  {batchBusy ? "submitting…" : `Submit ${readyFreelancer.length} on Freelancer`}
+                </button>
+              ) : null
+            }
+            note={batchNote}
           >
             {approved.map((row) => (
               <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
@@ -233,20 +282,26 @@ function Section({
   count,
   accent,
   children,
+  action,
+  note,
 }: {
   title: string;
   hint: string;
   count: number;
   accent: string;
   children: React.ReactNode;
+  action?: React.ReactNode;
+  note?: string | null;
 }) {
   if (count === 0) return null;
   return (
     <section>
-      <div className="mb-3 flex items-baseline gap-2">
+      <div className="mb-3 flex flex-wrap items-baseline gap-2">
         <h2 className={`text-sm font-semibold uppercase tracking-wide ${accent}`}>{title}</h2>
         <span className="text-xs text-neutral-500">{count}</span>
         <span className="hidden text-xs text-neutral-600 sm:inline">— {hint}</span>
+        {note && <span className="text-xs text-neutral-400">{note}</span>}
+        {action && <span className="ml-auto">{action}</span>}
       </div>
       <div className="space-y-4">{children}</div>
     </section>

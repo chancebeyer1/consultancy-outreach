@@ -11,6 +11,7 @@ within their acceptance window — so an award triggers an immediate email alert
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import psycopg
@@ -93,3 +94,69 @@ def poll_freelancer_bids() -> dict[str, Any]:
     if alert_failed:
         out["alert_email_failed"] = alert_failed  # alerts.scan_result pages on *_failed keys
     return out
+
+
+def poll_freelancer_messages() -> dict[str, Any]:
+    """Surface NEW client messages on projects we've bid on — the 'track the messages' half.
+    Emails a digest of unseen inbound messages and remembers the last-seen message id per
+    thread in app_settings so each message alerts once. Best-effort; API shape is confirmed
+    only once a real thread exists, so unknown fields degrade to a skip, never a crash."""
+    if not Config.freelancer_oauth_token:
+        return {"skipped": "no freelancer token"}
+
+    # Projects we have live bids on (submitted, not yet won/lost) — the ones a client might message.
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select external_id from opportunities "
+            "where source = 'freelancer' and status in ('submitted', 'won')"
+        )
+        project_ids = [int(r[0]) for r in cur.fetchall() if str(r[0]).isdigit()]
+        cur.execute("select value from app_settings where key = 'freelancer_seen_messages'")
+        row = cur.fetchone()
+    if not project_ids:
+        return {"threads": 0}
+    seen: dict[str, int] = (row[0] if row and isinstance(row[0], dict) else {}) or {}
+
+    threads = freelancer.get_message_threads(project_ids=project_ids)
+    new_msgs: list[str] = []
+    own_id = None
+    try:
+        own_id = freelancer.my_user_id()
+    except Exception:  # noqa: BLE001
+        pass
+    for th in threads:
+        thread = th.get("thread") or th
+        tid = str(thread.get("id") or "")
+        msg = th.get("message") or {}
+        mid = msg.get("id")
+        from_id = msg.get("from_user") or msg.get("from")
+        if not tid or not mid:
+            continue
+        if own_id and from_id == own_id:  # our own outbound — skip
+            continue
+        if seen.get(tid, 0) >= int(mid):  # already alerted on this or newer
+            continue
+        seen[tid] = int(mid)
+        text = (msg.get("message") or "").strip()[:200]
+        new_msgs.append(f"• thread {tid}: {text or '(new message)'}")
+
+    if new_msgs:
+        try:
+            from workers.email_sender import notify
+
+            notify(
+                f"{len(new_msgs)} new Freelancer client message(s)",
+                "A client messaged you on a bid:\n\n" + "\n".join(new_msgs)
+                + "\n\nReply on Freelancer to keep the conversation moving.",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+            cur.execute(
+                "insert into app_settings (key, value) values ('freelancer_seen_messages', %s) "
+                "on conflict (key) do update set value = excluded.value",
+                (json.dumps(seen),),
+            )
+            conn.commit()
+
+    return {"threads": len(threads), "new_messages": len(new_msgs)}

@@ -499,6 +499,15 @@ def _maybe_sweep_opportunities() -> dict:
     from workers.opportunity_sourcing import source_all
 
     result = source_all(dry_run=False, time_budget_s=500)
+    # Opt-in, OFF by default: auto-place approved Freelancer bids (guarded by min-fit + daily
+    # cap in the worker). Runs after the sweep so freshly auto-approved strong-fit bids can go
+    # same-day. Best-effort — a submit failure must not fail the sweep.
+    try:
+        from workers.bids_autosubmit import submit_ready_freelancer
+
+        result["freelancer_autosubmit"] = submit_ready_freelancer(auto=True)
+    except Exception as e:  # noqa: BLE001
+        result.setdefault("errors", []).append(f"freelancer autosubmit: {e}")
     # Email the operator ONLY when the sweep actually drafted proposals — so /bids never
     # needs speculative checking. A mail hiccup must not fail the sweep, but it MUST be
     # visible: notify() reports most failures by returning {"sent": False} (not raising),
@@ -601,14 +610,36 @@ def bid_submit_now(opportunity_id: str, amount: float = 0.0, period_days: int = 
     return _logged("bid_submitted", result)
 
 
-@app.function(secrets=secrets, timeout=120)
+@app.function(secrets=secrets, timeout=180)
 def track_bids_cron() -> dict:
-    """Poll platform APIs for outcomes on submitted bids (Freelancer award status). Hourly
-    because awards are accept-within-a-window; zero API calls when nothing is outstanding.
+    """Poll platform APIs for outcomes AND client messages on submitted bids (Freelancer).
+    Hourly because awards are accept-within-a-window; zero API calls when nothing outstanding.
     `modal run modal_app.py::track_bids_cron` for an ad-hoc check."""
-    from workers.bids_track import poll_freelancer_bids
+    from workers.bids_track import poll_freelancer_bids, poll_freelancer_messages
 
-    return _logged("cron_track_bids", poll_freelancer_bids())
+    out = {"outcomes": poll_freelancer_bids()}
+    try:
+        out["messages"] = poll_freelancer_messages()
+    except Exception as e:  # noqa: BLE001
+        out["messages"] = {"error": str(e)[:200]}
+    return _logged("cron_track_bids", out)
+
+
+@app.function(secrets=secrets, timeout=180)
+@modal.fastapi_endpoint(method="POST")
+def bids_submit_ready(request_body: dict) -> dict:
+    """Dashboard "Submit all ready" — places every approved Freelancer bid via their API
+    (human-initiated batch; the operator clicked). Reuses CONTENT_WEBHOOK_TOKEN."""
+    import os
+
+    from fastapi import HTTPException
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    if not token or request_body.get("token") != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+    from workers.bids_autosubmit import submit_ready_freelancer
+
+    return _logged("bids_submit_ready", submit_ready_freelancer(auto=False))
 
 
 @app.function(secrets=secrets, timeout=120)

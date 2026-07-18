@@ -34,6 +34,14 @@ interface BidDecisionPayload {
 }
 
 const BID_SUBMIT_URL = "https://chanceb323--consultancy-outreach-bid-submit.modal.run";
+const BID_SUBMIT_READY_URL = "https://chanceb323--consultancy-outreach-bids-submit-ready.modal.run";
+
+interface SubmitReadyPayload {
+  action: "submit_ready_freelancer";
+}
+function isSubmitReady(p: unknown): p is SubmitReadyPayload {
+  return !!p && typeof p === "object" && (p as Record<string, unknown>).action === "submit_ready_freelancer";
+}
 
 // Queue hygiene: pass the low-fit rows the client is DISPLAYING, by explicit id. The client
 // sends the ids so the confirm dialog's count is exactly what gets passed — a filter-only
@@ -129,7 +137,7 @@ export async function POST(request: Request) {
   }
 
   const payload = (await request.json()) as unknown;
-  if (!isValid(payload) && !isBulkPass(payload)) {
+  if (!isValid(payload) && !isBulkPass(payload) && !isSubmitReady(payload)) {
     return NextResponse.json({ error: "invalid payload" }, { status: 400 });
   }
 
@@ -137,6 +145,29 @@ export async function POST(request: Request) {
   if (gate.error) return gate.error;
 
   const admin = serverAdminClient();
+
+  // Batch submit: relay to Modal, which places every approved Freelancer bid via their API.
+  if (isSubmitReady(payload)) {
+    const token = process.env.CONTENT_WEBHOOK_TOKEN;
+    if (!token) {
+      return NextResponse.json({ error: "not configured (set CONTENT_WEBHOOK_TOKEN)" }, { status: 503 });
+    }
+    try {
+      const res = await fetch(BID_SUBMIT_READY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = (await res.json()) as { submitted?: number; skipped?: string; errors?: string[] };
+      if (!res.ok) throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
+      return NextResponse.json({ persisted: true, ...data });
+    } catch (err) {
+      return NextResponse.json(
+        { persisted: false, error: err instanceof Error ? err.message : String(err) },
+        { status: 502 },
+      );
+    }
+  }
 
   if (isBulkPass(payload)) {
     let passed = 0;

@@ -82,6 +82,17 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
         ))}
       </div>
 
+      {/* Featured image — the same auto-generated social card that unfurls on LinkedIn/X shares,
+          shown here so each post has a header visual. Served by ./opengraph-image.tsx. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`/blog/${post.slug}/opengraph-image`}
+        alt={post.title}
+        width={1200}
+        height={630}
+        className="mt-7 aspect-[1200/630] w-full rounded-2xl border border-neutral-800/80"
+      />
+
       <div className="prose prose-invert mt-8 max-w-none prose-headings:font-semibold prose-headings:tracking-tight prose-a:text-sky-400 prose-a:no-underline hover:prose-a:underline prose-strong:text-white">
         <ReactMarkdown>{post.body_md}</ReactMarkdown>
       </div>

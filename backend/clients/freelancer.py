@@ -180,6 +180,28 @@ def get_my_bids(*, bid_ids: list[int] | None = None, limit: int = 100) -> list[d
     return ((data.get("result") or {}).get("bids")) or []
 
 
+_THREADS = "https://www.freelancer.com/api/messages/0.1/threads/"
+
+
+def get_message_threads(*, project_ids: list[int] | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Message threads the token owner is in (optionally scoped to specific project ids — the
+    threads that open once a client engages a bid). Each thread carries a `context` (project)
+    and a `message` (latest). Used to surface client replies on bids. [] on error."""
+    params: list[tuple[str, str]] = [("limit", str(limit))]
+    for pid in project_ids or []:
+        params.append(("contexts[]", str(pid)))
+        params.append(("context_type", "project"))
+    try:
+        with httpx.Client(timeout=45.0) as c:
+            r = c.get(_THREADS, params=params, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:  # noqa: BLE001
+        print(f"WARNING freelancer threads fetch failed: {e}")
+        return []
+    return ((data.get("result") or {}).get("threads")) or []
+
+
 def fetch_opportunities(*, query: str = DEFAULT_QUERY, limit: int = 50) -> list[dict[str, Any]]:
     """Recent AI/software Freelancer projects open for bidding. [] if no token / on error."""
     if not Config.freelancer_oauth_token:
