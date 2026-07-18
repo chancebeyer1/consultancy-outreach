@@ -110,6 +110,7 @@ export function TopLoader() {
   return (
     <div
       aria-hidden
+      data-top-loader
       className="pointer-events-none fixed inset-x-0 top-0 z-[100] h-0.5"
       style={{ opacity: visible ? 1 : 0, transition: "opacity 250ms ease" }}
     >
