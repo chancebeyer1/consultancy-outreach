@@ -210,6 +210,16 @@ def insert_replies(records: list[dict[str, Any]]) -> dict[str, int]:
                     )
                     if cur.rowcount > 0:
                         inserted += 1
+                        # A clear buying signal → open a deal in the pipeline (idempotent).
+                        # Mirrors the email path (email_inbox) — before this, LinkedIn
+                        # "interested" replies never created deals.
+                        if (rec.get("intent") or "") == "interested":
+                            try:
+                                from workers.deals import ensure_deal
+
+                                ensure_deal(str(lead_id), source="reply", cur=cur)
+                            except Exception:  # noqa: BLE001 — never break reply ingestion
+                                pass
                         if (rec.get("intent") or "") != "oof":  # don't ping on OOO auto-replies
                             new_alerts.append((rec, _owner_email(cur, lead_id)))
                     else:

@@ -52,7 +52,7 @@ One or two short sentences. Pattern:
 - Match the prospect's register from their recent posts.
 - One ask MAX; soft.
 
-## A/B/C variant (use the angle matching `variant` in the payload)
+## A/B/C/D variant (use the angle matching `variant` in the payload)
 
 We're split-testing connect-note angles. Write in the one matching `variant`:
 
@@ -63,6 +63,11 @@ We're split-testing connect-note angles. Write in the one matching `variant`:
   work/company, framed peer-to-peer ("just wrapped X, hit the same thing"). More direct.
 - (variant "c" is the NO-NOTE arm — the invite goes out with no text at all. You will never be
   called for it; if you somehow are, return an empty string.)
+- **variant "d" — peer + question CTA:** same peer-observation open as "b", but END with one
+  short, specific, genuinely answerable question about how THEY handle the thing you observed
+  (e.g. "curious if you're routing that through your CSRs or eating it yourself?"). The question
+  must be concrete enough that a one-line reply is easy — never "thoughts?" and never a
+  disguised sales question ("struggling with X?" is a pitch, not a question). Still no call ask.
 
 If `variant` is null, use "a". All variants must obey every hard constraint above.
 

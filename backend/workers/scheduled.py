@@ -3,7 +3,9 @@
 The operator schedules a drafted reply for a future date on /replies ("reconnect in the fall").
 A daily Modal cron calls send_due_scheduled(), which sends every pending row whose due_at has
 passed (LinkedIn via Unipile, email via SMTP) and marks it sent/failed. Cancelable in the UI
-before it fires. Only the operator ever creates these rows — no classifier auto-schedules.
+before it fires. Rows come from the operator on /replies, or from the revival worker
+(workers/revival.py) as status='draft' — draft rows NEVER send; the operator must approve them
+(draft -> pending) first. Nothing auto-schedules straight to pending.
 """
 
 from __future__ import annotations

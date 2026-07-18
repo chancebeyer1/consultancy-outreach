@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head><script src="/unight-hane-Sey-dition-Dunce-ares-and-to-lesse-D" async></script>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico"  />
+    <meta property="og:title" content="Los Angeles County Office of the Assessor Public Portal">
+  <meta property="og:description" content="Office of LA County Assessor Jeff Prang – Committed to establishing accurate & fairly assessed property values. Info: 213-974-3211 | helpdesk@assessor.lacounty.gov">
+  <meta property="og:image" content="/assets/assessorJPrang.webp">
+  <meta property="og:url" content="https://portal.assessor.lacounty.gov/">
+
+  <meta name="twitter:title" content="Los Angeles County Office of the Assessor">
+  <meta name="twitter:description" content="Office of LA County Assessor Jeff Prang – Committed to establishing accurate & fairly assessed property values. Info: 213-974-3211 | helpdesk@assessor.lacounty.gov">
+  <meta name="twitter:image" content="/assets/assessorJPrang.webp">
+  <meta name="twitter:card" content="Office of LA County Assessor Jeff Prang ">
+  <link rel="preload" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" as="style" />
+  <link rel="preload" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" as="style"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""
+    onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" media="all" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" media="all"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script type="text/javascript" nonce src="https://pol.pictometry.com/ipa/v1/embed/host.php?apikey=6DE1AC0DEC6549D3852E4DDCD21C7FC3"></script>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script type="text/javascript" nonce="">
+    function frameLoad(e) {
+        var s = e.getSource();
+        var url = s.getSource();
+        var id = s.getClientId();
+        var ipa = new PictometryHost(id, url, 'options');
+
+        ipa.ready = function () {
+            ipa.getLayers( function(result) {
+                // Save them to reference in Browser Dev Tools - Console.
+                myLayers = result.layers;
+            });
+
+            // Set default date filter to latest
+            ipa.setImageFilterLatest();
+            var lat = getUrlVars(url)['lat'];
+            var lon = getUrlVars(url)['lon'];
+            ipa.setLocation({
+                y: lat,
+                x: lon,
+                zoom: 20,
+                drawMarker: true
+            });
+
+            // Enable assessor parcel layer id 257401: "LARIAC - Parcels (Streamed)"
+            ipa.showLayer({
+                id:257401,
+                visible:true
+            });
+
+        }
+    }
+    
+    function getUrlVars(iurl) {
+        var vars = {};
+        var parts = iurl.replace(/[?&amp;]+([^=&amp;]+)=([^&amp;]*)/gi,
+            function (m, key, value) {
+                vars[key] = value;
+            });
+        return vars;
+    }
+    </script>
+    
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preload" as="image" href={AssessorJPrang} />
+    <title>Assessor Portal</title>
+    <script type="module" crossorigin src="/assets/index-DHwz-sJK.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Cn0T9KQR.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

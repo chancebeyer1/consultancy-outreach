@@ -517,8 +517,7 @@ def send_approved_first_touch(
 
     The dashboard's approve action sets drafts.status='approved' in Postgres. This
     sends those approved cold-opener drafts (linkedin_connect / email) for leads with
-    no prior LinkedIn send (an email touch does NOT block — cross-channel openers are
-    intentional), via Unipile — the DB-driven equivalent of scripts/send_approvals.py,
+    no prior send, via Unipile — the DB-driven equivalent of scripts/send_approvals.py,
     so first contact works on Modal without the operator's laptop. Follow-ups (the DM
     after a connection is accepted, etc.) stay with progress_sequences().
 
@@ -544,15 +543,17 @@ def send_approved_first_touch(
                   and d.channel in ('linkedin_connect', 'linkedin_inmail')
                   and (c.status is null or c.status = 'active')  -- paused/archived campaigns don't send
                   and not exists (select 1 from sends s where s.draft_id = d.id)
-                  -- no prior LINKEDIN send only: leads sourced for email get LinkedIn openers
-                  -- from replenish.draft_connects_for_existing, so an email send must not
-                  -- block them (mirrors email_sender's channel-scoped gate).
+                  -- "First touch" is per-CHANNEL: a lead already emailed (no reply) is exactly who
+                  -- the LinkedIn-first rebalance targets next. The old lead-level check silently
+                  -- blocked every connect drafted for the email-contacted pool (all inventory dead,
+                  -- variant c never sent). Only a prior LINKEDIN send excludes.
                   and not exists (
                       select 1 from sends s2
                       join drafts d2 on d2.id = s2.draft_id
-                      where d2.lead_id = d.lead_id
-                        and d2.channel in ('linkedin_connect', 'linkedin_inmail')
+                      where d2.lead_id = d.lead_id and d2.channel like 'linkedin%%'
                   )
+                  -- Never cold-connect someone already in a conversation (any reply, any channel).
+                  and not exists (select 1 from replies r where r.lead_id = d.lead_id)
                 order by d.generated_at asc
                 """
             )
@@ -607,6 +608,7 @@ def send_approved_first_touch(
     # shared cap and the cross-campaign comparison stays apples-to-apples.
     cam_window: dict[str, dict[str, int]] = {}
     cam_run: dict[tuple[str | None, str], int] = {}
+    conn_weights: dict[str, dict[str, float] | None] = {"w": None}  # lazy, once per run
 
     def _campaign_has_share(cid: str | None, ch: str) -> bool:
         if not cid or n_campaigns <= 1:
@@ -614,6 +616,20 @@ def send_approved_first_touch(
         if ch not in cam_window:
             cam_window[ch] = campaign_daily_sent(ch)
         used = cam_window[ch].get(cid, 0) + cam_run.get((cid, ch), 0)
+        # Connects: tilt the fair-share slice by matured accept rate (Thompson-sampled, stable
+        # per UTC day, floored so no campaign starves — see workers/allocator.py). A campaign
+        # missing from the weights, or an empty weights map, falls back to the even split.
+        if ch == "linkedin_connect":
+            if conn_weights["w"] is None:
+                try:
+                    from workers.allocator import campaign_connect_weights
+
+                    conn_weights["w"] = campaign_connect_weights()
+                except Exception:  # noqa: BLE001
+                    conn_weights["w"] = {}
+            w = (conn_weights["w"] or {}).get(cid)
+            if w:
+                return used < max(1, round(campaign_share(ch, 1) * w))
         return used < campaign_share(ch, n_campaigns)
 
     # InMail credit budget for this run — fetched lazily once, decremented as spent.

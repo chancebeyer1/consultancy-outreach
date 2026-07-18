@@ -101,7 +101,10 @@ def source_apollo_all(*, dry_run: bool = False, limit: int = APOLLO_PULL_LIMIT) 
         with conn.cursor() as cur:
             cur.execute(
                 "select id, slug, apollo_params, auto_send, apollo_cursor, apollo_cursors from campaigns "
-                "where status = 'active' and apollo_params is not null"
+                "where status = 'active' and apollo_params is not null "
+                # A campaign whose channels exclude email must not source email leads (the
+                # 2026-07-18 email reset dropped recruiting's email leg but kept it active for DMs).
+                "and (channels is null or 'email' = any(channels))"
             )
             camps = [
                 {"id": str(r[0]), "slug": r[1], "params": r[2], "auto_send": r[3],

@@ -109,6 +109,99 @@ def _normalize(p: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# ---------------------------------------------------------------------------
+# Bid placement — officially supported by the Freelancer API (the official SDK ships
+# place_project_bid). Only ever called from a human-initiated dashboard/CLI action; the
+# sweep never submits anything.
+# ---------------------------------------------------------------------------
+
+_USERS_SELF = "https://www.freelancer.com/api/users/0.1/self/"
+_BIDS = "https://www.freelancer.com/api/projects/0.1/bids/"
+
+
+def my_user_id() -> int:
+    """The token owner's Freelancer user id (required as bidder_id when placing a bid)."""
+    with httpx.Client(timeout=30.0) as c:
+        r = c.get(_USERS_SELF, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token})
+        r.raise_for_status()
+        data = r.json()
+    uid = (data.get("result") or {}).get("id")
+    if not uid:
+        raise RuntimeError(f"couldn't resolve own user id from /users/0.1/self/: {str(data)[:200]}")
+    return int(uid)
+
+
+def place_bid(
+    *,
+    project_id: int,
+    amount: float,
+    period_days: int,
+    description: str,
+    milestone_percentage: int = 100,
+) -> dict[str, Any]:
+    """Place one bid on an open project. Raises with the API's own error message on failure
+    (e.g. insufficient token scope, bid limit reached, already bid) so the caller can show it.
+    Returns the created bid object (contains `id` — the provider bid id)."""
+    body = {
+        "project_id": int(project_id),
+        "bidder_id": my_user_id(),
+        "amount": float(amount),
+        "period": int(period_days),
+        "milestone_percentage": int(milestone_percentage),
+        "description": description,
+    }
+    with httpx.Client(timeout=45.0) as c:
+        r = c.post(_BIDS, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token}, json=body)
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        if r.status_code >= 400 or data.get("status") == "error":
+            msg = data.get("message") or data.get("error_code") or r.text[:200]
+            raise RuntimeError(f"Freelancer bid failed (HTTP {r.status_code}): {msg}")
+    result = data.get("result") or {}
+    if not result.get("id"):
+        raise RuntimeError(f"Freelancer bid response missing id: {str(data)[:200]}")
+    return result
+
+
+def get_my_bids(*, bid_ids: list[int] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    """Fetch the token owner's bids (optionally narrowed to specific bid ids — we store the
+    id of every bid we place). Used by the tracker to poll award status. Each bid carries
+    `award_status` (pending | awarded | rejected | revoked | canceled) plus project_id.
+    Raises on HTTP errors so the tracker can log-and-retry next tick."""
+    params: list[tuple[str, str]] = [
+        ("bidders[]", str(my_user_id())),
+        ("limit", str(limit)),
+    ]
+    for b in bid_ids or []:
+        params.append(("bids[]", str(b)))
+    with httpx.Client(timeout=45.0) as c:
+        r = c.get(_BIDS, params=params, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token})
+        r.raise_for_status()
+        data = r.json()
+    return ((data.get("result") or {}).get("bids")) or []
+
+
+_THREADS = "https://www.freelancer.com/api/messages/0.1/threads/"
+
+
+def get_message_threads(*, project_ids: list[int] | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Message threads the token owner is in (optionally scoped to specific project ids — the
+    threads that open once a client engages a bid). Each thread carries a `context` (project)
+    and a `message` (latest). Used to surface client replies on bids. [] on error."""
+    params: list[tuple[str, str]] = [("limit", str(limit))]
+    for pid in project_ids or []:
+        params.append(("contexts[]", str(pid)))
+        params.append(("context_type", "project"))
+    try:
+        with httpx.Client(timeout=45.0) as c:
+            r = c.get(_THREADS, params=params, headers={"Freelancer-OAuth-V1": Config.freelancer_oauth_token})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:  # noqa: BLE001
+        print(f"WARNING freelancer threads fetch failed: {e}")
+        return []
+    return ((data.get("result") or {}).get("threads")) or []
+
+
 def fetch_opportunities(*, query: str = DEFAULT_QUERY, limit: int = 50) -> list[dict[str, Any]]:
     """Recent AI/software Freelancer projects open for bidding. [] if no token / on error."""
     if not Config.freelancer_oauth_token:

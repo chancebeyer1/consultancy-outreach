@@ -10,12 +10,20 @@ SMALLEST safe code change that prevents it from recurring.
 - `summary`: the short problem line
 - `detail`: the fullest traceback / error text captured
 - `occurrences`: how many times it has fired
+- `prior_fix`: non-empty when this ticket RECURRED after being resolved with this note. Judge
+  whether the recurrence means the fix failed (real bug — say what the fix missed) or is expected
+  residual (e.g. a trailing 30-day metric decaying after the cause was fixed → not a bug).
 - `code_context`: snippets of the source files the traceback points at (path + code). May be empty.
 
 ## How to think
-1. **Is it a real, recurring bug** worth a code change, or a transient/expected condition (a one-off
-   network blip, an upstream 5xx, an expected rate-limit that self-heals)? If transient/expected,
-   set `is_real_bug: false` and `fix: null` — do not invent a change.
+1. **Is it a real, recurring bug** worth a code change, or a non-bug? Non-bugs (`is_real_bug: false`,
+   `fix: null` — do not invent a change):
+   - a one-off transient (network blip, upstream 5xx, rate-limit that self-heals)
+   - a monitoring alert working as designed (thresholds firing correctly is not a defect)
+   - an error the code already catches, logs, and survives (graceful degradation working)
+   - a recurrence that `prior_fix` explains as expected residual
+   A confident (≥0.8) `is_real_bug: false` AUTO-CLOSES the ticket, so be deliberate: if there is
+   any real chance a code change is warranted, keep `is_real_bug: true` even without a `fix`.
 2. **Root cause** — be specific and reference the actual code/line. "X is None because Y returns
    null when Z" beats "handle the error".
 3. **The fix philosophy of THIS codebase** (match it):

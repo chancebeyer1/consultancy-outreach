@@ -135,7 +135,10 @@ def fetch_profile(
     """
     ident = public_identifier(linkedin_url)
     params = {"account_id": account_id or _li_account(), "notify": str(notify).lower()}
-    with httpx.Client(timeout=60.0) as c:
+    # follow_redirects: Unipile 301s /users/{id} -> /users/{id}/ when the identifier contains
+    # percent-encoded UTF-8 (e.g. 'isahi-pe%C3%B1a-…'); httpx surfaces that as an error by
+    # default, which failed real connect sends. Safe here — GET only.
+    with httpx.Client(timeout=60.0, follow_redirects=True) as c:
         r = c.get(f"{_base()}/users/{ident}", headers=_headers(), params=params)
         r.raise_for_status()
         return r.json()
@@ -152,7 +155,8 @@ def fetch_recent_posts(
     """
     ident = public_identifier(linkedin_url)
     params = {"account_id": account_id or _li_account(), "limit": count}
-    with httpx.Client(timeout=60.0) as c:
+    # follow_redirects: same non-ASCII-identifier 301 as fetch_profile (GET only, safe).
+    with httpx.Client(timeout=60.0, follow_redirects=True) as c:
         r = c.get(f"{_base()}/users/{ident}/posts", headers=_headers(), params=params)
         if r.status_code == 404:
             return []

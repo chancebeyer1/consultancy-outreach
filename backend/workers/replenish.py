@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import re
 import time
 from pathlib import Path
 
@@ -34,7 +33,9 @@ QUEUE_LOOKBACK_DAYS = 7  # count leads sourced in the last N days
 # EMPTY LinkedIn queue — recruiting had 915 approved emails and zero connect drafts while LinkedIn
 # was the only converting channel. Keep a per-campaign pool of ready connect drafts, filled from
 # leads ALREADY in the DB (email-sourced, enriched + scored) before ever sourcing anew.
-LI_QUEUE_THRESHOLD = 20   # unsent connect drafts to keep ready per campaign
+# 40 since 2026-07-18: the double-down concentrated Chance's whole connect budget on the one
+# winning campaign (insurance), so its ready queue must cover ~2x the old per-campaign burn.
+LI_QUEUE_THRESHOLD = 40   # unsent connect drafts to keep ready per campaign
 LI_DRAFT_BATCH = 12       # connects drafted per campaign per tick (~1 Claude call each)
 
 
@@ -99,36 +100,23 @@ def _messageable_count(cursor, campaign_id: str) -> int:
 # disqualified, or blows LinkedIn's 300-char invite cap MUST NOT ship. Caught live 2026-07-11:
 # one note narrated its own instructions (1,150 chars), another read "DISQUALIFIED, do not send"
 # (the model rightly refusing an off-ICP lead the scorer overrated) — both auto-approved.
-#
-# Markers must be HIGH-PRECISION: notes are deliberately casual prose (anti-template doctrine),
-# and a false positive stores 'rejected', which the candidate query treats as "never re-draft
-# this lead" — a permanent drop. Soft phrases (bare "variant", "i can't") live in the
-# context-anchored regex below instead of the substring list.
 _NOTE_BAD_MARKERS = (
-    "{{", "char_budget", "first_name", "disqualified", "do not send", "as an ai",
+    "variant", "payload", "char budget", "char_budget", "{{", "first_name",
+    "disqualified", "do not send", "cannot write", "as an ai", "i can't",
 )
-# Meta/refusal leakage that needs context to stay precise: A/B-arm narration ("variant b
-# wants...") and first-person refusals ("I can't write a note for..."). Matched against the
-# apostrophe-normalized lowercase body.
-_NOTE_BAD_RE = re.compile(r"\bvariant [abc]\b|\bi (?:can't|cannot) (?:write|draft|generate)\b")
 
 
 def _connect_note_ok(body: str) -> bool:
     """True if a connect note is safe to auto-send (length + no meta/refusal leakage)."""
     if len(body) > 300:
         return False
-    # Claude usually emits curly apostrophes ("can’t") — fold to ASCII before matching.
-    low = body.lower().replace("’", "'")
-    if any(m in low for m in _NOTE_BAD_MARKERS):
-        return False
-    return not _NOTE_BAD_RE.search(low)
+    low = body.lower()
+    return not any(m in low for m in _NOTE_BAD_MARKERS)
 
 
 def _li_queue_count(cursor, campaign_id: str) -> int:
     """Unsent LinkedIn opener drafts (connect/InMail) ready for this campaign — no lookback
-    window: an old unsent connect draft is still sendable inventory. Only 'approved' counts:
-    with the drafts review page retired, a 'draft'-status row can never be approved or sent,
-    so counting it would mask an empty sendable queue."""
+    window: an old unsent connect draft is still sendable inventory."""
     cursor.execute(
         """
         select count(*)
@@ -137,7 +125,7 @@ def _li_queue_count(cursor, campaign_id: str) -> int:
         left join sends s on s.draft_id = d.id
         where l.campaign_id = %s
           and d.channel in ('linkedin_connect', 'linkedin_inmail')
-          and d.status = 'approved'
+          and d.status in ('draft', 'approved')
           and s.id is null
         """,
         (campaign_id,),
@@ -157,10 +145,8 @@ def draft_connects_for_existing(
     These are leads sourced for email (Apollo) that never got LinkedIn work — enriched and scored
     already, so each connect note costs ONE Claude call (zero for the no-note 'c' arm) instead of a
     full re-enrichment. Highest-fit first; only fit>=60 (the auto-approve floor — anything lower
-    would sit unreviewed forever now the drafts page is retired). For the same reason the whole
-    leg no-ops for auto_send=false campaigns: their drafts could never be approved. Skips leads
-    with any existing LinkedIn opener draft or any reply. `deadline_ts` (time.monotonic value)
-    bounds the loop.
+    would sit unreviewed forever now the drafts page is retired). Skips leads with any existing
+    LinkedIn opener draft or any reply. `deadline_ts` (time.monotonic value) bounds the loop.
     """
     from workers.draft import Hook
 
@@ -175,11 +161,6 @@ def draft_connects_for_existing(
             if not row:
                 return {"slug": campaign_slug, "error": "campaign not found"}
             campaign_id, auto_send = str(row[0]), bool(row[1])
-            if not auto_send:
-                # Drafts review page is retired: a 'draft'-status connect can never be
-                # approved or sent, so drafting here would only burn Claude calls on rows
-                # that sit dead forever.
-                return {"slug": campaign_slug, "skipped": "auto_send off"}
             cur.execute(
                 """
                 select l.id, l.linkedin_url, l.company, sc.fit_score,
@@ -215,7 +196,11 @@ def draft_connects_for_existing(
                 "recent_posts": posts or [],
                 "company": company,
             }
-            variant = draft.connect_variant(url)
+            # Thompson-sampled arm (accept-rate optimizer); deterministic per lead URL so the
+            # variant tag and the drafted body can never disagree. Falls back to mod-3 inside.
+            from workers.allocator import pick_connect_variant
+
+            variant = pick_connect_variant(campaign_id, url)
             try:
                 if variant == "c":
                     body = ""  # no-note invite arm — nothing to draft
@@ -400,7 +385,14 @@ def _process_lead(
         _url = record.get("linkedin_url")
         drafts_out: dict[str, str] = {}
         for channel in channels:
-            variant = draft.connect_variant(_url) if channel == "linkedin_connect" else None
+            variant = None
+            if channel == "linkedin_connect":
+                # Thompson-sampled arm; the record carries it so the ingest step tags the
+                # draft row with the SAME arm the body was drafted under.
+                from workers.allocator import pick_connect_variant
+
+                variant = pick_connect_variant(campaign.slug, _url)
+                record["connect_variant"] = variant
             if channel == "linkedin_connect" and variant == "c":
                 drafts_out[channel] = ""  # variant c = NO-NOTE invite; nothing to draft
                 continue
@@ -543,8 +535,14 @@ def _ingest_records(records: list[dict]) -> dict:
                     lead_url = rec.get("linkedin_url")
                     first_touch = {"linkedin_connect", "linkedin_inmail"}
                     for step_index, (channel, body) in enumerate(drafts.items()):
-                        # A/B tag the connect note (deterministic per lead); other channels stay NULL.
-                        variant = connect_variant(lead_url) if channel == "linkedin_connect" else None
+                        # A/B tag the connect note; other channels stay NULL. The record threads
+                        # the arm picked at draft time (allocator); replayed old ledger rows
+                        # lack it and fall back to the mod-3 split they were drafted under.
+                        variant = (
+                            (rec.get("connect_variant") or connect_variant(lead_url))
+                            if channel == "linkedin_connect"
+                            else None
+                        )
                         # Empty body is only legitimate for variant 'c' (the no-note invite arm).
                         if not body and variant != "c":
                             continue

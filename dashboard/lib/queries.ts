@@ -281,6 +281,124 @@ export async function getLeadRows(campaignId?: string, scope?: Scope): Promise<L
   return loadLeadRowsFromSupabase(campaignId, scope);
 }
 
+// ---------------------------------------------------------------------------
+// Leads — SERVER-PAGINATED page for /leads (backed by the lead_rows_v view)
+// ---------------------------------------------------------------------------
+
+export type LeadsPageFilters = {
+  page: number; // 1-based
+  pageSize: number;
+  status: "all" | LeadDisplayStatus;
+  channel: "all" | LeadChannelKind;
+  q: string;
+};
+
+export type LeadsPageResult = {
+  rows: LeadRow[];
+  total: number; // total under current campaign/search scope (all statuses)
+  filteredTotal: number; // total matching the active status+channel filter (drives pagination)
+  statusCounts: Record<string, number>;
+  channelCounts: Record<string, number>;
+};
+
+// One page of /leads, filtered + counted in SQL. lead_rows_v computes each lead's derived
+// status/channels/fit in Postgres, so this replaces the old load-EVERY-lead-then-filter-in-the-
+// browser path that lagged hard past ~1,500 leads. The chip counts come from one RPC scan.
+export async function getLeadRowsPage(
+  campaignId: string | undefined,
+  scope: Scope | undefined,
+  f: LeadsPageFilters,
+): Promise<LeadsPageResult> {
+  if (dataSource !== "supabase") {
+    // Mock/file mode: reuse the legacy loader and slice in JS (tiny datasets).
+    const all = await getLeadRows(campaignId, scope);
+    const needle = f.q.trim().toLowerCase();
+    const filtered = all.filter((r) => {
+      if (f.status !== "all" && r.display_status !== f.status) return false;
+      if (f.channel !== "all" && !r.channels.includes(f.channel)) return false;
+      if (!needle) return true;
+      const hay =
+        `${r.lead.name ?? ""} ${r.lead.company ?? ""} ${r.lead.role ?? ""} ${r.lead.email ?? ""}`.toLowerCase();
+      return hay.includes(needle);
+    });
+    const statusCounts: Record<string, number> = {};
+    for (const r of all) statusCounts[r.display_status] = (statusCounts[r.display_status] ?? 0) + 1;
+    const channelCounts: Record<string, number> = { linkedin: 0, email: 0 };
+    for (const r of all) for (const k of r.channels) channelCounts[k] = (channelCounts[k] ?? 0) + 1;
+    const from = (f.page - 1) * f.pageSize;
+    return {
+      rows: filtered.slice(from, from + f.pageSize),
+      total: all.length,
+      filteredTotal: filtered.length,
+      statusCounts,
+      channelCounts,
+    };
+  }
+
+  // Admin client (service role): the user-context path returned counts but empty rows against the
+  // security_invoker view (an RLS interaction in the view's lateral subqueries). Access control is
+  // the same as every other dashboard page: the page requires a signed-in profile and non-admins
+  // get the explicit user_id filter below — RLS was never the scoping mechanism here.
+  const supabase = serverAdminClient();
+  const uid = scopeUserId(scope);
+  // Wildcards would be user-controlled ILIKE syntax; strip them (and PostgREST delimiters).
+  const q = f.q.trim().replace(/[,()%]/g, " ").trim();
+
+  // BOTH calls are RPCs on purpose: the REST select against the lead_rows_v view returned an
+  // accurate count with an empty rows array in the deployed runtime (a PostgREST/view quirk we
+  // could not reproduce anywhere else), while the RPC path has worked everywhere from day one.
+  const [pageRes, countsRes] = await Promise.all([
+    supabase.rpc("lead_rows_page", {
+      p_campaign: campaignId ?? null,
+      p_user: uid ?? null,
+      p_q: q || null,
+      p_status: f.status === "all" ? null : f.status,
+      p_channel: f.channel === "all" ? null : f.channel,
+      p_limit: f.pageSize,
+      p_offset: (f.page - 1) * f.pageSize,
+    }),
+    supabase.rpc("lead_page_counts", {
+      p_campaign: campaignId ?? null,
+      p_user: uid ?? null,
+      p_q: q || null,
+    }),
+  ]);
+  if (pageRes.error) throw pageRes.error;
+  if (countsRes.error) throw countsRes.error;
+
+  const page = (pageRes.data ?? {}) as { filtered_total?: number; rows?: unknown[] };
+  const counts = (countsRes.data ?? {}) as {
+    total?: number;
+    status?: Record<string, number>;
+    channels?: Record<string, number>;
+  };
+
+  type ViewRow = Lead & {
+    fit_score: number | null;
+    last_sent_at: string | null;
+    display_status: LeadDisplayStatus;
+    channels: LeadChannelKind[];
+  };
+  const rows: LeadRow[] = ((page.rows ?? []) as ViewRow[]).map((r) => {
+    const { fit_score, last_sent_at, display_status, channels, ...lead } = r;
+    return {
+      lead: lead as Lead,
+      fit_score,
+      display_status,
+      last_sent_at,
+      channels: channels?.length ? channels : lead.email ? ["email"] : ["linkedin"],
+    };
+  });
+
+  return {
+    rows,
+    total: counts.total ?? page.filtered_total ?? 0,
+    filteredTotal: page.filtered_total ?? 0,
+    statusCounts: counts.status ?? {},
+    channelCounts: counts.channels ?? {},
+  };
+}
+
 // Supabase returns 400 ("Bad Request") when a request URL gets too long, which happens once an
 // `.in(column, ids)` filter carries a few hundred ids. Run the query over small id chunks and
 // merge — each chunk keeps the URL short and stays under the default row cap. Returns the same
@@ -735,8 +853,9 @@ async function loadReplyRowsFromSupabase(
   );
 
   // Pull the lead + the most recent outbound draft we sent (for context in the
-  // suggested-reply UX). We join via drafts.lead_id where status='sent'.
-  const [leadsRes, sentDraftsRes] = await Promise.all([
+  // suggested-reply UX). We join via drafts.lead_id where status='sent'. Also the
+  // lead's OPEN deal, so the reply view can deep-link into /pipeline.
+  const [leadsRes, sentDraftsRes, dealsRes] = await Promise.all([
     inChunks(leadIds, (c) => supabase.from("leads").select("*").in("id", c)),
     inChunks(leadIds, (c) =>
       supabase
@@ -746,9 +865,21 @@ async function loadReplyRowsFromSupabase(
         .eq("status", "sent")
         .order("decided_at", { ascending: false }),
     ),
+    inChunks(leadIds, (c) =>
+      supabase
+        .from("deals")
+        .select("id, lead_id, stage")
+        .in("lead_id", c)
+        .not("stage", "in", "(won,lost)"),
+    ),
   ]);
   if (leadsRes.error) throw leadsRes.error;
   if (sentDraftsRes.error) throw sentDraftsRes.error;
+
+  const openDealByLead = new Map<string, string>();
+  for (const d of (dealsRes.data ?? []) as Array<{ id: string; lead_id: string | null }>) {
+    if (d.lead_id && !openDealByLead.has(d.lead_id)) openDealByLead.set(d.lead_id, d.id);
+  }
 
   const leads = (leadsRes.data ?? []) as unknown as Lead[];
   const leadById = new Map<string, Lead>(leads.map((l) => [l.id, l]));
@@ -766,7 +897,7 @@ async function loadReplyRowsFromSupabase(
   }
 
   return replyRows
-    .map((r) => {
+    .map((r): ReplyReviewRow | null => {
       if (!r.lead_id) return null;            // orphan reply — drop for now
       const lead = leadById.get(r.lead_id);
       if (!lead) return null;
@@ -774,7 +905,8 @@ async function loadReplyRowsFromSupabase(
         reply: r as unknown as Reply,
         lead,
         original_message: lastOutboundByLead.get(r.lead_id) ?? null,
-      } satisfies ReplyReviewRow;
+        deal_id: openDealByLead.get(r.lead_id) ?? null,
+      };
     })
     .filter((r): r is ReplyReviewRow => r !== null)
     .filter((r) => !campaignId || r.lead.campaign_id === campaignId);
@@ -835,6 +967,31 @@ export type DealDetail = {
     note?: string;
     website?: string;
   } | null;
+  meetings: Array<{
+    id: string;
+    title: string | null;
+    status: string; // new | processed | failed
+    error: string | null;
+    created_at: string;
+    processed_at: string | null;
+    follow_up_draft: string | null;
+    factory_export: unknown | null;
+    extraction: {
+      summary?: string;
+      pains?: Array<{ pain: string; quote?: string | null; severity?: string }>;
+      budget_signals?: string[];
+      timeline_signals?: string[];
+      objections?: string[];
+      decision_process?: string | null;
+      next_steps?: Array<{ owner: string; action: string; due_hint?: string | null }>;
+      process_candidates?: Array<{
+        name: string;
+        description?: string;
+        scores?: { frequency?: number; time_cost?: number; automatability?: number; risk?: number };
+        open_questions?: string[];
+      }>;
+    } | null;
+  }>;
 };
 
 export async function getDealDetail(id: string, scope?: Scope): Promise<DealDetail | null> {
@@ -847,7 +1004,7 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
   const uid = scopeUserId(scope);
   if (uid && (deal as { user_id?: string | null }).user_id !== uid) return null;
 
-  const [leadRes, msgRes, notesRes, campRes, auditRes] = await Promise.all([
+  const [leadRes, msgRes, notesRes, campRes, auditRes, meetingsRes] = await Promise.all([
     deal.lead_id
       ? admin
           .from("leads")
@@ -872,6 +1029,12 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
       ? admin.from("campaigns").select("name").eq("id", deal.campaign_id).maybeSingle()
       : Promise.resolve({ data: null }),
     admin.from("audits").select("report").eq("deal_id", id).order("created_at", { ascending: false }).limit(1),
+    admin
+      .from("meetings")
+      .select("id, title, status, error, created_at, processed_at, follow_up_draft, factory_export, extraction")
+      .eq("deal_id", id)
+      .order("created_at", { ascending: false })
+      .limit(20),
   ]);
 
   const auditRow = (auditRes.data as Array<{ report?: DealDetail["auditReport"] }> | null)?.[0];
@@ -882,6 +1045,7 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
     messages: (msgRes.data ?? []) as DealDetail["messages"],
     notes: (notesRes.data ?? []) as DealDetail["notes"],
     auditReport: auditRow?.report ?? null,
+    meetings: (meetingsRes.data ?? []) as DealDetail["meetings"],
   };
 }
 
@@ -900,11 +1064,12 @@ async function loadBidReviewRowsFromSupabase(scope?: Scope): Promise<BidReviewRo
   const supabase = await serverClient();
   const uid = scopeUserId(scope);
 
-  // Opportunities the operator hasn't dispositioned yet (submitted/passed drop off the queue).
+  // Working set: everything not yet terminally dispositioned. `submitted` stays visible
+  // (the Submitted section tracks responses until won/lost); passed/won/lost drop off.
   let oppQ = supabase
     .from("opportunities")
     .select("*")
-    .in("status", ["new", "scored", "drafted", "approved"])
+    .in("status", ["new", "scored", "drafted", "approved", "submitted"])
     .order("fit_score", { ascending: false, nullsFirst: false })
     .order("discovered_at", { ascending: false })
     .limit(400);

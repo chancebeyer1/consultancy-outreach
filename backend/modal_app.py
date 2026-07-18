@@ -252,11 +252,173 @@ def replenish_queue_cron() -> dict:
         bids = _maybe_sweep_opportunities()
     except Exception as e:  # noqa: BLE001
         bids = {"error": str(e)}
+    # And — Monday mornings — the weekly "state of the machine" report (funnel, experiments,
+    # system health, needs-you list). One email replaces the ad-hoc "how's it going" audit.
+    try:
+        weekly = _maybe_weekly_report()
+    except Exception as e:  # noqa: BLE001
+        weekly = {"error": str(e)}
+    # And — once a day — draft revival nudges for open deals gone quiet. Operator-gated:
+    # drafts land on /replies with status='draft' and only send after explicit approval.
+    try:
+        revivals = _maybe_draft_revivals()
+    except Exception as e:  # noqa: BLE001
+        revivals = {"error": str(e)}
+    # And — the proof loop: testimonial asks for fresh wins (daily) + a metrics-grounded
+    # case-study post draft (~monthly). Both land in review queues, nothing auto-sends.
+    try:
+        proof = _maybe_case_studies()
+    except Exception as e:  # noqa: BLE001
+        proof = {"error": str(e)}
     return _logged(
         "cron_replenish",
         {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
-         "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids},
+         "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids,
+         "weekly_report": weekly, "revivals": revivals, "proof": proof},
     )
+
+
+def _maybe_weekly_report() -> dict:
+    """Send the weekly machine report once, Monday at/after 14:00 UTC. Date-guarded in
+    app_settings so it fires exactly once across the hourly ticks."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.weekday() != 0 or now.hour < 14:
+        return {"skipped": "off-schedule"}
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_weekly_report'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already sent today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_weekly_report', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    from workers.weekly_report import generate_weekly_report
+
+    return generate_weekly_report()
+
+
+@app.function(secrets=secrets, timeout=300)
+def weekly_report_now(dry_run: bool = False) -> dict:
+    """On-demand weekly report. `modal run modal_app.py::weekly_report_now --dry-run`."""
+    from workers.weekly_report import generate_weekly_report
+
+    return generate_weekly_report(dry_run=dry_run)
+
+
+def _maybe_draft_revivals() -> dict:
+    """Draft revival nudges for quiet deals once a day (at/after 14:00 UTC). Date-guarded in
+    app_settings, marker stamped BEFORE the run (a mid-run crash must not retry hourly and
+    re-bill LLM drafting). The drafts themselves are inert until operator approval."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.hour < 14:
+        return {"skipped": "off-schedule"}
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_revival_scan'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_revival_scan', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        conn.commit()
+    from workers.revival import draft_revivals
+
+    return draft_revivals(limit=5, time_budget_s=240)
+
+
+@app.function(secrets=secrets, timeout=600)
+def revival_now(dry_run: bool = False, limit: int = 5) -> dict:
+    """On-demand revival scan. `modal run modal_app.py::revival_now --dry-run`."""
+    from workers.revival import draft_revivals
+
+    return draft_revivals(limit=limit, dry_run=dry_run)
+
+
+def _maybe_case_studies() -> dict:
+    """Proof loop, once a day at/after 14:00 UTC (app_settings date guard, stamped before the
+    run): testimonial asks for freshly-won deals every day; the build-in-public case-study
+    post only when the last one is 28+ days old (its own marker)."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from config import require
+
+    now = datetime.now(UTC)
+    if now.hour < 14:
+        return {"skipped": "off-schedule"}
+    today = now.date().isoformat()
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute("select value from app_settings where key = 'last_proof_scan'")
+        row = cur.fetchone()
+        if row and str(row[0]).strip('"') == today:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value, updated_at) values ('last_proof_scan', %s::jsonb, now()) "
+            "on conflict (key) do update set value = excluded.value, updated_at = now()",
+            (_json.dumps(today),),
+        )
+        # Case-study cadence rides its own marker (28 days).
+        cur.execute("select updated_at from app_settings where key = 'last_case_study_post'")
+        cs_row = cur.fetchone()
+        cs_due = cs_row is None or (now - cs_row[0]).days >= 28
+        if cs_due:
+            cur.execute(
+                "insert into app_settings (key, value, updated_at) values ('last_case_study_post', %s::jsonb, now()) "
+                "on conflict (key) do update set value = excluded.value, updated_at = now()",
+                (_json.dumps(today),),
+            )
+        conn.commit()
+
+    from workers.case_studies import draft_testimonial_asks, generate_case_study_post
+
+    asks = draft_testimonial_asks(limit=3)
+    result: dict = {"testimonial_asks": asks}
+    if cs_due:
+        result["case_study"] = generate_case_study_post()
+    return result
+
+
+@app.function(secrets=secrets, timeout=300)
+def client_digest_now(app_name: str = "outreach", to_email: str = "", dry_run: bool = True) -> dict:
+    """Render (or send) the client-facing agent-ops report for one watched app.
+    `modal run modal_app.py::client_digest_now --app-name outreach --dry-run`."""
+    from workers.error_agent import client_digest
+
+    return client_digest(app_name, to_email=to_email or None, dry_run=dry_run)
+
+
+@app.function(secrets=secrets, timeout=600)
+def case_study_now(dry_run: bool = False) -> dict:
+    """On-demand proof loop. `modal run modal_app.py::case_study_now --dry-run`."""
+    from workers.case_studies import draft_testimonial_asks, generate_case_study_post
+
+    return {
+        "testimonial_asks": draft_testimonial_asks(limit=3, dry_run=dry_run),
+        "case_study": generate_case_study_post(dry_run=dry_run),
+    }
 
 
 def _maybe_generate_newsletter() -> dict:
@@ -337,6 +499,15 @@ def _maybe_sweep_opportunities() -> dict:
     from workers.opportunity_sourcing import source_all
 
     result = source_all(dry_run=False, time_budget_s=500)
+    # Opt-in, OFF by default: auto-place approved Freelancer bids (guarded by min-fit + daily
+    # cap in the worker). Runs after the sweep so freshly auto-approved strong-fit bids can go
+    # same-day. Best-effort — a submit failure must not fail the sweep.
+    try:
+        from workers.bids_autosubmit import submit_ready_freelancer
+
+        result["freelancer_autosubmit"] = submit_ready_freelancer(auto=True)
+    except Exception as e:  # noqa: BLE001
+        result.setdefault("errors", []).append(f"freelancer autosubmit: {e}")
     # Email the operator ONLY when the sweep actually drafted proposals — so /bids never
     # needs speculative checking. A mail hiccup must not fail the sweep, but it MUST be
     # visible: notify() reports most failures by returning {"sent": False} (not raising),
@@ -393,6 +564,106 @@ def opportunities_sweep_now(dry_run: bool = False) -> dict:
     from workers.opportunity_sourcing import source_all
 
     return _logged("opportunities_sweep", source_all(dry_run=dry_run, time_budget_s=800))
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def bid_submit(request_body: dict) -> dict:
+    """Dashboard-triggered bid submission via the source platform's official API (currently
+    Freelancer.com only — see workers/bids_submit.py for why the others stay manual).
+    Human-initiated per bid; nothing scheduled ever calls this. Reuses CONTENT_WEBHOOK_TOKEN.
+    Body: {"token": ..., "opportunity_id": "...", "amount": 1500, "period_days": 7}."""
+    import os
+
+    from fastapi import HTTPException
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    if not token or request_body.get("token") != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+    opportunity_id = request_body.get("opportunity_id")
+    if not opportunity_id:
+        raise HTTPException(status_code=400, detail="opportunity_id required")
+    amount = request_body.get("amount")
+    period = int(request_body.get("period_days") or 7)
+    from workers.bids_submit import submit_freelancer_bid
+
+    try:
+        result = submit_freelancer_bid(
+            str(opportunity_id),
+            amount=float(amount) if amount else None,
+            period_days=period,
+        )
+    except Exception as e:  # noqa: BLE001 — surface the reason to the dashboard verbatim
+        return {"submitted": False, "error": str(e)[:300]}
+    return _logged("bid_submitted", result)
+
+
+@app.function(secrets=secrets, timeout=60)
+def bid_submit_now(opportunity_id: str, amount: float = 0.0, period_days: int = 7) -> dict:
+    """One-shot CLI submission: `modal run modal_app.py::bid_submit_now --opportunity-id <uuid>
+    [--amount 1500] [--period-days 7]`. Same guards as the webhook."""
+    from workers.bids_submit import submit_freelancer_bid
+
+    result = submit_freelancer_bid(
+        opportunity_id, amount=amount if amount > 0 else None, period_days=period_days
+    )
+    return _logged("bid_submitted", result)
+
+
+@app.function(secrets=secrets, timeout=180)
+def track_bids_cron() -> dict:
+    """Poll platform APIs for outcomes AND client messages on submitted bids (Freelancer).
+    Hourly because awards are accept-within-a-window; zero API calls when nothing outstanding.
+    `modal run modal_app.py::track_bids_cron` for an ad-hoc check."""
+    from workers.bids_track import poll_freelancer_bids, poll_freelancer_messages
+
+    out = {"outcomes": poll_freelancer_bids()}
+    try:
+        out["messages"] = poll_freelancer_messages()
+    except Exception as e:  # noqa: BLE001
+        out["messages"] = {"error": str(e)[:200]}
+    return _logged("cron_track_bids", out)
+
+
+@app.function(secrets=secrets, timeout=180)
+@modal.fastapi_endpoint(method="POST")
+def bids_submit_ready(request_body: dict) -> dict:
+    """Dashboard "Submit all ready" — places every approved Freelancer bid via their API
+    (human-initiated batch; the operator clicked). Reuses CONTENT_WEBHOOK_TOKEN."""
+    import os
+
+    from fastapi import HTTPException
+
+    token = os.environ.get("CONTENT_WEBHOOK_TOKEN")
+    if not token or request_body.get("token") != token:
+        raise HTTPException(status_code=401, detail="bad or missing token")
+    from workers.bids_autosubmit import submit_ready_freelancer
+
+    return _logged("bids_submit_ready", submit_ready_freelancer(auto=False))
+
+
+@app.function(secrets=secrets, timeout=120)
+def bids_sources_check(sources: str = "") -> dict:
+    """Fetch-only connectivity check for bidding sources — no scoring, no drafting, no DB
+    writes. `modal run modal_app.py::bids_sources_check --sources freelancer,remoteok`.
+    Default checks everything EXCEPT sam_gov (its free tier is ~10 requests/DAY — name it
+    explicitly when you mean to spend one)."""
+    from workers.opportunity_sourcing import SOURCES
+
+    wanted = {s.strip() for s in sources.split(",") if s.strip()} or {
+        n for n, _ in SOURCES if n != "sam_gov"
+    }
+    out: dict = {}
+    for name, fn in SOURCES:
+        if name not in wanted:
+            continue
+        try:
+            rows = fn() or []
+            out[name] = {"fetched": len(rows), "sample": rows[0]["title"][:70] if rows else None}
+        except Exception as e:  # noqa: BLE001
+            out[name] = {"error": str(e)[:200]}
+    print(out)
+    return out
 
 
 @app.function(secrets=secrets, timeout=300)
@@ -614,6 +885,23 @@ def content_generate_bg(action: str, fmt: str | None = None, tool: str | None = 
     return {"error": f"unknown action {action}"}
 
 
+@app.function(secrets=secrets, timeout=600)
+def meeting_process_bg(meeting_id: str) -> dict:
+    """Background meeting-transcript processing. Spawned by content_webhook so the dashboard's
+    request returns instantly; long transcripts can take a couple of minutes to extract."""
+    from workers.meetings import process_meeting
+
+    return _logged("meeting_process", process_meeting(meeting_id))
+
+
+@app.function(secrets=secrets, timeout=600)
+def meeting_process_now(meeting_id: str) -> dict:
+    """On-demand transcript processing. `modal run modal_app.py::meeting_process_now --meeting-id X`."""
+    from workers.meetings import process_meeting
+
+    return process_meeting(meeting_id)
+
+
 @app.function(secrets=secrets, timeout=120)
 @modal.fastapi_endpoint(method="POST")
 def content_webhook(request_body: dict, x_content_token: str | None = None) -> dict:
@@ -655,6 +943,11 @@ def content_webhook(request_body: dict, x_content_token: str | None = None) -> d
         from workers.research import prepare_deal
 
         return prepare_deal(request_body.get("deal_id"))
+    if action == "process_meeting":
+        # Spawn and return — extraction on a long transcript outlives an HTTP request. The
+        # dashboard polls the meeting row's status instead.
+        meeting_process_bg.spawn(request_body.get("meeting_id") or "")
+        return {"spawned": True}
     if action == "newsletter_generate":
         from workers.newsletter import generate_issue
 
@@ -887,6 +1180,73 @@ def audit_run(request_body: dict) -> dict:
         company=request_body.get("company"),
         ip=request_body.get("ip"),
     )
+
+
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def concierge_chat(request_body: dict) -> dict:
+    """Public site concierge — called server-side by the Agentry site's /api/concierge proxy.
+    Open by design (like audit/roast); cost bounded by per-session turn caps + small max_tokens.
+    Body: {"session_id": "...", "page": "/", "messages": [{"role","content"}, ...]}."""
+    from workers.concierge import chat
+
+    return chat(
+        session_id=str(request_body.get("session_id") or ""),
+        page=request_body.get("page"),
+        messages=request_body.get("messages") or [],
+    )
+
+
+@app.function(secrets=secrets, timeout=600)
+def assessment_synthesize_bg(session_id: str) -> dict:
+    """Background process-map synthesis for a finished assessment interview."""
+    from workers.assessment import synthesize
+
+    return _logged("assessment_synthesize", synthesize(session_id))
+
+
+@app.function(secrets=secrets, timeout=90)
+@modal.fastapi_endpoint(method="POST")
+def assessment_chat(request_body: dict) -> dict:
+    """Public guided-assessment interview — called by the site's /api/assessment proxy.
+    Open by design (like concierge); cost bounded by turn caps + small max_tokens.
+    Body: {"session_id","contact":{name,company,website,email},"messages":[...]}.
+    When the interview finishes, synthesis is spawned in the background; the client polls
+    assessment_result."""
+    from workers.assessment import interview_turn
+
+    out = interview_turn(
+        session_id=str(request_body.get("session_id") or ""),
+        contact=request_body.get("contact") or {},
+        messages=request_body.get("messages") or [],
+    )
+    if out.get("done"):
+        try:
+            assessment_synthesize_bg.spawn(str(request_body.get("session_id") or ""))
+        except Exception as e:  # noqa: BLE001 — synthesis can be retried via CLI
+            print("assessment spawn error:", str(e)[:150])
+    return out
+
+
+@app.function(secrets=secrets, timeout=30)
+@modal.fastapi_endpoint(method="GET")
+def assessment_result(session_id: str = "") -> dict:
+    """Public poll for a session's process-map PREVIEW (top 3 only — the full map is the paid
+    deliverable). Session ids are unguessable client-generated tokens, like share links."""
+    from workers.assessment import get_result
+
+    return get_result(session_id)
+
+
+@app.function(secrets=secrets, timeout=600)
+def assessment_now(session_id: str = "", report: bool = False) -> dict:
+    """Operator CLI: re-run synthesis or print the full internal report for a session.
+    `modal run modal_app.py::assessment_now --session-id X --report`."""
+    from workers.assessment import report_md, synthesize
+
+    if report:
+        return {"report": report_md(session_id)}
+    return synthesize(session_id)
 
 
 @app.function(secrets=secrets, timeout=120)
@@ -1364,6 +1724,39 @@ def dispatch_comments_now(dry_run: bool = False, force: bool = False) -> dict:
     return dispatch_due_comments(dry_run=dry_run, force=force)
 
 
+@app.function(secrets=[modal.Secret.from_name("trading")], timeout=60)
+def trading_failures_fetch(days: int = 21) -> dict:
+    """Read the trading bot's recent alert rows using the `trading` secret's OWN DATABASE_URL.
+
+    The error agent calls this remotely (same app, different secret), so the trading DB
+    credential never has to be copied into the outreach secret — Modal dashboards don't
+    reveal secret values after creation, which made that copy step a dead end. Returns
+    {"alerts": [[ts_iso, subject, body], ...]}; degrades to an empty list on any failure.
+    """
+    import json as _json
+    import os
+
+    import psycopg
+
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        return {"error": "trading secret has no DATABASE_URL", "alerts": []}
+    try:
+        with psycopg.connect(url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "select ts, detail from activity where kind in ('alert','notify_error') "
+                "and ts > now() - (%s || ' days')::interval order by ts",
+                (int(days),),
+            )
+            alerts = []
+            for ts, detail in cur.fetchall():
+                d = detail if isinstance(detail, dict) else _json.loads(detail or "{}")
+                alerts.append([ts.isoformat(), (d.get("subject") or "")[:300], (d.get("body") or "")[:2000]])
+        return {"alerts": alerts}
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:200], "alerts": []}
+
+
 def _error_digest_due() -> bool:
     """True at most once per day, first tick at/after 14:00 UTC — the daily error-digest gate."""
     import json as _json
@@ -1492,6 +1885,9 @@ def hourly_dispatcher() -> dict:
         ("send_approved", send_approved_cron, 600),
         ("dispatch_comments", dispatch_comments_cron, 600),
         ("ramp_caps", ramp_caps_cron, 180),
+        # Bid outcomes: hourly because a Freelancer award must be accepted within their
+        # window; no-op (zero API calls) when no submitted bids are outstanding.
+        ("track_bids", track_bids_cron, 120),
         ("error_agent", error_agent_cron, 600),
     )
     results: dict = {}

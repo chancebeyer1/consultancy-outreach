@@ -5,8 +5,14 @@ alerts.alert), but recurring known failures are consolidated into ONE digest wit
 proposed fix (a GitHub PR when configured, else a ready-to-apply edit in the email). Runs
 server-side (Modal) so it works while the operator is away.
 
+MULTI-SOURCE: the agent watches every app in APPS whose DB env var is set (unset = skipped, so
+adding a source is pure config). Tickets from all apps land in THIS db's error_tickets with their
+`app` tag; analysis and PRs are app-aware (apps without local code get traceback-only analysis;
+apps without a repo get digest-only fixes). client_digest() renders a sanitized, plain-language
+status report per app — the artifact behind the agent-ops monitoring retainer.
+
 Flow per run:
-  collect()      alert_log (deduped registry) + activity_log (full traceback)  ->  error_tickets
+  collect()      each app's alert_log (deduped registry) + activity_log (traceback) -> error_tickets
   analyze_new()  for each new ticket: read the code at the traceback, Claude proposes a surgical fix
   open_prs()     for analyzed tickets with a fix: open a gated GitHub PR (human merges to deploy)
   send_digest()  one consolidated email of open issues (daily)
@@ -34,6 +40,38 @@ STALE_RESOLVE_DAYS = 4     # a failure not seen this long is treated as resolved
 LOOKBACK_DAYS = 21         # how far back in alert_log to consider "active"
 _SKIP_PATH = ("site-packages", "/pkg/", "python3.", "dist-packages", "<string>")
 
+# Watched apps. Each needs an alert_log + activity_log in the DB its env var points at (the
+# trading bot is built on the same stack). An app activates ONLY when its db env var is set;
+# `local_code` = this process can read the app's source for fix-writing (only the outreach
+# backend is mounted on Modal); `repo_env` names the GitHub repo PRs should target (unset →
+# digest-only fixes for that app). Ticket signatures are namespaced per app to avoid cross-app
+# collisions — EXCEPT outreach, whose raw signatures the alerts.alert() suppression hook matches.
+APPS: dict[str, dict[str, Any]] = {
+    "outreach": {"db_env": "DATABASE_URL", "repo_env": "GITHUB_REPO", "local_code": True},
+    "trading-bot": {"db_env": "TRADING_DATABASE_URL", "repo_env": "TRADING_GITHUB_REPO",
+                    "local_code": False},
+}
+
+
+def _sig_key(app: str, sig: str) -> str:
+    return sig if app == "outreach" else f"{app[:10]}:{sig}"[:40]
+
+
+def _app_db_url(app: str) -> str | None:
+    import os
+
+    cfg = APPS.get(app) or {}
+    return os.environ.get(cfg.get("db_env") or "") or None
+
+
+def _app_repo(app: str) -> str | None:
+    import os
+
+    cfg = APPS.get(app) or {}
+    if app == "outreach":
+        return None  # open_fix_pr's default (GITHUB_REPO) already targets the outreach repo
+    return os.environ.get(cfg.get("repo_env") or "") or None
+
 # Many failures surface as a controlled error DICT (a cron catches the exception and returns
 # {"error": ...}) with no traceback file:line. Map the process/summary to its likely source files so
 # the agent still gets code to write an applyable fix against.
@@ -42,6 +80,10 @@ _SOURCE_HINTS: dict[str, list[str]] = {
     "email_followup": ["workers/email_sender.py"],
     "email": ["workers/email_sender.py"],
     "send_approved": ["workers/sequence_send.py", "workers/email_sender.py"],
+    # cron_send failures name the channel ("linkedin: 1 failed") — without these hints the
+    # analyzer got NO code and couldn't propose a fix (the Unipile-301 ticket, 2026-07-18).
+    "cron_send": ["workers/sequence_send.py", "clients/unipile.py"],
+    "linkedin": ["workers/sequence_send.py", "clients/unipile.py"],
     "replenish": ["workers/replenish.py", "workers/apollo_sourcing.py"],
     "detect_connection": ["workers/sequence_send.py"],
     "progress_sequences": ["workers/sequence_send.py"],
@@ -155,8 +197,111 @@ def _extract_detail(meta: Any) -> str:
 # collect
 # ---------------------------------------------------------------------------
 
+def _trading_summary(subject: str, body: str) -> str | None:
+    """Ticket summary for one trading-bot alert — or None for non-failures we don't ticket.
+
+    'stop hit: X' is normal risk management (a trade, not an error). 'worker failure' alerts get
+    the exception class appended so distinct failure modes (403 vs ReadTimeout) become distinct
+    tickets instead of one blurred bucket."""
+    s = re.sub(r"^\[trading-bot ALERT\]\s*", "", subject or "").strip()
+    if s.lower().startswith("stop hit"):
+        return None
+    if s.lower().startswith("worker failure"):
+        m = re.search(r"([A-Za-z]+(?:Error|Timeout|Exception))", body or "")
+        return f"worker failure: {m.group(1)}" if m else "worker failure"
+    return s[:150] or None
+
+
+def summarize_trading_alerts(alerts: list[tuple]) -> list[tuple]:
+    """Group raw (ts, subject, body) trading alerts into agent ticket rows.
+
+    Shared by the live collector and the one-off backfill so signatures always match.
+    Returns (sig, source, summary, count, first_seen, last_sent, detail_latest_body)."""
+    import hashlib
+
+    grouped: dict[str, dict] = {}
+    for ts, subject, body in alerts:
+        summary = _trading_summary(subject or "", body or "")
+        if not summary:
+            continue
+        g = grouped.setdefault(summary, {"count": 0, "first": ts, "last": ts, "body": body})
+        g["count"] += 1
+        if ts < g["first"]:
+            g["first"] = ts
+        if ts >= g["last"]:
+            g["last"], g["body"] = ts, body
+    out = []
+    for summary, g in grouped.items():
+        sig = hashlib.sha1(f"trading-bot|{summary}".encode("utf-8", "ignore")).hexdigest()[:20]
+        out.append((sig, "trading-bot", summary, g["count"], g["first"], g["last"], (g["body"] or "")[:4000]))
+    return out
+
+
+def _trading_alerts_remote() -> list[tuple]:
+    """Trading alerts via the `trading_failures_fetch` Modal function (which carries the
+    `trading` secret) — no credential copying between secrets. [] on any failure."""
+    try:
+        import modal
+
+        fn = modal.Function.from_name("consultancy-outreach", "trading_failures_fetch")
+        res = fn.remote(days=LOOKBACK_DAYS)
+        out: list[tuple] = []
+        for ts, subject, body in (res.get("alerts") if isinstance(res, dict) else None) or []:
+            out.append((datetime.fromisoformat(ts), subject or "", body or ""))
+        return out
+    except Exception as e:  # noqa: BLE001 — trading source is best-effort, never blocks outreach
+        print(f"error_agent: trading remote fetch failed: {str(e)[:120]}")
+        return []
+
+
+def _read_app_failures(app: str, db_url: str | None) -> list[tuple]:
+    """(sig, source, summary, count, first_seen, last_sent, detail) rows from one app's DB.
+    Empty on any failure — a missing table or unreachable DB must never break the other apps."""
+    if app == "trading-bot" and not db_url:
+        # No TRADING_DATABASE_URL configured — fetch through the trading-secret-bearing
+        # Modal function instead (the default path; the env var remains a manual override).
+        return summarize_trading_alerts(_trading_alerts_remote())
+    rows_out: list[tuple] = []
+    try:
+        with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+            if app == "trading-bot":
+                # Different stack: one `activity(ts, kind, detail jsonb)` table; alerts are
+                # kind='alert' rows with {subject, body} in detail. No alert_log/activity_log.
+                cur.execute(
+                    "select ts, detail from activity where kind in ('alert','notify_error') "
+                    "and ts > now() - (%s || ' days')::interval order by ts",
+                    (LOOKBACK_DAYS,),
+                )
+                raw = []
+                for ts, detail in cur.fetchall():
+                    d = detail if isinstance(detail, dict) else json.loads(detail or "{}")
+                    raw.append((ts, d.get("subject") or "", d.get("body") or ""))
+                return summarize_trading_alerts(raw)
+            cur.execute(
+                "select signature, source, summary, count, first_seen, last_sent_at from alert_log "
+                "where last_sent_at > now() - (%s || ' days')::interval order by last_sent_at desc",
+                (LOOKBACK_DAYS,),
+            )
+            rows = cur.fetchall()
+            for sig, source, summary, count, first_seen, last_sent in rows:
+                cur.execute(
+                    "select meta from activity_log where action = %s and meta::text ilike '%%error%%' "
+                    "order by created_at desc limit 1",
+                    (source,),
+                )
+                mrow = cur.fetchone()
+                detail = _extract_detail(mrow[0]) if mrow else summary
+                rows_out.append((sig, source, summary, count, first_seen, last_sent, detail))
+    except Exception as e:  # noqa: BLE001
+        print(f"error_agent: collect skipped app '{app}': {str(e)[:120]}")
+        return []
+    return rows_out
+
+
 def collect() -> dict[str, Any]:
-    """Sync alert_log failures into error_tickets, attaching the fullest traceback from activity_log."""
+    """Sync every watched app's alert_log failures into THIS db's error_tickets, attaching the
+    fullest traceback from that app's activity_log."""
+    per_app: dict[str, int] = {}
     new_or_reopened = 0
     with _connect() as conn, conn.cursor() as cur:
         # Auto-resolve anything not seen for a while (reopens automatically if it recurs).
@@ -166,46 +311,42 @@ def collect() -> dict[str, Any]:
             "(%s || ' days')::interval",
             (STALE_RESOLVE_DAYS,),
         )
-        cur.execute(
-            "select signature, source, summary, count, first_seen, last_sent_at from alert_log "
-            "where last_sent_at > now() - (%s || ' days')::interval order by last_sent_at desc",
-            (LOOKBACK_DAYS,),
-        )
-        rows = cur.fetchall()
-        for sig, source, summary, count, first_seen, last_sent in rows:
-            cur.execute(
-                "select meta from activity_log where action = %s and meta::text ilike '%%error%%' "
-                "order by created_at desc limit 1",
-                (source,),
-            )
-            mrow = cur.fetchone()
-            detail = _extract_detail(mrow[0]) if mrow else summary
-            cur.execute(
-                """
-                insert into error_tickets (signature, app, source, summary, detail, occurrences,
-                                           first_seen, last_seen)
-                values (%s,'outreach',%s,%s,%s,%s,%s,%s)
-                on conflict (signature) do update set
-                  occurrences = excluded.occurrences,
-                  last_seen   = greatest(error_tickets.last_seen, excluded.last_seen),
-                  summary     = excluded.summary,
-                  detail      = coalesce(excluded.detail, error_tickets.detail),
-                  status      = case when error_tickets.status = 'resolved'
-                                      and excluded.last_seen > error_tickets.resolved_at
-                                     then 'new' else error_tickets.status end,
-                  resolved_at = case when error_tickets.status = 'resolved'
-                                      and excluded.last_seen > error_tickets.resolved_at
-                                     then null else error_tickets.resolved_at end,
-                  updated_at  = now()
-                returning (xmax = 0) as inserted, status
-                """,
-                (sig, source, summary, detail, count or 1, first_seen, last_sent),
-            )
-            ins, status = cur.fetchone()
-            if ins or status == "new":
-                new_or_reopened += 1
+        for app in APPS:
+            db_url = _app_db_url(app)
+            # trading-bot needs no env var: without one it reads via the trading-secret-bearing
+            # Modal function (_trading_alerts_remote). Other apps stay env-gated.
+            if not db_url and app != "trading-bot":
+                continue  # app not configured — pure config gate
+            rows = _read_app_failures(app, db_url)
+            per_app[app] = len(rows)
+            for sig, source, summary, count, first_seen, last_sent, detail in rows:
+                cur.execute(
+                    """
+                    insert into error_tickets (signature, app, source, summary, detail, occurrences,
+                                               first_seen, last_seen)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s)
+                    on conflict (signature) do update set
+                      occurrences = excluded.occurrences,
+                      last_seen   = greatest(error_tickets.last_seen, excluded.last_seen),
+                      summary     = excluded.summary,
+                      detail      = coalesce(excluded.detail, error_tickets.detail),
+                      status      = case when error_tickets.status = 'resolved'
+                                          and excluded.last_seen > error_tickets.resolved_at
+                                         then 'new' else error_tickets.status end,
+                      resolved_at = case when error_tickets.status = 'resolved'
+                                          and excluded.last_seen > error_tickets.resolved_at
+                                         then null else error_tickets.resolved_at end,
+                      updated_at  = now()
+                    returning (xmax = 0) as inserted, status
+                    """,
+                    (_sig_key(app, sig), app, source, summary, detail, count or 1,
+                     first_seen, last_sent),
+                )
+                ins, status = cur.fetchone()
+                if ins or status == "new":
+                    new_or_reopened += 1
         conn.commit()
-    return {"scanned": len(rows), "new_or_reopened": new_or_reopened}
+    return {"scanned": per_app, "new_or_reopened": new_or_reopened}
 
 
 # ---------------------------------------------------------------------------
@@ -216,18 +357,26 @@ def analyze_new(*, max_n: int = 8) -> dict[str, Any]:
     """Root-cause each un-analyzed ticket with code context; store the proposed fix."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "select signature, source, summary, detail, occurrences from error_tickets "
-            "where status = 'new' order by occurrences desc limit %s",
+            "select signature, source, summary, detail, occurrences, coalesce(app,'outreach'), "
+            "fix_summary from error_tickets where status = 'new' order by occurrences desc limit %s",
             (max_n,),
         )
         tickets = cur.fetchall()
 
     analyzed = 0
-    for sig, source, summary, detail, occ in tickets:
+    for sig, source, summary, detail, occ, app, prior_fix in tickets:
+        # Only apps whose source tree is mounted here get code context; others are analyzed
+        # from the traceback alone (root cause still lands in the digest, PR step self-skips).
+        has_code = bool((APPS.get(app) or {}).get("local_code"))
         payload = {
-            "source": source, "app": "outreach", "summary": summary,
+            "source": source, "app": app, "summary": summary,
             "detail": detail or "", "occurrences": occ,
-            "code_context": _code_context(detail or "", source=source, summary=summary),
+            # A reopened ticket carries the note it was last resolved with — the analyzer
+            # judges "fix failed" vs "expected residual" instead of re-deriving from scratch.
+            "prior_fix": prior_fix or "",
+            "code_context": (
+                _code_context(detail or "", source=source, summary=summary) if has_code else []
+            ),
         }
         try:
             res = claude.call_json(
@@ -240,19 +389,31 @@ def analyze_new(*, max_n: int = 8) -> dict[str, Any]:
             print(f"error_agent: analysis failed for {sig}, will retry next run: {str(e)[:150]}")
             continue
         fix = res.get("fix") if isinstance(res, dict) else None
+        conf = float(res.get("confidence") or 0) if isinstance(res.get("confidence"), (int, float)) else None
+        # Auto-close confident non-bugs (working-as-designed alerts, gracefully-handled errors,
+        # one-off transients) instead of parking them in the digest as "needs a human look"
+        # forever. Recurrence reopens + re-analyzes as usual; they show in the digest's
+        # "Resolved since yesterday" line, so nothing is silently dropped.
+        not_a_bug = res.get("is_real_bug") is False and (conf or 0) >= 0.8
+        fix_note = (fix or {}).get("summary") if isinstance(fix, dict) else None
+        if not_a_bug and not fix_note:
+            fix_note = f"auto-closed (not a bug): {str(res.get('one_line') or res.get('root_cause') or '')[:200]}"
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "update error_tickets set status='analyzed', severity=%s, confidence=%s, risk=%s, "
+                "update error_tickets set status=%s, severity=%s, confidence=%s, risk=%s, "
                 "root_cause=%s, fix_summary=%s, fix_file=%s, analysis=%s, analyzed_at=now(), "
+                "resolved_at=case when %s then now() else resolved_at end, "
                 "updated_at=now() where signature=%s",
                 (
+                    "resolved" if not_a_bug else "analyzed",
                     str(res.get("severity") or "medium")[:20],
-                    float(res.get("confidence") or 0) if isinstance(res.get("confidence"), (int, float)) else None,
+                    conf,
                     str(res.get("risk") or "")[:20],
                     str(res.get("root_cause") or "")[:2000],
-                    (fix or {}).get("summary") if isinstance(fix, dict) else None,
+                    fix_note,
                     (fix or {}).get("file") if isinstance(fix, dict) else None,
                     json.dumps(res, default=str),
+                    not_a_bug,
                     sig,
                 ),
             )
@@ -275,7 +436,8 @@ def open_prs(*, max_n: int = 5) -> dict[str, Any]:
         return {"skipped": "github not configured", "opened": 0}
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "select signature, source, summary, root_cause, analysis from error_tickets "
+            "select signature, source, summary, root_cause, analysis, coalesce(app,'outreach') "
+            "from error_tickets "
             "where status = 'analyzed' and analysis is not null order by last_seen desc limit %s",
             (max_n,),
         )
@@ -283,12 +445,15 @@ def open_prs(*, max_n: int = 5) -> dict[str, Any]:
 
     opened = 0
     results: list[dict] = []
-    for sig, source, summary, root_cause, analysis in rows:
+    for sig, source, summary, root_cause, analysis, app in rows:
         a = analysis if isinstance(analysis, dict) else json.loads(analysis or "{}")
         fix = a.get("fix")
         if not (a.get("is_real_bug") and isinstance(fix, dict) and fix.get("file")
                 and fix.get("old_string") and fix.get("new_string")):
             continue  # nothing to PR — stays 'analyzed', carried in the digest
+        repo_override = _app_repo(app)
+        if app != "outreach" and not repo_override:
+            continue  # no repo configured for this app — digest-only fix
         title = f"errorfix: {source} — {(fix.get('summary') or summary)[:60]}"
         body = (
             f"Automated fix proposed by the Error Agent for a recurring failure.\n\n"
@@ -300,6 +465,7 @@ def open_prs(*, max_n: int = 5) -> dict[str, Any]:
         r = github_pr.open_fix_pr(
             branch=_branch_name(sig), title=title, body=body,
             file_path=fix["file"], old_string=fix["old_string"], new_string=fix["new_string"],
+            repo=repo_override,
         )
         results.append({"source": source, **r})
         if r.get("pr_url"):
@@ -334,7 +500,7 @@ def send_digest(*, dry_run: bool = False) -> dict[str, Any]:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "select signature, source, summary, occurrences, severity, confidence, risk, "
-            "root_cause, fix_summary, pr_url, status from error_tickets "
+            "root_cause, fix_summary, pr_url, status, coalesce(app,'outreach') from error_tickets "
             "where status in ('new','analyzed','pr_opened') order by last_seen desc"
         )
         open_rows = cur.fetchall()
@@ -353,10 +519,12 @@ def send_digest(*, dry_run: bool = False) -> dict[str, Any]:
         f"{len(open_rows)} open issue(s) across your systems. {prs} have a fix PR ready to review. "
         "This digest replaces the per-error alert spam.\n",
     ]
-    for i, (sig, source, summary, occ, sev, conf, risk, cause, fixsum, pr, status) in enumerate(open_rows, 1):
+    apps_present = {r[11] for r in open_rows}
+    for i, (sig, source, summary, occ, sev, conf, risk, cause, fixsum, pr, status, app) in enumerate(open_rows, 1):
+        app_tag = f" [{app}]" if len(apps_present) > 1 else ""
         lines += [
             f"{'━' * 48}",
-            f"#{i}  [{(sev or 'medium').upper()}]  {source} — {summary}   (fired {occ}×)",
+            f"#{i}  [{(sev or 'medium').upper()}]{app_tag}  {source} — {summary}   (fired {occ}×)",
             f"   Cause: {(cause or '(pending analysis)')[:400]}",
         ]
         if pr:
@@ -385,6 +553,68 @@ def send_digest(*, dry_run: bool = False) -> dict[str, Any]:
             cur.execute("update error_tickets set digested_at=now() where status in ('new','analyzed','pr_opened')")
             conn.commit()
     return {"sent": bool(r.get("sent")), "open": len(open_rows), "prs": prs}
+
+
+# ---------------------------------------------------------------------------
+# client-facing digest — the agent-ops retainer artifact
+# ---------------------------------------------------------------------------
+
+_FRIENDLY_STATUS = {
+    "new": "detected — investigating",
+    "analyzed": "diagnosed — fix proposed, awaiting engineer review",
+    "pr_opened": "fix written — awaiting engineer review",
+}
+
+
+def client_digest(app: str, *, days: int = 7, to_email: str | None = None,
+                  dry_run: bool = True) -> dict[str, Any]:
+    """Plain-language weekly status report for ONE watched app — no stack traces, no jargon.
+    This is what a monitoring-retainer client receives about THEIR deployed agents. Template-
+    rendered (no LLM) so it can never fabricate. dry_run returns the preview; pass to_email +
+    dry_run=False to actually send (operator-initiated only — nothing calls this on a cron)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select summary, severity, status, occurrences, pr_url from error_tickets "
+            "where coalesce(app,'outreach') = %s and status in ('new','analyzed','pr_opened') "
+            "order by last_seen desc",
+            (app,),
+        )
+        open_rows = cur.fetchall()
+        cur.execute(
+            "select count(*) from error_tickets where coalesce(app,'outreach') = %s "
+            "and status = 'resolved' and resolved_at > now() - make_interval(days => %s)",
+            (app, days),
+        )
+        resolved_n = int((cur.fetchone() or [0])[0] or 0)
+
+    lines = [
+        f"Agent operations report — {app}",
+        f"Window: last {days} days",
+        "",
+    ]
+    if not open_rows:
+        lines.append("All monitored automations are healthy. No open issues.")
+    else:
+        lines.append(f"{len(open_rows)} item(s) being handled:")
+        for summary, sev, status, occ, pr in open_rows:
+            friendly = _FRIENDLY_STATUS.get(status, status)
+            lines.append(f"  - [{(sev or 'medium')}] {summary[:140]} — {friendly}")
+    lines.append("")
+    lines.append(
+        f"{resolved_n} issue(s) detected and resolved without your involvement in this window."
+    )
+    lines.append("")
+    lines.append("Every fix is reviewed by a human engineer before it ships. Questions? Just reply.")
+    body = "\n".join(lines)
+
+    if dry_run or not to_email:
+        return {"sent": False, "dry_run": True, "app": app, "open": len(open_rows),
+                "resolved": resolved_n, "preview": body}
+    from workers.email_sender import notify
+
+    r = notify(subject=f"Agent ops report — {app}: {len(open_rows)} open, {resolved_n} resolved",
+               body=body, to_email=to_email)
+    return {"sent": bool(r.get("sent")), "app": app, "open": len(open_rows), "resolved": resolved_n}
 
 
 # ---------------------------------------------------------------------------

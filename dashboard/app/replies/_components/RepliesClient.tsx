@@ -14,6 +14,9 @@ export type ScheduledRow = {
   due_at: string;
   body: string;
   lead_name: string | null;
+  // 'pending' = will auto-send when due; 'draft' = agent-drafted (revival) awaiting approval.
+  status: string;
+  kind: string;
 };
 
 interface Props {
@@ -36,6 +39,9 @@ export function RepliesClient({ initialRows, scheduled = [] }: Props) {
   const [activeId, setActiveId] = useState<string | null>(() => sortRows(initialRows)[0]?.reply.id ?? null);
   const [scheduledRows, setScheduledRows] = useState<ScheduledRow[]>(scheduled);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [approving, setApproving] = useState<string | null>(null);
+  const nudgeDrafts = useMemo(() => scheduledRows.filter((s) => s.status === "draft"), [scheduledRows]);
+  const pendingSends = useMemo(() => scheduledRows.filter((s) => s.status === "pending"), [scheduledRows]);
 
   const activeIdx = useMemo(() => {
     const i = rows.findIndex((r) => r.reply.id === activeId);
@@ -84,6 +90,29 @@ export function RepliesClient({ initialRows, scheduled = [] }: Props) {
     }
   }, []);
 
+  // Approve a revival nudge: draft → pending with due_at=now, so the next hourly
+  // scheduled-send tick delivers it (still machine-paced, never instant-blast).
+  const approveScheduled = useCallback(async (id: string) => {
+    setApproving(id);
+    try {
+      const res = await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve", id }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; due_at?: string };
+      if (res.ok && data.ok) {
+        setScheduledRows((prev) =>
+          prev.map((s) =>
+            s.id === id ? { ...s, status: "pending", due_at: data.due_at ?? new Date().toISOString() } : s,
+          ),
+        );
+      }
+    } finally {
+      setApproving(null);
+    }
+  }, []);
+
   const move = useCallback(
     (delta: number) => {
       if (rows.length === 0) return;
@@ -117,19 +146,59 @@ export function RepliesClient({ initialRows, scheduled = [] }: Props) {
   return (
     <div className="mx-auto flex max-w-7xl gap-6 px-6 py-6">
       <aside className="w-80 shrink-0">
-        {scheduledRows.length > 0 && (
+        {nudgeDrafts.length > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-900/60 bg-amber-950/20 p-3">
+            <div className="mb-2 text-xs uppercase tracking-wide text-amber-400/90">
+              Revival nudges to approve · {nudgeDrafts.length}
+            </div>
+            <ul className="space-y-3">
+              {nudgeDrafts.map((s) => (
+                <li key={s.id}>
+                  <div className="min-w-0 text-xs">
+                    <div className="truncate font-medium text-neutral-200">{s.lead_name || "?"}</div>
+                    <div className="text-neutral-500">
+                      {s.channel.startsWith("linkedin") ? "LinkedIn" : "Email"} · thread went quiet
+                    </div>
+                    <div className="mt-1 whitespace-pre-wrap rounded border border-neutral-800 bg-neutral-950 p-2 leading-relaxed text-neutral-300">
+                      {s.body}
+                    </div>
+                  </div>
+                  <div className="mt-1.5 flex gap-2">
+                    <button
+                      onClick={() => approveScheduled(s.id)}
+                      disabled={approving === s.id}
+                      className="rounded border border-emerald-800 bg-emerald-950/40 px-2 py-0.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-50"
+                    >
+                      {approving === s.id ? "…" : "Approve — send this"}
+                    </button>
+                    <button
+                      onClick={() => cancelScheduled(s.id)}
+                      disabled={cancelling === s.id}
+                      className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-400 hover:border-red-800 hover:bg-red-950/40 hover:text-red-300 disabled:opacity-50"
+                    >
+                      {cancelling === s.id ? "…" : "Dismiss"}
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {pendingSends.length > 0 && (
           <div className="mb-4 rounded-lg border border-neutral-800 bg-neutral-950 p-3">
             <div className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
-              Scheduled · {scheduledRows.length}
+              Scheduled · {pendingSends.length}
             </div>
             <ul className="space-y-2">
-              {scheduledRows.map((s) => (
+              {pendingSends.map((s) => (
                 <li key={s.id} className="flex items-start justify-between gap-2">
                   <div className="min-w-0 text-xs">
                     <div className="truncate font-medium text-neutral-300">{s.lead_name || "?"}</div>
                     <div className="text-neutral-500">
                       {s.channel.startsWith("linkedin") ? "LinkedIn" : "Email"} · sends{" "}
                       {new Date(s.due_at).toLocaleDateString()}
+                      {s.kind === "revival" ? " · nudge" : ""}
                     </div>
                     <div className="mt-0.5 line-clamp-1 text-neutral-600">{s.body}</div>
                   </div>

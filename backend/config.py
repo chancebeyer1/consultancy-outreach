@@ -108,8 +108,29 @@ class Config:
     # approved, complete OAuth2 and set a (refreshed) access token here. Unset → Upwork skipped.
     upwork_access_token: str = _env("UPWORK_ACCESS_TOKEN")
     upwork_org_id: str = _env("UPWORK_ORG_ID")  # optional tenant id for org-scoped tokens
+    # Apify Upwork scraper (neatrat/upwork-job-scraper) — a STOPGAP that SCRAPES upwork.com job
+    # listings until UPWORK_ACCESS_TOKEN (official API) is live. DOUBLE-GATED and OFF by default:
+    # the source stays skipped unless BOTH APIFY_TOKEN is set AND APIFY_UPWORK_ENABLED is truthy,
+    # so a token alone can't silently turn scraping on. Scraping upwork.com violates Upwork ToS —
+    # enable deliberately, and turn it off once the API clears. Discovery only; it never submits.
+    # Optional APIFY_UPWORK_QUERY overrides the default AI/agent search expression.
+    apify_token: str = _env("APIFY_TOKEN")
+    apify_upwork_enabled: bool = _env("APIFY_UPWORK_ENABLED", "") in ("1", "true", "True")
+    apify_upwork_query: str = _env("APIFY_UPWORK_QUERY")
     # Freelancer.com — self-serve token from freelancer.com Settings → API. Unset → skipped.
     freelancer_oauth_token: str = _env("FREELANCER_OAUTH_TOKEN")
+
+    # Bidding automation. AUTO-APPROVE: fit >= this (and is_software + eligible) → the drafted
+    # bid lands pre-approved in "Ready to submit" instead of "Needs approval". 0 = off (every
+    # bid waits for a human). A high floor (e.g. 80) keeps only strong-fit work hands-off.
+    bids_auto_approve_min_fit: int = int(_env("BIDS_AUTO_APPROVE_MIN_FIT", "0") or "0")
+    # FREELANCER AUTO-SUBMIT (opt-in, OFF by default): when '1', the daily job auto-PLACES
+    # approved Freelancer bids via their sanctioned API — no click. Guardrails below bound the
+    # blast radius (min fit + hard daily cap) because unattended bidding burns bid quota and
+    # can flag a new account. Only ever Freelancer (Upwork/SAM never auto-submit).
+    freelancer_auto_submit: bool = _env("FREELANCER_AUTO_SUBMIT", "") in ("1", "true", "True")
+    freelancer_auto_submit_min_fit: int = int(_env("FREELANCER_AUTO_SUBMIT_MIN_FIT", "80") or "80")
+    freelancer_auto_submit_daily_cap: int = int(_env("FREELANCER_AUTO_SUBMIT_DAILY_CAP", "3") or "3")
 
     # DB
     database_url: str = _env("DATABASE_URL")

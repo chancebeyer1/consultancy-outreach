@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { NAV, SITE } from "@/lib/site";
+import { VERTICALS } from "@/lib/verticals";
 
 import { NewsletterSignup } from "./NewsletterSignup";
 
@@ -27,6 +28,20 @@ export function SiteFooter() {
           <a href={`mailto:${SITE.email}`} className="hover:text-white">
             {SITE.email}
           </a>
+        </div>
+        {/* Industries column — the crawl path into the programmatic vertical pages. */}
+        <div className="flex flex-col gap-2 text-sm text-neutral-400">
+          <span className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
+            AI agents for
+          </span>
+          {VERTICALS.slice(0, 6).map((v) => (
+            <Link key={v.slug} href={`/ai-agents-for/${v.slug}`} className="hover:text-white">
+              {v.title.replace(/^AI Agents for /, "")}
+            </Link>
+          ))}
+          <Link href="/ai-agents-for" className="text-sky-400 hover:text-sky-300">
+            all industries →
+          </Link>
         </div>
       </div>
       <div className="border-t border-neutral-900 py-5 text-center text-[11px] text-neutral-600">

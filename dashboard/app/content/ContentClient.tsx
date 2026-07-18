@@ -1,6 +1,7 @@
 "use client";
 
 import clsx from "clsx";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -23,50 +24,98 @@ export type ContentPost = {
 export type BlogStats = { count: number; last: string | null; slug: string | null };
 
 export function ContentClient({
-  posts,
+  drafts,
+  recent,
+  page = 1,
+  totalPages = 1,
+  recentTotal = 0,
   autoBlog = false,
   blogStats = { count: 0, last: null, slug: null },
 }: {
-  posts: ContentPost[];
+  drafts: ContentPost[];
+  recent: ContentPost[];
+  page?: number;
+  totalPages?: number;
+  recentTotal?: number;
   autoBlog?: boolean;
   blogStats?: BlogStats;
 }) {
-  const drafts = posts.filter((p) => p.status === "draft");
-  const rest = posts.filter((p) => p.status !== "draft");
-
   return (
     <div className="space-y-8">
       <GeneratePanel />
       <AutoBlogPanel initialOn={autoBlog} stats={blogStats} />
-      <section>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-          Needs review {drafts.length > 0 && <span className="text-amber-400">· {drafts.length}</span>}
-        </h2>
-        {drafts.length === 0 ? (
-          <p className="rounded-lg border border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-sm italic text-neutral-600">
-            No drafts waiting. Pick a variant above and generate one — nothing is drafted automatically.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {drafts.map((p) => (
-              <Card key={p.id} post={p} editable />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {rest.length > 0 && (
+      {/* Drafts are the actionable queue — always shown in full, never paginated. Only render this
+          section on page 1 so paging through "Recent" doesn't repeat it. */}
+      {page === 1 && (
         <section>
           <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-            Recent
+            Needs review {drafts.length > 0 && <span className="text-amber-400">· {drafts.length}</span>}
           </h2>
-          <div className="space-y-3">
-            {rest.map((p) => (
-              <Card key={p.id} post={p} />
-            ))}
-          </div>
+          {drafts.length === 0 ? (
+            <p className="rounded-lg border border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-sm italic text-neutral-600">
+              No drafts waiting. Pick a variant above and generate one — nothing is drafted automatically.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {drafts.map((p) => (
+                <Card key={p.id} post={p} editable />
+              ))}
+            </div>
+          )}
         </section>
       )}
+
+      {(recent.length > 0 || page > 1) && (
+        <section>
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+            Recent {recentTotal > 0 && <span className="text-neutral-600">· {recentTotal}</span>}
+          </h2>
+          {recent.length === 0 ? (
+            <p className="rounded-lg border border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-sm italic text-neutral-600">
+              Nothing on this page.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {recent.map((p) => (
+                <Card key={p.id} post={p} />
+              ))}
+            </div>
+          )}
+          <Pager page={page} totalPages={totalPages} />
+        </section>
+      )}
+    </div>
+  );
+}
+
+// Prev/Next pagination for the Recent list. Uses <Link> (scroll:false keeps you in place while the
+// server swaps the page in) so the global TopLoader fires on click for instant feedback.
+function Pager({ page, totalPages }: { page: number; totalPages: number }) {
+  if (totalPages <= 1) return null;
+  const btn =
+    "rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-800";
+  const disabled = "pointer-events-none opacity-40";
+  return (
+    <div className="mt-4 flex items-center justify-between">
+      <Link
+        href={`/content?page=${page - 1}`}
+        scroll={false}
+        aria-disabled={page <= 1}
+        className={clsx(btn, page <= 1 && disabled)}
+      >
+        ← Newer
+      </Link>
+      <span className="text-[11px] text-neutral-500">
+        Page {page} of {totalPages}
+      </span>
+      <Link
+        href={`/content?page=${page + 1}`}
+        scroll={false}
+        aria-disabled={page >= totalPages}
+        className={clsx(btn, page >= totalPages && disabled)}
+      >
+        Older →
+      </Link>
     </div>
   );
 }
