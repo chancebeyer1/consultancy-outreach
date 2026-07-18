@@ -63,11 +63,27 @@ awaiting your call), **Approved — ready to submit**, **Submitted — awaiting 
 **Low fit — no bid drafted**. Approving moves the card to the Approved section; submitting
 moves it to Submitted, where it stays until the outcome lands.
 
-**Response tracking:** Freelancer outcomes auto-track hourly through their API (an award
-triggers an immediate email — accept it on Freelancer promptly, awards expire); everything
-else you mark **Won/Lost** on the card as replies arrive. Upwork proposal tracking needs API
-scopes we haven't been granted; SAM award-notice watching becomes worthwhile once federal
-submission is possible.
+**Response tracking:** Freelancer outcomes AND client messages auto-track hourly through their
+API (an award triggers an immediate email — accept it on Freelancer promptly, awards expire; a
+new client message emails you too); everything else you mark **Won/Lost** on the card as
+replies arrive. Upwork proposal tracking needs API scopes we haven't been granted; SAM
+award-notice watching becomes worthwhile once federal submission is possible.
+
+## Automation (all OFF by default — opt in per your risk tolerance)
+
+Set these in the Modal secret. Freelancer is the only platform anything auto-submits to — its
+API sanctions bid placement. **Upwork and SAM are never auto-submitted** (Upwork ToS bans it;
+SAM bids carry legal certifications you must sign yourself).
+
+- `BIDS_AUTO_APPROVE_MIN_FIT` — fit ≥ this (+ software + eligible) → the drafted bid lands
+  pre-approved in "Ready to submit" instead of "Needs approval". `0` = every bid waits for you.
+- **Batch submit** — the green "Submit N on Freelancer" button in the Approved section places
+  every approved Freelancer bid at once via their API. This is the recommended hands-off path:
+  auto-approve fills the ready list, you click once a day.
+- `FREELANCER_AUTO_SUBMIT=1` — full unattended: the daily job places approved Freelancer bids
+  with no click, bounded by `FREELANCER_AUTO_SUBMIT_MIN_FIT` (default 80) and
+  `FREELANCER_AUTO_SUBMIT_DAILY_CAP` (default 3). Leave OFF until you have reviews + a paid
+  Freelancer plan — unattended bidding burns bid quota and can flag a new account.
 
 - **Approve** — move to the ready-to-submit list.
 - **Submit on Freelancer** — places the bid through Freelancer's official API (amount
