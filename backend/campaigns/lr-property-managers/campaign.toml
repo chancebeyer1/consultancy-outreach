@@ -1,0 +1,24 @@
+# LawfulRent — Property Managers. Tanner's campaign #3 (created 2026-07-18).
+# Sender persona is Tanner (realtor, ex-property-management — peer credibility with
+# this audience). Targets people AT LA property-management firms: the ones who answer
+# "what's the max increase on this unit?" for owner clients all day. Goal: engaged
+# conversations → screen-share demo → founding membership; PM firms are also natural
+# channel partners (they bring owner clients).
+#
+# NOTE: the "property manager" keyword moved HERE from re-referral-partners
+# (2026-07-18) so this pitch owns the PM audience; global linkedin_url dedup means
+# PMs already sourced by the referral campaign are skipped, not double-messaged.
+# search.json is classic api (Unipile plan 403s sales_navigator). LA metro 90000049.
+
+name = "LawfulRent — Property Managers"
+slug = "lr-property-managers"
+is_default = false
+status = "active"
+
+owner_email = "tannerbuyhomes@gmail.com"
+
+landing_url = "https://lawfulrent.com"
+
+auto_send = true
+
+channels = ["linkedin_connect", "linkedin_dm"]

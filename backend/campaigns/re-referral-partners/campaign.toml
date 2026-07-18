@@ -8,6 +8,9 @@
 # market = Los Angeles County (LinkedIn geo 90000049, "Los Angeles Metropolitan Area").
 # search.json is classic api (the Unipile plan 403s sales_navigator; see
 # home-services-sprint/campaign.toml). His account: profiles.unipile_account_id.
+# 2026-07-18: "property manager" keyword moved to lr-property-managers (LawfulRent
+# pitch owns that audience now; global linkedin_url dedup prevents double-sourcing —
+# PMs already in this campaign stay here and keep the referral thread).
 
 name = "RE Referral Partners"
 slug = "re-referral-partners"

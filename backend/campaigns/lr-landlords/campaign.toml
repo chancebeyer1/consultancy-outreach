@@ -1,0 +1,26 @@
+# LawfulRent — LA Landlords (discovery). Tanner's campaign #2 (created 2026-07-18).
+# Sender persona is Tanner (realtor, ex-property-management) — voice.md/style.md here
+# override the globals. Goal: conversations with self-managing LA landlords that
+# (a) reveal how they handle rent-increase compliance today (audience discovery) and
+# (b) convert the engaged ones to LawfulRent founding members ($49/mo, first month $0
+# with the `launch` promo). lawfulrent.com. Never link the app demo (?demo=1) — that
+# is call-only.
+#
+# search.json is classic api (Unipile plan 403s sales_navigator). LA metro geo
+# 90000049. Routed to his LinkedIn via owner_email → campaigns.user_id →
+# profiles.unipile_account_id. Shares his account caps with his other campaigns.
+
+name = "LawfulRent — LA Landlords"
+slug = "lr-landlords"
+is_default = false
+status = "active"
+
+owner_email = "tannerbuyhomes@gmail.com"
+
+landing_url = "https://lawfulrent.com"
+
+# No draft-review surface exists — first-touch notes auto-approve (fit-gated >=60)
+# and send within his account caps.
+auto_send = true
+
+channels = ["linkedin_connect", "linkedin_dm"]

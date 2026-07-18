@@ -1,0 +1,22 @@
+# LawfulRent — Leasing Agent Partners. Tanner's campaign #4 (created 2026-07-18).
+# Sender persona is Tanner (he did hundreds of leases — this is HIS old crowd).
+# Targets independent leasing/rental agents in LA who each know dozens of small
+# landlords. Goal: recruit them as referral partners ("affiliates") for LawfulRent.
+# HONESTY GATE: no affiliate tracking or commission structure exists yet — drafts
+# recruit interest and Tanner sets terms person-to-person; never quote a % or a
+# dashboard in writing (see offer.md).
+#
+# search.json is classic api (Unipile plan 403s sales_navigator). LA metro 90000049.
+
+name = "LawfulRent — Leasing Agent Partners"
+slug = "lr-leasing-agents"
+is_default = false
+status = "active"
+
+owner_email = "tannerbuyhomes@gmail.com"
+
+landing_url = "https://lawfulrent.com"
+
+auto_send = true
+
+channels = ["linkedin_connect", "linkedin_dm"]
