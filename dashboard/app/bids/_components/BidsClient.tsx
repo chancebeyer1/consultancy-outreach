@@ -351,6 +351,11 @@ function BidCard({
   const isApproved = bid?.status === "approved";
   const isSubmitted = bid?.status === "submitted";
   const canApiSubmit = isApproved && API_SUBMITTABLE.has(o.source);
+  // Assisted one-click for the human-submit sources (Upwork / SAM / job feeds): copy the
+  // proposal and open the exact apply page — you paste, submit on the site, then "Mark
+  // submitted". It NEVER auto-submits (Upwork ToS bans automated proposals; gov reps-&-certs
+  // are signed by you, not a cron), so it stays inside the human-initiated-submission rule.
+  const canAssistedSubmit = isApproved && !API_SUBMITTABLE.has(o.source) && !!o.url;
 
   const [body, setBody] = useState(bid?.edited_body ?? bid?.body ?? "");
   const [savedBody, setSavedBody] = useState(bid?.edited_body ?? bid?.body ?? "");
@@ -409,6 +414,24 @@ function BidCard({
     } catch {
       setNote("couldn't copy");
     }
+  }
+
+  async function applyAssisted() {
+    // Copy the (possibly-edited) proposal, then open the apply page in a new tab — two things,
+    // one click. YOU still submit on the site (and, for gov, sign the certifications); this
+    // deliberately does not mark the bid submitted, since we can't know that you actually did.
+    let copied = true;
+    try {
+      await navigator.clipboard.writeText(body);
+    } catch {
+      copied = false;
+    }
+    if (o.url) window.open(o.url, "_blank", "noopener,noreferrer");
+    setNote(
+      copied
+        ? "proposal copied — paste it on the site, submit, then click “Mark submitted”"
+        : "opened the posting — copy the proposal manually, submit, then “Mark submitted”",
+    );
   }
 
   return (
@@ -524,6 +547,11 @@ function BidCard({
                   Submit on {meta.label}
                 </ActionBtn>
               </span>
+            )}
+            {canAssistedSubmit && (
+              <ActionBtn tone="primary" onClick={applyAssisted}>
+                Copy &amp; apply ↗
+              </ActionBtn>
             )}
             {isApproved && (
               <ActionBtn tone="ghost" busy={busy === "submit"} onClick={() => act("submit")}>
