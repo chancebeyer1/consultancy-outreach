@@ -42,6 +42,22 @@ _ENDPOINT = f"https://api.apify.com/v2/acts/{_ACTOR}/run-sync-get-dataset-items"
 # Upwork's search box honors OR / quotes; the actor forwards `query` to it.
 DEFAULT_QUERY = 'AI agent OR LLM OR chatbot OR automation OR RAG OR "machine learning"'
 
+# Actor-side post-fetch relevance filter: keep only jobs whose TITLE or SKILLS contain one of
+# these terms (the Upwork `query` above is loose and returns lots of off-topic gigs — video
+# editors, sales closers). matchDescription is OFF on purpose: the actor matches case-insensitive
+# SUBSTRINGS, so a short token like "AI" hits "available"/"email"/"training" in nearly every
+# description and the whole filter degrades to a no-op (verified live: 25→25 with description
+# matching, 25→12 with title+skills only). Short ambiguous tokens (RAG→"storage"/"fragment",
+# ML→"html") are deliberately excluded for the same reason. The fit-scorer still gates the rest.
+_INCLUDE_KEYWORDS = {
+    "keywords": ["AI", "artificial intelligence", "LLM", "GPT", "chatbot", "automation",
+                 "machine learning", "OpenAI", "Claude", "LangChain", "agent",
+                 "n8n", "Zapier", "generative", "NLP"],
+    "matchTitle": True,
+    "matchDescription": False,
+    "matchSkills": True,
+}
+
 _MAX_AGE_MINUTES = 14 * 24 * 60  # only postings from the last 14 days
 # Bound the actor's own runtime so a slow scrape can't stall the daily sweep; httpx read timeout
 # sits just above it, with a single retry (a long sync call retried many times would blow the
@@ -156,6 +172,7 @@ def fetch_opportunities(*, query: str | None = None, limit: int = 50) -> list[di
         "verifiedPaymentOnly": True,
         "maxAgeMinutes": _MAX_AGE_MINUTES,
         "skipReposts": True,
+        "includeKeywords": _INCLUDE_KEYWORDS,
     }
     try:
         items = _run(payload)
