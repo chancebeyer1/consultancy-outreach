@@ -9,6 +9,7 @@ type Action = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api" |
 const SOURCE_META: Record<OpportunitySource, { label: string; cls: string }> = {
   sam_gov: { label: "SAM.gov", cls: "bg-blue-500/15 text-blue-300 ring-blue-500/30" },
   upwork: { label: "Upwork", cls: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30" },
+  upwork_apify: { label: "Upwork (scraped)", cls: "bg-green-500/15 text-green-300 ring-green-500/30" },
   freelancer: { label: "Freelancer", cls: "bg-teal-500/15 text-teal-300 ring-teal-500/30" },
   remoteok: { label: "RemoteOK", cls: "bg-fuchsia-500/15 text-fuchsia-300 ring-fuchsia-500/30" },
   hn_hiring: { label: "HN hiring", cls: "bg-orange-500/15 text-orange-300 ring-orange-500/30" },

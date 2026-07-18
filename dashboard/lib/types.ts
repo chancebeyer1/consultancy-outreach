@@ -215,6 +215,7 @@ export interface ReplyReviewRow {
 export type OpportunitySource =
   | "sam_gov"
   | "upwork"
+  | "upwork_apify"
   | "freelancer"
   | "remoteok"
   | "hn_hiring"

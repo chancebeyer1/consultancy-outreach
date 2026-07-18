@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
 import psycopg
 
 from campaigns_loader import load_campaign
-from clients import claude, freelancer, hn_hiring, linkedin_jobs, remoteok, sam_gov, upwork
+from clients import apify_upwork, claude, freelancer, hn_hiring, linkedin_jobs, remoteok, sam_gov, upwork
 from config import Config, require
 from operator_profile import operator_bio
 from prompts_loader import load_prompt, system_prefix
@@ -51,6 +51,10 @@ MIN_FIT_TO_DRAFT = 60     # only draft a bid at/above this fit …
 SOURCES: tuple[tuple[str, Any], ...] = (
     ("sam_gov", lambda: sam_gov.fetch_opportunities()),
     ("upwork", lambda: upwork.fetch_opportunities()),
+    # Upwork via the Apify scraper — STOPGAP until the official API token is set. Double-gated
+    # + OFF by default (returns [] unless APIFY_TOKEN and APIFY_UPWORK_ENABLED are both set), so
+    # listing it here is harmless when unconfigured. Discovery only, like every source.
+    ("upwork_apify", lambda: apify_upwork.fetch_opportunities()),
     ("freelancer", lambda: freelancer.fetch_opportunities()),
     ("hn_hiring", lambda: hn_hiring.fetch_opportunities()),
     ("linkedin_jobs", lambda: linkedin_jobs.fetch_opportunities()),

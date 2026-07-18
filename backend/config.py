@@ -108,6 +108,15 @@ class Config:
     # approved, complete OAuth2 and set a (refreshed) access token here. Unset → Upwork skipped.
     upwork_access_token: str = _env("UPWORK_ACCESS_TOKEN")
     upwork_org_id: str = _env("UPWORK_ORG_ID")  # optional tenant id for org-scoped tokens
+    # Apify Upwork scraper (neatrat/upwork-job-scraper) — a STOPGAP that SCRAPES upwork.com job
+    # listings until UPWORK_ACCESS_TOKEN (official API) is live. DOUBLE-GATED and OFF by default:
+    # the source stays skipped unless BOTH APIFY_TOKEN is set AND APIFY_UPWORK_ENABLED is truthy,
+    # so a token alone can't silently turn scraping on. Scraping upwork.com violates Upwork ToS —
+    # enable deliberately, and turn it off once the API clears. Discovery only; it never submits.
+    # Optional APIFY_UPWORK_QUERY overrides the default AI/agent search expression.
+    apify_token: str = _env("APIFY_TOKEN")
+    apify_upwork_enabled: bool = _env("APIFY_UPWORK_ENABLED", "") in ("1", "true", "True")
+    apify_upwork_query: str = _env("APIFY_UPWORK_QUERY")
     # Freelancer.com — self-serve token from freelancer.com Settings → API. Unset → skipped.
     freelancer_oauth_token: str = _env("FREELANCER_OAUTH_TOKEN")
 
