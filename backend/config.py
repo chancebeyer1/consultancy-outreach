@@ -108,7 +108,7 @@ class Config:
     # approved, complete OAuth2 and set a (refreshed) access token here. Unset → Upwork skipped.
     upwork_access_token: str = _env("UPWORK_ACCESS_TOKEN")
     upwork_org_id: str = _env("UPWORK_ORG_ID")  # optional tenant id for org-scoped tokens
-    # Apify Upwork scraper (neatrat/upwork-job-scraper) — a STOPGAP that SCRAPES upwork.com job
+    # Apify Upwork scraper (blackfalcondata/upwork-scraper) — a STOPGAP that SCRAPES upwork.com job
     # listings until UPWORK_ACCESS_TOKEN (official API) is live. DOUBLE-GATED and OFF by default:
     # the source stays skipped unless BOTH APIFY_TOKEN is set AND APIFY_UPWORK_ENABLED is truthy,
     # so a token alone can't silently turn scraping on. Scraping upwork.com violates Upwork ToS —
