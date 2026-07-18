@@ -1,48 +1,69 @@
-# Draft: email follow-up bump
+# Draft: email follow-up (value-add, never a bump)
 
-A short, no-pressure nudge sent a few days after the first cold email got no reply. It is sent
-as a **threaded reply on the original** (same subject, "Re:"), so the prospect can see the first
-note right below it. They already have the pitch — do NOT re-pitch or re-explain. Just a light,
-human bump that makes it easy to reply or to say no.
+Sent a few days after the previous email got no reply, as a **threaded reply on the original**
+(same subject, "Re:"), so the prospect sees the earlier note right below it.
+
+**The bump is dead.** "Floating this back up" / "just bumping this" / "in case it got buried"
+is the most pattern-matched delete in the 2026 inbox, and our own 3,000+ bump sends produced
+zero interested replies. 2026 benchmark data: a follow-up written like a natural reply on the
+thread outperforms a formal nudge by ~30%, and every touch must ADD something new — a naked
+re-ask adds nothing.
 
 ## Hard constraints
 
-- **2–3 sentences, ≤ 60 words.** Shorter is better — this is a bump, not a pitch.
-- Plain text. Conversational, contractions, no em-dashes, no markdown, no bullet points.
-- **ONE soft re-ask.** No new links, no attachments, no re-explaining the offer.
-- Reference the earlier note lightly, and always give an easy out ("no worries if not", "happy
-  to close the loop").
-- Sign off on its own line with `{{my_first_name}}` only — no title, no company, no signature block.
+- **≤ 50 words.** Two or three sentences.
+- **Must contain ONE new concrete thing** the first email didn't say (see "The new thing").
+  Never send a re-ask alone.
+- Reads like a natural reply you'd dash off on the same thread — NOT a formal follow-up.
+  Never reference the act of following up ("following up", "bumping", "circling back",
+  "floating this", "in case you missed it", "did you see my email").
+- **ONE question CTA**, phrased differently than the opener's. Still no call/meeting ask.
+- Plain text, contractions fine, no em/en dashes, no links, no attachments, no re-pitching.
+- Sign off on its own line with `{{my_first_name}}` only — no signature block.
 - NO "Subject:" line — this threads on the opener.
+- On the SECOND follow-up (the last touch of the sequence), also close the loop cleanly with
+  an easy out ("if it's a no, one word and I'm gone") instead of leaving the thread dangling.
+
+## The new thing (pick ONE, grounded in the Offer / `operator_background` / campaign ICP)
+
+- A specific pattern you're hearing from others like them ("three of the owners I asked said
+  the doc chase eats their best CSR's mornings, not their worst's").
+- A different, sharper pain angle than the opener took (opener was renewals? this one is
+  after-hours quoting).
+- A concrete detail of the thing you built — one mechanism, stated plainly ("it reads the dec
+  page and fills the ACORD itself; a person only approves").
+- A genuinely useful one-line observation about their segment they could use without ever
+  replying.
 
 ## Structure
 
 ```
-<one friendly line that acknowledges the earlier note, lightly>
-<the same ask, lower-key, with an explicit easy out>
+<the one new concrete thing, phrased like a reply on the thread>
+<the one question, easy to answer in a line>  [+ easy out if last touch]
 {{my_first_name}}
 ```
 
-## Examples (target voice)
+## Examples (target voice — structure and length, NOT the domain)
 
 ✅
-> Hey {{first_name}}, floating this back up in case it slipped by. Still happy to share how
-> we've helped shops like {{their company}} — but no worries at all if it's not a fit right now.
+> {{first_name}}, since I wrote, two more owners told me the renewal chase eats their best
+> CSR's mornings, not their worst's. is that where it lands at {{company}} too, or have you
+> actually got it routed somewhere?
 >
 > {{my_first_name}}
 
-✅
-> {{first_name}}, I know inboxes get brutal. If freeing up a few hours a week is worth a quick
-> look, I'm around. If not, just say the word and I'll stop bugging you.
+✅ (last touch)
+> One thing I didn't say: the agent I built reads the dec page and preps the ACORD itself, a
+> person only approves it. if that's nowhere near a problem you have, one word back and I'm
+> gone.
 >
 > {{my_first_name}}
 
 ## Rules
 
-- Never guilt-trip ("did you see my email?", "just following up AGAIN"). Stay warm and low-pressure.
-- Do NOT repeat the original pitch — assume they read it.
-- One message, one ask.
-- Match the active campaign's Offer/voice in the system prompt; the examples show tone, not domain.
+- Never guilt-trip. Never re-explain the offer. Assume they read the first email.
+- One message, one new thing, one ask.
+- Match the active campaign's Offer/voice in the system prompt; examples show tone, not domain.
 
 ## Output format
 

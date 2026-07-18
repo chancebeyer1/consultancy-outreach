@@ -16,6 +16,7 @@ or a lead already emailed, is skipped.
 """
 from __future__ import annotations
 
+import os
 import random
 import sys
 import time
@@ -52,6 +53,10 @@ FU3_DELAY_DAYS = 5
 # this. Keeps already-contacted-but-gone-cold leads from getting a jarring out-of-the-blue bump
 # when we extend the sequence (they only get FU3 if they're still in the recent-outreach window).
 FU3_MAX_AGE_DAYS = 30
+# Sequence cap (2026-07-18 email reset): 2026 benchmark data shows spam complaints TRIPLE after
+# the 3rd email, and our 634 step-3 sends produced zero engagement. Default is opener + 2
+# follow-ups; env-overridable to re-arm FU3 without a deploy.
+MAX_EMAIL_FOLLOWUPS = int(os.getenv("MAX_EMAIL_FOLLOWUPS", "2"))
 _ACTIVE_SEND = ("queued", "sent", "delivered")
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -332,6 +337,7 @@ def _due_followups(cur) -> list[dict[str, Any]]:
         join sends s on s.draft_id = d.id and s.status = any(%s)
         left join campaigns c on c.id = l.campaign_id
         where (c.status is null or c.status = 'active')
+          and (c.channels is null or 'email' = any(c.channels))
           and l.email is not null
           and coalesce(l.email_status, '') <> 'bounced'
           and s.sent_at <= now() - make_interval(days => %s)
@@ -358,6 +364,7 @@ def _due_followups(cur) -> list[dict[str, Any]]:
         join sends s1 on s1.draft_id = d1.id and s1.status = any(%s)
         left join campaigns c on c.id = l.campaign_id
         where (c.status is null or c.status = 'active')
+          and (c.channels is null or 'email' = any(c.channels))
           and l.email is not null
           and coalesce(l.email_status, '') <> 'bounced'
           and s1.sent_at <= now() - make_interval(days => %s)
@@ -374,30 +381,33 @@ def _due_followups(cur) -> list[dict[str, Any]]:
     # FU3 — FU2 sent between FU3_DELAY and FU3_MAX_AGE days ago (recency-guarded), no reply, not
     # bounced, no FU3 yet. Threads on FU2, sends from the opener's box, keeps the opener's subject.
     # Only recently-contacted leads reach this newest step (cold-for-a-month leads are skipped).
-    cur.execute(
-        """
-        select l.id, l.email, l.name, l.company, l.role, l.campaign_id,
-               s2.external_id, s0.mailbox_id, d0.body
-        from leads l
-        join drafts d0 on d0.lead_id = l.id and d0.channel = 'email'
-        join sends s0 on s0.draft_id = d0.id and s0.status = any(%s)
-        join drafts d2 on d2.lead_id = l.id and d2.channel = 'email_followup_2'
-        join sends s2 on s2.draft_id = d2.id and s2.status = any(%s)
-        left join campaigns c on c.id = l.campaign_id
-        where (c.status is null or c.status = 'active')
-          and l.email is not null
-          and coalesce(l.email_status, '') <> 'bounced'
-          and s2.sent_at <= now() - make_interval(days => %s)
-          and s2.sent_at >= now() - make_interval(days => %s)
-          and not exists (select 1 from replies r where r.lead_id = l.id)
-          and not exists (
-              select 1 from drafts d3 join sends s3 on s3.draft_id = d3.id
-              where d3.lead_id = l.id and d3.channel = 'email_followup_3'
-          )
-        """,
-        (active, active, FU3_DELAY_DAYS, FU3_MAX_AGE_DAYS),
-    )
-    _rows("email_followup_3", cur.fetchall())
+    # OFF by default since 2026-07-18 (MAX_EMAIL_FOLLOWUPS=2) — see the constant's rationale.
+    if MAX_EMAIL_FOLLOWUPS >= 3:
+        cur.execute(
+            """
+            select l.id, l.email, l.name, l.company, l.role, l.campaign_id,
+                   s2.external_id, s0.mailbox_id, d0.body
+            from leads l
+            join drafts d0 on d0.lead_id = l.id and d0.channel = 'email'
+            join sends s0 on s0.draft_id = d0.id and s0.status = any(%s)
+            join drafts d2 on d2.lead_id = l.id and d2.channel = 'email_followup_2'
+            join sends s2 on s2.draft_id = d2.id and s2.status = any(%s)
+            left join campaigns c on c.id = l.campaign_id
+            where (c.status is null or c.status = 'active')
+              and (c.channels is null or 'email' = any(c.channels))
+              and l.email is not null
+              and coalesce(l.email_status, '') <> 'bounced'
+              and s2.sent_at <= now() - make_interval(days => %s)
+              and s2.sent_at >= now() - make_interval(days => %s)
+              and not exists (select 1 from replies r where r.lead_id = l.id)
+              and not exists (
+                  select 1 from drafts d3 join sends s3 on s3.draft_id = d3.id
+                  where d3.lead_id = l.id and d3.channel = 'email_followup_3'
+              )
+            """,
+            (active, active, FU3_DELAY_DAYS, FU3_MAX_AGE_DAYS),
+        )
+        _rows("email_followup_3", cur.fetchall())
     # Corporate mailboxes only — never follow up to a personal inbox (Maildoso policy). Catches
     # any leads that got a personal-email opener before the corporate-only gate went in.
     out = [r for r in out if is_corporate_email(r.get("email"))]

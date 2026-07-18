@@ -22,7 +22,7 @@ import json
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -207,10 +207,24 @@ def _ts(v: Any) -> str | None:
         return None
 
 
+def _should_auto_approve(fit: dict[str, Any]) -> bool:
+    """A drafted bid skips the human review queue only when auto-approve is enabled AND this is
+    a strong-fit, real-software, eligible opportunity. Off (min_fit=0) → always False."""
+    floor = Config.bids_auto_approve_min_fit
+    return (
+        floor > 0
+        and int(fit.get("fit_score") or 0) >= floor
+        and bool(fit.get("is_software"))
+        and bool(fit.get("eligible"))
+    )
+
+
 def _ingest(opp: dict[str, Any], fit: dict[str, Any], bid: dict[str, Any] | None, owner_id: str | None) -> bool:
     """Insert one opportunity (+ optional bid) in its own transaction so a bad row can't
     poison the batch. Returns True if a NEW opportunity row was written."""
-    status = "drafted" if bid else "scored"
+    approve = bool(bid) and _should_auto_approve(fit)
+    status = "approved" if approve else ("drafted" if bid else "scored")
+    bid_status = "approved" if approve else "draft"
     flags = {
         "is_software": bool(fit.get("is_software")),
         "is_ai_agent": bool(fit.get("is_ai_agent")),
@@ -246,12 +260,13 @@ def _ingest(opp: dict[str, Any], fit: dict[str, Any], bid: dict[str, Any] | None
             if bid:
                 cur.execute(
                     """
-                    insert into bids (opportunity_id, summary, body, est_price, model, status)
-                    values (%s,%s,%s,%s,%s,'draft')
+                    insert into bids (opportunity_id, summary, body, est_price, model, status, decided_at)
+                    values (%s,%s,%s,%s,%s,%s,%s)
                     on conflict (opportunity_id) do nothing
                     """,
                     (opp_id, bid.get("summary"), bid.get("body"),
-                     bid.get("est_price") or fit.get("suggested_price"), Config.claude_model_draft),
+                     bid.get("est_price") or fit.get("suggested_price"), Config.claude_model_draft,
+                     bid_status, datetime.now(UTC) if approve else None),
                 )
         return True
     except Exception as e:  # noqa: BLE001

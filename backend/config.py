@@ -111,6 +111,18 @@ class Config:
     # Freelancer.com — self-serve token from freelancer.com Settings → API. Unset → skipped.
     freelancer_oauth_token: str = _env("FREELANCER_OAUTH_TOKEN")
 
+    # Bidding automation. AUTO-APPROVE: fit >= this (and is_software + eligible) → the drafted
+    # bid lands pre-approved in "Ready to submit" instead of "Needs approval". 0 = off (every
+    # bid waits for a human). A high floor (e.g. 80) keeps only strong-fit work hands-off.
+    bids_auto_approve_min_fit: int = int(_env("BIDS_AUTO_APPROVE_MIN_FIT", "0") or "0")
+    # FREELANCER AUTO-SUBMIT (opt-in, OFF by default): when '1', the daily job auto-PLACES
+    # approved Freelancer bids via their sanctioned API — no click. Guardrails below bound the
+    # blast radius (min fit + hard daily cap) because unattended bidding burns bid quota and
+    # can flag a new account. Only ever Freelancer (Upwork/SAM never auto-submit).
+    freelancer_auto_submit: bool = _env("FREELANCER_AUTO_SUBMIT", "") in ("1", "true", "True")
+    freelancer_auto_submit_min_fit: int = int(_env("FREELANCER_AUTO_SUBMIT_MIN_FIT", "80") or "80")
+    freelancer_auto_submit_daily_cap: int = int(_env("FREELANCER_AUTO_SUBMIT_DAILY_CAP", "3") or "3")
+
     # DB
     database_url: str = _env("DATABASE_URL")
 
