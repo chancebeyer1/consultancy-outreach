@@ -231,11 +231,6 @@ def replenish_queue_cron() -> dict:
         briefs = prepare_pending(limit=2)
     except Exception as e:  # noqa: BLE001
         briefs = {"error": str(e)}
-    # And — once a week (Monday) — draft The Agent Brief newsletter for review.
-    try:
-        newsletter = _maybe_generate_newsletter()
-    except Exception as e:  # noqa: BLE001
-        newsletter = {"error": str(e)}
     # And — once a day, IF the operator turned it on — auto-publish an AI-news SEO blog post.
     try:
         blog = _maybe_generate_blog()
@@ -273,7 +268,7 @@ def replenish_queue_cron() -> dict:
     return _logged(
         "cron_replenish",
         {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
-         "newsletter": newsletter, "blog": blog, "growth_digest": digest, "bids": bids,
+         "blog": blog, "growth_digest": digest, "bids": bids,
          "weekly_report": weekly, "revivals": revivals, "proof": proof},
     )
 
@@ -419,26 +414,6 @@ def case_study_now(dry_run: bool = False) -> dict:
         "testimonial_asks": draft_testimonial_asks(limit=3, dry_run=dry_run),
         "case_study": generate_case_study_post(dry_run=dry_run),
     }
-
-
-def _maybe_generate_newsletter() -> dict:
-    """Draft The Agent Brief once a week (Monday, ~14:00 UTC). 6-day DB guard = exactly-once."""
-    from datetime import UTC, datetime
-
-    import psycopg
-
-    from config import require
-
-    now = datetime.now(UTC)
-    if now.weekday() != 0 or now.hour < 14:
-        return {"skipped": "off-schedule"}
-    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
-        cur.execute("select count(*) from newsletter_issues where created_at > now() - interval '6 days'")
-        if int((cur.fetchone() or [0])[0] or 0) > 0:
-            return {"skipped": "already drafted this week"}
-    from workers.newsletter import generate_issue
-
-    return generate_issue()
 
 
 def _maybe_generate_blog() -> dict:
@@ -834,26 +809,6 @@ def content_refresh_exemplars_now() -> dict:
 
 
 @app.function(secrets=secrets, timeout=600)
-def newsletter_generate_now(dry_run: bool = False) -> dict:
-    """On-demand newsletter draft. `modal run modal_app.py::newsletter_generate_now --dry-run`."""
-    import json as _json
-
-    from workers.newsletter import generate_issue
-
-    res = generate_issue(dry_run=dry_run)
-    print("NEWSLETTER " + _json.dumps(res, default=str)[:4000])
-    return res
-
-
-@app.function(secrets=secrets, timeout=600)
-def newsletter_send_now(issue_id: str = "", dry_run: bool = False) -> dict:
-    """On-demand newsletter send. `modal run modal_app.py::newsletter_send_now --issue-id <id>`."""
-    from workers.newsletter import send_issue
-
-    return send_issue(issue_id, dry_run=dry_run)
-
-
-@app.function(secrets=secrets, timeout=600)
 def content_publish_now(dry_run: bool = False, limit: int | None = None) -> dict:
     """On-demand publish of approved posts. `modal run modal_app.py::content_publish_now --dry-run`."""
     from workers.content import publish_approved
@@ -948,14 +903,6 @@ def content_webhook(request_body: dict, x_content_token: str | None = None) -> d
         # dashboard polls the meeting row's status instead.
         meeting_process_bg.spawn(request_body.get("meeting_id") or "")
         return {"spawned": True}
-    if action == "newsletter_generate":
-        from workers.newsletter import generate_issue
-
-        return generate_issue()
-    if action == "newsletter_send":
-        from workers.newsletter import send_issue
-
-        return send_issue(request_body.get("issue_id") or "")
     raise HTTPException(status_code=400, detail="unknown action")
 
 
@@ -1150,19 +1097,6 @@ def regenerate_reply(request_body: dict) -> dict:
     if not text:
         raise HTTPException(status_code=502, detail="could not draft a reply")
     return {"suggested_reply": text}
-
-
-@app.function(secrets=secrets, timeout=30)
-@modal.fastapi_endpoint(method="POST")
-def newsletter_subscribe(request_body: dict) -> dict:
-    """Public subscribe endpoint for the Agentry site's newsletter form. Open (just stores an email)."""
-    from workers.newsletter import add_subscriber
-
-    return add_subscriber(
-        request_body.get("email") or "",
-        name=request_body.get("name"),
-        source=request_body.get("source") or "site",
-    )
 
 
 @app.function(secrets=secrets, timeout=120)

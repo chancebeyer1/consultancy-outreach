@@ -133,8 +133,7 @@ export function RoastClient() {
         Roast my outreach →
       </button>
       <p className="mt-3 text-xs text-neutral-600">
-        Free, honest, and you get a sendable rewrite back. We&apos;ll email you a copy and send The
-        Agent Brief now and then (unsubscribe anytime). About 20 seconds.
+        Free, honest, and you get a sendable rewrite back. We&apos;ll email you a copy. About 20 seconds.
       </p>
     </form>
   );

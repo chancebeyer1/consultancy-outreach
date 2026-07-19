@@ -144,9 +144,10 @@ class Config:
     # react to in LinkedIn posts. Optional: if unset, the tweet-reaction generator is skipped.
     xsearch_api_key: str = _env("XSEARCH_API_KEY")
 
-    # Newsletter ("The Agent Brief") — sent via Resend to opted-in subscribers (NOT cold boxes).
-    # Set NEWSLETTER_FROM to a verified Resend sending domain, e.g. "The Agent Brief <brief@contentdrip.ai>".
-    newsletter_from: str = _env("NEWSLETTER_FROM", "The Agent Brief <brief@contentdrip.ai>")
+    # From address for transactional email Resend sends (audit/roast result copies). Reads the
+    # NEWSLETTER_FROM secret — a verified Resend sending domain; email_sender.py reads it directly
+    # too. Result emails no-op cleanly until a verified domain is set.
+    transactional_from: str = _env("NEWSLETTER_FROM", "Agentry <hello@contentdrip.ai>")
 
     # Meta lead ads — INBOUND paid leads. Advantage+ runs the ads (creative + A/B); we only
     # ingest the leads their forms collect. The webhook (meta_leads_webhook) verifies with

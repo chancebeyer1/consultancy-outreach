@@ -92,7 +92,6 @@ _SOURCE_HINTS: dict[str, list[str]] = {
     "replies": ["workers/replies.py"],
     "comment": ["workers/comment_pacer.py", "workers/growth.py"],
     "content": ["workers/content.py"],
-    "newsletter": ["workers/newsletter.py"],
     "withdraw": ["workers/sequence_send.py"],
 }
 

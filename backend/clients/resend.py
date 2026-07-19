@@ -1,8 +1,8 @@
-"""Resend email client — for the opt-in newsletter broadcast only (NOT cold outreach).
+"""Resend email client — for transactional mail (tool-result copies, operator notifications), NOT
+cold outreach.
 
-Cold email goes through the warmed Maildoso boxes; the newsletter is opt-in mail to people who
-subscribed, so it sends from a verified Resend domain with proper unsubscribe headers. Keeping
-the two streams separate protects the cold-sending domains.
+Cold email goes through the warmed Maildoso boxes; transactional mail sends from a verified Resend
+domain (NEWSLETTER_FROM). Keeping the two streams separate protects the cold-sending domains.
 
 https://resend.com/docs
 """

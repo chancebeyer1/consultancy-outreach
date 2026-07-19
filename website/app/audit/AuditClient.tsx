@@ -173,8 +173,7 @@ export function AuditClient() {
         Run my free audit →
       </button>
       <p className="mt-3 text-xs text-neutral-600">
-        No sales call required. We&apos;ll email you a copy and send The Agent Brief now and then
-        (unsubscribe anytime). Takes ~30 seconds.
+        No sales call required. We&apos;ll email you a copy. Takes ~30 seconds.
       </p>
     </form>
   );
