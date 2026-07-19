@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 
+import { Pager } from "@/components/Pager";
+import type { BidsPageResult } from "@/lib/queries";
 import type { BidReviewRow, OpportunitySource } from "@/lib/types";
 
 type Action = "save" | "approve" | "reject" | "submit" | "pass" | "submit_api" | "won" | "lost";
@@ -56,8 +58,14 @@ function bucketOf(r: BidReviewRow): Bucket {
   return "low_fit";
 }
 
-export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
-  const [rows, setRows] = useState<BidReviewRow[]>(initialRows);
+export function BidsClient({
+  actionable,
+  lowFit: lowFitRows,
+  lowFitPage,
+  lowFitTotalPages,
+  lowFitTotal,
+}: BidsPageResult) {
+  const [rows, setRows] = useState<BidReviewRow[]>([...actionable, ...lowFitRows]);
   const [sourceFilter, setSourceFilter] = useState<OpportunitySource | "all">("all");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkNote, setBulkNote] = useState<string | null>(null);
@@ -261,16 +269,33 @@ export function BidsClient({ initialRows }: { initialRows: BidReviewRow[] }) {
               <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
             ))}
           </Section>
-          <Section
-            title="Low fit — no bid drafted"
-            hint="Scored below the draft gate; pass them or pursue by hand"
-            count={lowFit.length}
-            accent="text-neutral-400"
-          >
-            {lowFit.map((row) => (
-              <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
-            ))}
-          </Section>
+          {(lowFit.length > 0 || lowFitPage > 1) && (
+            <section>
+              <div className="mb-3 flex flex-wrap items-baseline gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">
+                  Low fit — no bid drafted
+                </h2>
+                <span className="text-xs text-neutral-500">{lowFitTotal}</span>
+                <span className="hidden text-xs text-neutral-600 sm:inline">
+                  — Scored below the draft gate; pass them or pursue by hand
+                </span>
+              </div>
+              <div className="space-y-4">
+                {lowFit.map((row) => (
+                  <BidCard key={row.opportunity.id} row={row} onApproved={markApproved} onRemoved={removeRow} />
+                ))}
+              </div>
+              <Pager
+                basePath="/bids"
+                page={lowFitPage}
+                totalPages={lowFitTotalPages}
+                total={lowFitTotal}
+                pageSize={25}
+                unit="low-fit"
+                scroll={false}
+              />
+            </section>
+          )}
         </div>
       )}
     </div>

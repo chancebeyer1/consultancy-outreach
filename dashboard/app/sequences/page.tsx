@@ -2,8 +2,11 @@ import clsx from "clsx";
 
 import { requireAdmin } from "../../lib/auth";
 import { PageHeader } from "../../components/PageHeader";
+import { Pager } from "../../components/Pager";
 import { getSelectedCampaignId } from "../../lib/campaign-filter";
-import { getSequenceRows } from "../../lib/queries";
+import { getSequenceRows, SEQUENCES_PAGE_SIZE } from "../../lib/queries";
+
+export const dynamic = "force-dynamic";
 
 const CHANNEL_LABEL: Record<string, string> = {
   linkedin_connect: "Connect",
@@ -15,12 +18,18 @@ const CHANNEL_LABEL: Record<string, string> = {
   email_followup_2: "Email follow-up 2",
 };
 
-export default async function SequencesPage() {
+export default async function SequencesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireAdmin();
-  const campaignId = await getSelectedCampaignId();
-  const rows = await getSequenceRows(campaignId);
+  const [campaignId, sp] = await Promise.all([getSelectedCampaignId(), searchParams]);
+  const rawPage = Array.isArray(sp.page) ? sp.page[0] : sp.page;
+  const page = Math.max(1, Number.parseInt(rawPage ?? "1", 10) || 1);
+  const { rows, total, totalPages, page: curPage } = await getSequenceRows(campaignId, undefined, page);
 
-  if (rows.length === 0) {
+  if (total === 0) {
     return (
       <div className="mx-auto max-w-3xl px-6 py-16 text-center text-neutral-500">
         <h1 className="text-2xl font-semibold text-neutral-200">Sequences</h1>
@@ -36,7 +45,7 @@ export default async function SequencesPage() {
     <div className="mx-auto max-w-5xl px-6 py-8">
       <PageHeader
         title="Sequences"
-        description={`${rows.length} lead${rows.length === 1 ? "" : "s"} in flight — each one's outbound steps and what fires next. Pause a campaign to halt its sequences.`}
+        description={`${total.toLocaleString()} lead${total === 1 ? "" : "s"} in flight — each one's outbound steps and what fires next. Pause a campaign to halt its sequences.`}
       />
 
       <div className="space-y-2">
@@ -84,6 +93,15 @@ export default async function SequencesPage() {
           </div>
         ))}
       </div>
+
+      <Pager
+        basePath="/sequences"
+        page={curPage}
+        totalPages={totalPages}
+        total={total}
+        pageSize={SEQUENCES_PAGE_SIZE}
+        unit="leads"
+      />
     </div>
   );
 }

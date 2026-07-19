@@ -538,21 +538,47 @@ async function loadLeadRowsFromSupabase(campaignId?: string, scope?: Scope): Pro
 // Sequences — /sequences view (contacted leads + their outbound timeline)
 // ---------------------------------------------------------------------------
 
-export async function getSequenceRows(campaignId?: string, scope?: Scope): Promise<SequenceRow[]> {
+export const SEQUENCES_PAGE_SIZE = 30;
+// Bounds the initial "which leads are in a sequence" scan. Ordered by recency, so the newest
+// SEQ_FETCH_CAP sent steps define the visible sequence set — plenty for review, and it stops the
+// page from loading every send ever as the log grows into the tens of thousands.
+const SEQ_FETCH_CAP = 4000;
+
+export type SequencesPageResult = {
+  rows: SequenceRow[];
+  page: number;
+  totalPages: number;
+  total: number;
+};
+
+const EMPTY_SEQUENCES: SequencesPageResult = { rows: [], page: 1, totalPages: 1, total: 0 };
+
+function paginate<T>(all: T[], page: number, size: number): { rows: T[]; page: number; totalPages: number; total: number } {
+  const total = all.length;
+  const totalPages = Math.max(1, Math.ceil(total / size));
+  const p = Math.min(Math.max(1, page), totalPages);
+  const from = (p - 1) * size;
+  return { rows: all.slice(from, from + size), page: p, totalPages, total };
+}
+
+export async function getSequenceRows(
+  campaignId?: string,
+  scope?: Scope,
+  page = 1,
+): Promise<SequencesPageResult> {
   if (dataSource === "mock") {
-    return MOCK_REPLY_ROWS.filter((r) => !campaignId || r.lead.campaign_id === campaignId).map(
-      (r) => ({
-        lead: r.lead,
-        steps: [{ channel: "linkedin_connect" as Channel, sent_at: r.reply.received_at }],
-        has_reply: true,
-        awaiting: "Replied — handle in /replies",
-      }),
-    );
+    const all: SequenceRow[] = MOCK_REPLY_ROWS.filter(
+      (r) => !campaignId || r.lead.campaign_id === campaignId,
+    ).map((r) => ({
+      lead: r.lead,
+      steps: [{ channel: "linkedin_connect" as Channel, sent_at: r.reply.received_at }],
+      has_reply: true,
+      awaiting: "Replied — handle in /replies",
+    }));
+    return paginate(all, page, SEQUENCES_PAGE_SIZE);
   }
-  if (dataSource === "file") {
-    return [];
-  }
-  return loadSequenceRowsFromSupabase(campaignId, scope);
+  if (dataSource === "file") return EMPTY_SEQUENCES;
+  return loadSequenceRowsFromSupabase(campaignId, scope, page);
 }
 
 function describeNext(steps: { channel: Channel }[], hasReply: boolean): string {
@@ -570,36 +596,68 @@ function describeNext(steps: { channel: Channel }[], hasReply: boolean): string 
   return "In sequence";
 }
 
-async function loadSequenceRowsFromSupabase(campaignId?: string, scope?: Scope): Promise<SequenceRow[]> {
+async function loadSequenceRowsFromSupabase(
+  campaignId: string | undefined,
+  scope: Scope | undefined,
+  page: number,
+): Promise<SequencesPageResult> {
   const supabase = await serverClient();
   const uid = scopeUserId(scope);
 
-  // Sent drafts identify which leads are in a sequence + the channel of each step.
-  // Non-admin: only drafts whose lead belongs to the user (drafts carry no user_id).
+  // Step 1 (bounded scan): the most recent sent drafts identify which leads are in a sequence and
+  // the channel of each step. Ordered newest-first + capped so this never loads the whole log.
+  // The leads!inner join both scopes to the user (non-admin) and filters by campaign in SQL.
+  const needJoin = !!uid || !!campaignId;
   let sdQ = supabase
     .from("drafts")
-    .select("id, lead_id, channel" + (uid ? ", leads!inner(user_id)" : ""))
-    .eq("status", "sent");
+    .select("id, lead_id, channel, decided_at" + (needJoin ? ", leads!inner(user_id, campaign_id)" : ""))
+    .eq("status", "sent")
+    .order("decided_at", { ascending: false, nullsFirst: false })
+    .limit(SEQ_FETCH_CAP);
   if (uid) sdQ = sdQ.eq("leads.user_id", uid);
+  if (campaignId) sdQ = sdQ.eq("leads.campaign_id", campaignId);
   const { data: sentDrafts, error: sdErr } = await sdQ;
   if (sdErr) throw sdErr;
-  const sd = (sentDrafts ?? []) as unknown as Array<{ id: string; lead_id: string; channel: Channel }>;
-  if (sd.length === 0) return [];
+  const sd = (sentDrafts ?? []) as unknown as Array<{
+    id: string;
+    lead_id: string;
+    channel: Channel;
+    decided_at: string | null;
+  }>;
+  if (sd.length === 0) return EMPTY_SEQUENCES;
 
-  const leadIds = Array.from(new Set(sd.map((d) => d.lead_id)));
-  const draftIds = sd.map((d) => d.id);
+  // Step 2: order the leads by most recent step (drafts are already decided_at desc, so a lead's
+  // first appearance is its latest), then take just the requested page's leads.
+  const leadOrder: string[] = [];
+  const seen = new Set<string>();
+  const draftsByLead = new Map<string, Array<{ id: string; channel: Channel }>>();
+  for (const d of sd) {
+    if (!seen.has(d.lead_id)) {
+      seen.add(d.lead_id);
+      leadOrder.push(d.lead_id);
+    }
+    const list = draftsByLead.get(d.lead_id) ?? [];
+    list.push({ id: d.id, channel: d.channel });
+    draftsByLead.set(d.lead_id, list);
+  }
 
+  const total = leadOrder.length;
+  const totalPages = Math.max(1, Math.ceil(total / SEQUENCES_PAGE_SIZE));
+  const p = Math.min(Math.max(1, page), totalPages);
+  const pageLeadIds = leadOrder.slice((p - 1) * SEQUENCES_PAGE_SIZE, p * SEQUENCES_PAGE_SIZE);
+  const pageDraftIds = pageLeadIds.flatMap((id) => (draftsByLead.get(id) ?? []).map((d) => d.id));
+
+  // Step 3 (page-scoped detail): leads, send timestamps, and reply flags for ONLY this page.
   const [leadsRes, sendsRes, repliesRes] = await Promise.all([
-    inChunks(leadIds, (c) => supabase.from("leads").select("*").in("id", c)),
-    inChunks(draftIds, (c) => supabase.from("sends").select("draft_id, sent_at").in("draft_id", c)),
-    inChunks(leadIds, (c) => supabase.from("replies").select("lead_id").in("lead_id", c)),
+    inChunks(pageLeadIds, (c) => supabase.from("leads").select("*").in("id", c)),
+    inChunks(pageDraftIds, (c) => supabase.from("sends").select("draft_id, sent_at").in("draft_id", c)),
+    inChunks(pageLeadIds, (c) => supabase.from("replies").select("lead_id").in("lead_id", c)),
   ]);
   if (leadsRes.error) throw leadsRes.error;
   if (sendsRes.error) throw sendsRes.error;
   if (repliesRes.error) throw repliesRes.error;
 
-  const leads = (leadsRes.data ?? []) as unknown as Lead[];
-  const leadById = new Map(leads.map((l) => [l.id, l]));
+  const leadById = new Map(((leadsRes.data ?? []) as unknown as Lead[]).map((l) => [l.id, l]));
   const sentAtByDraft = new Map(
     ((sendsRes.data ?? []) as Array<{ draft_id: string; sent_at: string }>).map((s) => [
       s.draft_id,
@@ -612,26 +670,21 @@ async function loadSequenceRowsFromSupabase(campaignId?: string, scope?: Scope):
       .filter((id): id is string => !!id),
   );
 
-  const stepsByLead = new Map<string, Array<{ channel: Channel; sent_at: string }>>();
-  for (const d of sd) {
-    const sent_at = sentAtByDraft.get(d.id);
-    if (!sent_at) continue;
-    const list = stepsByLead.get(d.lead_id) ?? [];
-    list.push({ channel: d.channel, sent_at });
-    stepsByLead.set(d.lead_id, list);
-  }
-
-  return [...stepsByLead.entries()]
-    .map(([leadId, steps]) => {
+  const rows = pageLeadIds
+    .map((leadId): SequenceRow | null => {
       const lead = leadById.get(leadId);
       if (!lead) return null;
-      steps.sort((a, b) => a.sent_at.localeCompare(b.sent_at));
+      const steps = (draftsByLead.get(leadId) ?? [])
+        .map((d) => ({ channel: d.channel, sent_at: sentAtByDraft.get(d.id) }))
+        .filter((s): s is { channel: Channel; sent_at: string } => !!s.sent_at)
+        .sort((a, b) => a.sent_at.localeCompare(b.sent_at));
+      if (steps.length === 0) return null;
       const has_reply = repliedLeads.has(leadId);
-      return { lead, steps, has_reply, awaiting: describeNext(steps, has_reply) } satisfies SequenceRow;
+      return { lead, steps, has_reply, awaiting: describeNext(steps, has_reply) };
     })
-    .filter((r): r is SequenceRow => r !== null)
-    .filter((r) => !campaignId || r.lead.campaign_id === campaignId)
-    .sort((a, b) => (b.steps.at(-1)?.sent_at ?? "").localeCompare(a.steps.at(-1)?.sent_at ?? ""));
+    .filter((r): r is SequenceRow => r !== null);
+
+  return { rows, page: p, totalPages, total };
 }
 
 export type DraftDecision = { draftId: string; action: "approve" | "reject"; editedBody?: string };
@@ -1052,38 +1105,105 @@ export async function getDealDetail(id: string, scope?: Scope): Promise<DealDeta
 // ---------------------------------------------------------------------------
 // Bidding module — /bids review queue. Opportunities (discovered software/AI
 // work) joined with their drafted bid. Mirrors getDraftReviewRows' 3-mode shape
-// (file mode has no bids, so it degrades to []). Sorted best-fit first.
+// (file mode has no bids, so it degrades to empty). Sorted best-fit first.
+//
+// Split load: the ACTIONABLE set (opportunities with a drafted/approved/submitted bid — the
+// review queue) is bounded, so it's fetched in full. The LOW-FIT set (scored, no bid drafted —
+// usually the bulk) is server-paginated so the page renders a slice instead of hundreds of cards.
 // ---------------------------------------------------------------------------
-export async function getBidReviewRows(scope?: Scope): Promise<BidReviewRow[]> {
-  if (dataSource === "mock") return MOCK_BID_ROWS;
-  if (dataSource === "file") return [];
-  return loadBidReviewRowsFromSupabase(scope);
+export const BIDS_LOW_FIT_PAGE_SIZE = 25;
+
+export type BidsPageResult = {
+  actionable: BidReviewRow[]; // has a bid: needs-approval / approved / submitted
+  lowFit: BidReviewRow[]; // scored, no bid — current page only
+  lowFitPage: number;
+  lowFitTotalPages: number;
+  lowFitTotal: number;
+};
+
+const EMPTY_BIDS: BidsPageResult = {
+  actionable: [],
+  lowFit: [],
+  lowFitPage: 1,
+  lowFitTotalPages: 1,
+  lowFitTotal: 0,
+};
+
+function sliceLowFit(
+  actionable: BidReviewRow[],
+  lowAll: BidReviewRow[],
+  page: number,
+): BidsPageResult {
+  const size = BIDS_LOW_FIT_PAGE_SIZE;
+  const lowFitTotal = lowAll.length;
+  const lowFitTotalPages = Math.max(1, Math.ceil(lowFitTotal / size));
+  const p = Math.min(Math.max(1, page), lowFitTotalPages);
+  const from = (p - 1) * size;
+  return {
+    actionable,
+    lowFit: lowAll.slice(from, from + size),
+    lowFitPage: p,
+    lowFitTotalPages,
+    lowFitTotal,
+  };
 }
 
-async function loadBidReviewRowsFromSupabase(scope?: Scope): Promise<BidReviewRow[]> {
+export async function getBidReviewRows(scope?: Scope, lowFitPage = 1): Promise<BidsPageResult> {
+  if (dataSource === "mock") {
+    const actionable = MOCK_BID_ROWS.filter((r) => !!r.bid);
+    const lowAll = MOCK_BID_ROWS.filter((r) => !r.bid);
+    return sliceLowFit(actionable, lowAll, lowFitPage);
+  }
+  if (dataSource === "file") return EMPTY_BIDS;
+  return loadBidReviewRowsFromSupabase(scope, lowFitPage);
+}
+
+async function loadBidReviewRowsFromSupabase(
+  scope: Scope | undefined,
+  lowFitPage: number,
+): Promise<BidsPageResult> {
   const supabase = await serverClient();
   const uid = scopeUserId(scope);
+  const size = BIDS_LOW_FIT_PAGE_SIZE;
+  const from = (lowFitPage - 1) * size;
 
-  // Working set: everything not yet terminally dispositioned. `submitted` stays visible
-  // (the Submitted section tracks responses until won/lost); passed/won/lost drop off.
-  let oppQ = supabase
+  // Actionable bids only need loading on page 1 (they render above the paginated low-fit list).
+  let actionableQ = supabase
     .from("opportunities")
     .select("*")
-    .in("status", ["new", "scored", "drafted", "approved", "submitted"])
+    .in("status", ["drafted", "approved", "submitted"])
+    .order("fit_score", { ascending: false, nullsFirst: false })
+    .order("discovered_at", { ascending: false });
+  if (uid) actionableQ = actionableQ.eq("user_id", uid);
+
+  let lowFitQ = supabase
+    .from("opportunities")
+    .select("*", { count: "exact" })
+    .in("status", ["new", "scored"])
     .order("fit_score", { ascending: false, nullsFirst: false })
     .order("discovered_at", { ascending: false })
-    .limit(400);
-  if (uid) oppQ = oppQ.eq("user_id", uid);
-  const { data: opps, error: oppErr } = await oppQ;
-  if (oppErr) throw oppErr;
-  if (!opps || opps.length === 0) return [];
+    .range(from, from + size - 1);
+  if (uid) lowFitQ = lowFitQ.eq("user_id", uid);
 
-  const oppRows = opps as unknown as Opportunity[];
-  const oppIds = oppRows.map((o) => o.id);
+  const [actRes, lowRes] = await Promise.all([
+    lowFitPage === 1
+      ? actionableQ
+      : Promise.resolve({ data: [] as unknown[], error: null, count: 0 }),
+    lowFitQ,
+  ]);
+  if (actRes.error) throw actRes.error;
+  if (lowRes.error) throw lowRes.error;
 
+  const actOpps = (actRes.data ?? []) as unknown as Opportunity[];
+  const lowOpps = (lowRes.data ?? []) as unknown as Opportunity[];
+  const lowFitTotal = lowRes.count ?? 0;
+
+  // Bids exist only for actionable opportunities — fetch them for that (bounded) set.
   const bidsById = new Map<string, Bid>();
-  for (let i = 0; i < oppIds.length; i += 200) {
-    const chunk = oppIds.slice(i, i + 200);
+  const actIds = actOpps.map((o) => o.id);
+  for (let i = 0; i < actIds.length; i += 200) {
+    const chunk = actIds.slice(i, i + 200);
+    if (chunk.length === 0) break;
     const { data: bids, error: bidErr } = await supabase
       .from("bids")
       .select("*")
@@ -1092,8 +1212,15 @@ async function loadBidReviewRowsFromSupabase(scope?: Scope): Promise<BidReviewRo
     for (const b of (bids ?? []) as unknown as Bid[]) bidsById.set(b.opportunity_id, b);
   }
 
-  return oppRows.map((opportunity) => ({
-    opportunity,
-    bid: bidsById.get(opportunity.id) ?? null,
-  }));
+  const lowFitTotalPages = Math.max(1, Math.ceil(lowFitTotal / size));
+  return {
+    actionable: actOpps.map((opportunity) => ({
+      opportunity,
+      bid: bidsById.get(opportunity.id) ?? null,
+    })),
+    lowFit: lowOpps.map((opportunity) => ({ opportunity, bid: null })),
+    lowFitPage: Math.min(Math.max(1, lowFitPage), lowFitTotalPages),
+    lowFitTotalPages,
+    lowFitTotal,
+  };
 }
