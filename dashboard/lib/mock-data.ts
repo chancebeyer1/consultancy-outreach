@@ -566,7 +566,7 @@ export const MOCK_BID_ROWS: BidReviewRow[] = [
       id: "bid-1",
       opportunity_id: "opp-1",
       summary: "We ship production document-classification agents — directly on target.",
-      body: "Reducing manual triage of benefits documents is exactly the kind of problem a focused AI agent solves well. My approach: an LLM classification-and-extraction pipeline that reads each inbound document, tags it by type, pulls the fields that matter, and routes it to the right queue — with a human-in-the-loop confirmation step for low-confidence cases so nothing slips. I've shipped production agents that do precisely this kind of intake-and-route work (e.g. iinfii.ai), built on the Anthropic API with Postgres and a review dashboard. I can provide a full technical response ahead of the deadline. Could we set up a 20-minute scoping call to confirm document types and volumes?\n\n— Chance",
+      body: "Reducing manual triage of benefits documents is exactly the kind of problem a focused AI agent solves well. My approach: an LLM classification-and-extraction pipeline that reads each inbound document, tags it by type, pulls the fields that matter, and routes it to the right queue — with a human-in-the-loop confirmation step for low-confidence cases so nothing slips. I've shipped production agents that do precisely this kind of intake-and-route work, built on the Anthropic API with Postgres and a review dashboard. I can provide a full technical response ahead of the deadline. Could we set up a 20-minute scoping call to confirm document types and volumes?\n\n— Chance",
       edited_body: null,
       est_price: "$140,000 fixed (phased: pilot → full rollout)",
       status: "approved", // exercises the "Approved — ready to submit" section (manual platform)

@@ -18,7 +18,8 @@ buyer's outcome and prove we can build the thing.
 
 ## Proof (use only what's true)
 
-- Shipped **production AI agents** (e.g. iinfii.ai) — real, deployed, in use, not a demo.
+- Shipped **production AI agents and automations** — a process-discovery agent factory
+  (agents.contentdrip.ai) and an autonomous outreach+bidding engine — real and deployed, not demos.
 - Built this very outreach-and-bidding system: multi-source sourcing, LLM scoring + drafting,
   scheduled workers, a review dashboard. We build the kind of automation we sell.
 - Comfortable across the modern agent stack: the Anthropic/Claude API, tool-use, RAG,

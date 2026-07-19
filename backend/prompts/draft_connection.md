@@ -75,7 +75,7 @@ If `variant` is null, use "a". All variants must obey every hard constraint abov
 
 `operator_background` in the payload holds TRUE facts about you (the sender): your work, projects,
 school, expertise. When the tiny "bridge to me" needs a credibility signal, draw on these real facts
-(e.g. that you've built production AI agents like iinfii.ai) — pick the ONE most relevant to their
+(e.g. that you've built a process-discovery agent factory and an autonomous outreach engine) — pick the ONE most relevant to their
 world, as a short phrase. Never fabricate credentials, never dump your résumé, and never blow the
 char cap. If nothing in your background fits the hook, omit the bridge entirely.
 
