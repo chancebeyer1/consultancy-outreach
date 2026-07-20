@@ -232,8 +232,108 @@ def render_list(spec: dict) -> bytes | None:
     return _save(img)
 
 
+def _sized(url: str) -> str:
+    """Ask X's CDN for a bounded variant so we don't pull multi-MB originals."""
+    if "pbs.twimg.com/media/" in url and "name=" not in url and "?" not in url:
+        return url + "?format=jpg&name=medium"  # medium ≈ 1200px on the long edge
+    return url
+
+
+def _fetch_media(urls: list[str], *, timeout: float = 8.0) -> list:
+    """Download attached photos as RGB images. Best-effort: any failure drops that one image."""
+    imgs: list = []
+    if not urls:
+        return imgs
+    try:
+        import httpx
+        from PIL import Image
+    except Exception:  # noqa: BLE001
+        return imgs
+    # pbs.twimg.com occasionally 403s a bare client; a normal browser UA sidesteps that.
+    ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True, headers=ua) as c:
+            for u in urls[:4]:
+                try:
+                    r = c.get(_sized(u))
+                    r.raise_for_status()
+                    imgs.append(Image.open(io.BytesIO(r.content)).convert("RGB"))
+                except Exception:  # noqa: BLE001
+                    continue
+    except Exception:  # noqa: BLE001
+        return imgs
+    return imgs
+
+
+def _cover(im, w: int, h: int):
+    """Scale + center-crop `im` to exactly (w, h) — how X fills a grid cell."""
+    from PIL import Image
+
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    iw, ih = im.size
+    scale = max(w / iw, h / ih)
+    nw, nh = max(w, round(iw * scale)), max(h, round(ih * scale))
+    im = im.resize((nw, nh), resample)
+    left, top = (nw - w) // 2, (nh - h) // 2
+    return im.crop((left, top, left + w, top + h))
+
+
+def _compose_media(imgs: list, maxw: int, maxh: int):
+    """Lay 1–4 attached photos into one block using X's layouts. Returns (RGB image, height)."""
+    from PIL import Image
+
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    g = 8  # gutter between photos, like X
+    n = min(len(imgs), 4)
+
+    if n == 1:  # single photo: contain-fit, keep the real aspect ratio
+        im = imgs[0]
+        iw, ih = im.size
+        scale = min(maxw / iw, maxh / ih)
+        nw, nh = max(1, round(iw * scale)), max(1, round(ih * scale))
+        return im.resize((nw, nh), resample), nh
+
+    if n == 2:  # side by side
+        cw = (maxw - g) // 2
+        ch = min(maxh, round(cw * 1.1))
+        canvas = Image.new("RGB", (cw * 2 + g, ch), X_CARD)
+        canvas.paste(_cover(imgs[0], cw, ch), (0, 0))
+        canvas.paste(_cover(imgs[1], cw, ch), (cw + g, 0))
+        return canvas, ch
+
+    if n == 3:  # one tall photo left, two stacked right
+        cw = (maxw - g) // 2
+        bh = min(maxh, round(cw * 1.4))
+        sh = (bh - g) // 2
+        canvas = Image.new("RGB", (cw * 2 + g, bh), X_CARD)
+        canvas.paste(_cover(imgs[0], cw, bh), (0, 0))
+        canvas.paste(_cover(imgs[1], cw, sh), (cw + g, 0))
+        canvas.paste(_cover(imgs[2], cw, sh), (cw + g, sh + g))
+        return canvas, bh
+
+    cw = (maxw - g) // 2  # n == 4: 2×2 grid
+    ch = min((maxh - g) // 2, round(cw * 0.62))
+    canvas = Image.new("RGB", (cw * 2 + g, ch * 2 + g), X_CARD)
+    for i in range(4):
+        r, c = divmod(i, 2)
+        canvas.paste(_cover(imgs[i], cw, ch), (c * (cw + g), r * (ch + g)))
+    return canvas, ch * 2 + g
+
+
+def _paste_rounded(base, block, x: int, y: int, radius: int = 16) -> None:
+    """Paste `block` onto `base` at (x, y) with rounded corners, X-style."""
+    from PIL import Image, ImageDraw
+
+    w, h = block.size
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=radius, fill=255)
+    base.paste(block, (x, y), mask)
+
+
 def render_tweet(spec: dict) -> bytes | None:
-    """A dark-mode X ('lights out') tweet card with real text, author, and engagement."""
+    """A dark-mode X ('lights out') tweet card with real text, author, engagement, and any
+    photo the original tweet had attached (baked in below the text, so the card is faithful)."""
     from PIL import Image, ImageDraw
 
     text = spec.get("text") or spec.get("quote") or ""
@@ -249,6 +349,20 @@ def render_tweet(spec: dict) -> bytes | None:
     bf, lines = _fit(d, text, _REG, inner, 540, 56, 34)
     header_h, footer_h, body_h = 132, 60, _lh(bf) * len(lines)
     card_h = P + header_h + body_h + 40 + footer_h + P
+
+    # Bake in the original tweet's own photo(s) below the text, so the card reproduces what people
+    # actually saw — only when there's genuine vertical room left, and never at the card's expense.
+    media_block, media_gap = None, 20
+    try:
+        budget = (H - 24) - card_h  # keep ≥12px canvas slack top and bottom
+        if spec.get("media") and budget >= 180:
+            imgs = _fetch_media(list(spec["media"]))
+            if imgs:
+                media_block, media_h = _compose_media(imgs, inner, min(budget - media_gap, 460))
+                card_h += media_gap + media_h
+    except Exception:  # noqa: BLE001 — a broken image must never lose the whole card
+        media_block = None
+
     y0 = (H - card_h) // 2
     d.rounded_rectangle([cx0, y0, cx1, y0 + card_h], radius=32, fill=X_CARD, outline=X_LINE, width=2)
 
@@ -276,6 +390,11 @@ def render_tweet(spec: dict) -> bytes | None:
     for ln in lines:
         d.text((cx0 + P, y), ln, font=bf, fill=X_TEXT)
         y += _lh(bf)
+    if media_block is not None:
+        y += media_gap
+        mw = media_block.size[0]
+        _paste_rounded(img, media_block, cx0 + P + (inner - mw) // 2, y, radius=16)
+        y += media_block.size[1]
     y += 24
     d.line([(cx0 + P, y), (cx1 - P, y)], fill=X_LINE, width=2)
 

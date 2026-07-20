@@ -38,6 +38,36 @@ def _int(v: Any) -> int:
         return 0
 
 
+def _media_urls(t: dict) -> list[str]:
+    """Attached photo URLs, best-effort across twitterapi.io / X data-dictionary shapes.
+
+    Native media lives under extended_entities / extendedEntities .media[] (entities.media only
+    carries the first of up to four photos, so prefer the extended list). Each item has a `type`
+    and an https CDN url. Photos only — we can't faithfully render a video/GIF as a still.
+    """
+    media = None
+    for key in ("extendedEntities", "extended_entities", "entities"):
+        c = t.get(key)
+        if isinstance(c, dict) and isinstance(c.get("media"), list) and c["media"]:
+            media = c["media"]
+            break
+    if media is None and isinstance(t.get("media"), list):
+        media = t["media"]
+    out: list[str] = []
+    for m in media or []:
+        if not isinstance(m, dict):
+            continue
+        if (m.get("type") or "photo") != "photo":
+            continue
+        u = (
+            m.get("media_url_https") or m.get("media_url")
+            or m.get("mediaUrlHttps") or m.get("mediaUrl") or ""
+        )
+        if isinstance(u, str) and u.startswith("http") and u not in out:
+            out.append(u)
+    return out[:4]  # X caps a tweet at four photos
+
+
 def _normalize(t: dict) -> dict:
     a = t.get("author") or t.get("user") or {}
     return {
@@ -52,6 +82,7 @@ def _normalize(t: dict) -> dict:
         "author_handle": (a.get("userName") or a.get("screen_name") or a.get("username") or "").lstrip("@"),
         "verified": bool(a.get("isBlueVerified") or a.get("verified") or a.get("is_blue_verified")),
         "created_at": t.get("createdAt") or t.get("created_at") or "",
+        "media": _media_urls(t),  # attached photo URLs, so a reaction card reproduces the original
         # twitterapi.io doesn't reliably honor `-filter:replies`, but the response exposes isReply /
         # inReplyToId — so we exclude replies in Python (a reply reads out-of-context as a reaction).
         "is_reply": bool(t.get("isReply") or t.get("inReplyToId") or t.get("in_reply_to_id")),

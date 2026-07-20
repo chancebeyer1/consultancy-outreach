@@ -524,6 +524,9 @@ def generate_tweet_reaction(*, dry_run: bool = False) -> dict[str, Any]:
         "name": chosen["author_name"] or chosen["author_handle"],
         "handle": chosen["author_handle"], "likes": chosen["likes"],
         "reposts": chosen["retweets"], "views": chosen.get("views"), "verified": chosen["verified"],
+        # The original tweet's own photo(s), baked into the card below the text so the reaction
+        # reproduces what people actually saw — the "Their build:" screenshot, not just the words.
+        "media": chosen.get("media") or [],
     }
     try:
         png = render_image(tweet_spec)
