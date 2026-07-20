@@ -239,31 +239,43 @@ def _sized(url: str) -> str:
     return url
 
 
-def _fetch_media(urls: list[str], *, timeout: float = 8.0) -> list:
-    """Download attached photos as RGB images. Best-effort: any failure drops that one image."""
-    imgs: list = []
-    if not urls:
-        return imgs
+def _fetch_media(items: list, *, timeout: float = 8.0) -> list:
+    """Download attached media as (RGB image, kind) tuples. Best-effort: any failure drops the item.
+
+    `items` may be {"url","kind"} dicts (photo/video/gif) or bare url strings (treated as photos).
+    A video/GIF has no still of its own, so we fetch its poster frame and tag it for a play badge.
+    """
+    out: list = []
+    if not items:
+        return out
     try:
         import httpx
         from PIL import Image
     except Exception:  # noqa: BLE001
-        return imgs
+        return out
+    norm: list = []
+    for it in items[:4]:
+        if isinstance(it, dict):
+            u, kind = it.get("url"), (it.get("kind") or "photo")
+        else:
+            u, kind = it, "photo"
+        if isinstance(u, str) and u.startswith("http"):
+            norm.append((u, kind))
     # pbs.twimg.com occasionally 403s a bare client; a normal browser UA sidesteps that.
     ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=ua) as c:
-            for u in urls[:4]:
+            for u, kind in norm:
                 try:
                     r = c.get(_sized(u))
                     r.raise_for_status()
-                    imgs.append(Image.open(io.BytesIO(r.content)).convert("RGB"))
+                    out.append((Image.open(io.BytesIO(r.content)).convert("RGB"), kind))
                 except Exception:  # noqa: BLE001
                     continue
     except Exception:  # noqa: BLE001
-        return imgs
-    return imgs
+        return out
+    return out
 
 
 def _cover(im, w: int, h: int):
@@ -279,37 +291,70 @@ def _cover(im, w: int, h: int):
     return im.crop((left, top, left + w, top + h))
 
 
-def _compose_media(imgs: list, maxw: int, maxh: int):
-    """Lay 1–4 attached photos into one block using X's layouts. Returns (RGB image, height)."""
+def _play_badge(size: int):
+    """An RGBA ▶ badge — translucent dark disc + white triangle — to mark a video/GIF still."""
+    from PIL import Image, ImageDraw
+
+    badge = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(badge)
+    d.ellipse([0, 0, size - 1, size - 1], fill=(0, 0, 0, 140))
+    cx = cy = size / 2
+    t = size * 0.22
+    d.polygon([(cx - t * 0.5, cy - t), (cx - t * 0.5, cy + t), (cx + t * 0.95, cy)],
+              fill=(255, 255, 255, 240))  # rightward triangle, nudged for optical centering
+    return badge
+
+
+def _stamp_play(canvas, cx: int, cy: int, region_min: int) -> None:
+    """Paste a play badge centered at (cx, cy), sized to the region it sits on (in place)."""
+    size = max(48, min(150, int(region_min * 0.28)))
+    badge = _play_badge(size)
+    canvas.paste(badge, (int(cx - size / 2), int(cy - size / 2)), badge)
+
+
+def _compose_media(items: list, maxw: int, maxh: int):
+    """Lay 1–4 attached media into one block using X's layouts, badging any video/GIF still.
+
+    `items` are (RGB image, kind) tuples. Returns (RGB image, height)."""
     from PIL import Image
 
     resample = getattr(Image, "Resampling", Image).LANCZOS
-    g = 8  # gutter between photos, like X
-    n = min(len(imgs), 4)
+    g = 8  # gutter between items, like X
+    items = items[:4]
+    n = len(items)
 
-    if n == 1:  # single photo: contain-fit, keep the real aspect ratio
-        im = imgs[0]
+    def cell(idx, w, h, x, y, canvas):
+        im, kind = items[idx]
+        canvas.paste(_cover(im, w, h), (x, y))
+        if kind in ("video", "gif"):
+            _stamp_play(canvas, x + w // 2, y + h // 2, min(w, h))
+
+    if n == 1:  # single item: contain-fit, keep the real aspect ratio
+        im, kind = items[0]
         iw, ih = im.size
         scale = min(maxw / iw, maxh / ih)
         nw, nh = max(1, round(iw * scale)), max(1, round(ih * scale))
-        return im.resize((nw, nh), resample), nh
+        canvas = im.resize((nw, nh), resample)
+        if kind in ("video", "gif"):
+            _stamp_play(canvas, nw // 2, nh // 2, min(nw, nh))
+        return canvas, nh
 
     if n == 2:  # side by side
         cw = (maxw - g) // 2
         ch = min(maxh, round(cw * 1.1))
         canvas = Image.new("RGB", (cw * 2 + g, ch), X_CARD)
-        canvas.paste(_cover(imgs[0], cw, ch), (0, 0))
-        canvas.paste(_cover(imgs[1], cw, ch), (cw + g, 0))
+        cell(0, cw, ch, 0, 0, canvas)
+        cell(1, cw, ch, cw + g, 0, canvas)
         return canvas, ch
 
-    if n == 3:  # one tall photo left, two stacked right
+    if n == 3:  # one tall item left, two stacked right
         cw = (maxw - g) // 2
         bh = min(maxh, round(cw * 1.4))
         sh = (bh - g) // 2
         canvas = Image.new("RGB", (cw * 2 + g, bh), X_CARD)
-        canvas.paste(_cover(imgs[0], cw, bh), (0, 0))
-        canvas.paste(_cover(imgs[1], cw, sh), (cw + g, 0))
-        canvas.paste(_cover(imgs[2], cw, sh), (cw + g, sh + g))
+        cell(0, cw, bh, 0, 0, canvas)
+        cell(1, cw, sh, cw + g, 0, canvas)
+        cell(2, cw, sh, cw + g, sh + g, canvas)
         return canvas, bh
 
     cw = (maxw - g) // 2  # n == 4: 2×2 grid
@@ -317,7 +362,7 @@ def _compose_media(imgs: list, maxw: int, maxh: int):
     canvas = Image.new("RGB", (cw * 2 + g, ch * 2 + g), X_CARD)
     for i in range(4):
         r, c = divmod(i, 2)
-        canvas.paste(_cover(imgs[i], cw, ch), (c * (cw + g), r * (ch + g)))
+        cell(i, cw, ch, c * (cw + g), r * (ch + g), canvas)
     return canvas, ch * 2 + g
 
 
