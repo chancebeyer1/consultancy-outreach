@@ -25,7 +25,7 @@ from psycopg.types.json import Jsonb
 from clients import claude, news, unipile
 from config import Config, require
 from prompts_loader import load_prompt
-from workers.cards import render_image
+from workers.cards import render_image, render_media_image
 
 
 def _connect():
@@ -192,16 +192,30 @@ def _notify_draft(item: dict, post: str) -> None:
         pass
 
 
-def _do_publish(post_id: str, body: str, account_id: str | None, card_b64: str | None = None) -> tuple[bool, str | None]:
-    """Publish one post via Unipile (with its stat card, if any) and update its row."""
-    image = None
+def _do_publish(post_id: str, body: str, account_id: str | None, card_b64: str | None = None,
+                media_images: list | None = None) -> tuple[bool, str | None]:
+    """Publish one post via Unipile and update its row.
+
+    Attaches the text tweet card first, then each original-tweet media image — LinkedIn renders
+    two or more as a multi-image carousel, in that order. A photo/text-only post just sends its one.
+    """
+    images: list[tuple[str, bytes, str]] = []
     if card_b64:
         try:
-            image = base64.b64decode(card_b64)
+            images.append(("card.png", base64.b64decode(card_b64), "image/png"))
         except Exception:  # noqa: BLE001
-            image = None
+            pass
+    for i, m in enumerate(media_images or []):
+        b64 = m.get("b64") if isinstance(m, dict) else None
+        if not b64:
+            continue
+        try:
+            images.append((f"media{i + 1}.jpg", base64.b64decode(b64),
+                           (m.get("mime") if isinstance(m, dict) else None) or "image/jpeg"))
+        except Exception:  # noqa: BLE001
+            continue
     try:
-        resp = unipile.create_post(body, account_id=account_id, image=image)
+        resp = unipile.create_post(body, account_id=account_id, images=images or None)
         external_id = None
         if isinstance(resp, dict):
             external_id = resp.get("post_id") or resp.get("id") or resp.get("share_id")
@@ -280,7 +294,7 @@ def publish_approved(*, dry_run: bool = False, limit: int | None = None) -> dict
                 return {"posted": 0, "failed": 0, "queued": queued, "paced": why}
         cur.execute(
             """
-            select c.id, c.body, p.unipile_account_id, c.card_image
+            select c.id, c.body, p.unipile_account_id, c.card_image, c.media_images
             from content_posts c
             left join profiles p on p.id = c.user_id
             where c.status = 'approved'
@@ -295,11 +309,11 @@ def publish_approved(*, dry_run: bool = False, limit: int | None = None) -> dict
 
     posted: list[str] = []
     failed: list[dict] = []
-    for post_id, body, account_id, card_image in rows:
+    for post_id, body, account_id, card_image, media_images in rows:
         if dry_run:
             posted.append(str(post_id))
             continue
-        ok, err = _do_publish(str(post_id), body, account_id, card_image)
+        ok, err = _do_publish(str(post_id), body, account_id, card_image, media_images)
         (posted if ok else failed).append({"id": str(post_id), "error": err} if not ok else str(post_id))
     return {"published": len(posted), "failed": len(failed),
             "details": {"posted": posted, "failed": failed}, "dry_run": dry_run}
@@ -311,14 +325,14 @@ def publish_one(post_id: str | None) -> dict[str, Any]:
         return {"ok": False, "error": "missing post_id"}
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "select c.id, c.body, p.unipile_account_id, c.card_image from content_posts c "
-            "left join profiles p on p.id = c.user_id where c.id = %s",
+            "select c.id, c.body, p.unipile_account_id, c.card_image, c.media_images "
+            "from content_posts c left join profiles p on p.id = c.user_id where c.id = %s",
             (str(post_id),),
         )
         row = cur.fetchone()
     if not row:
         return {"ok": False, "error": "post not found"}
-    ok, err = _do_publish(str(row[0]), row[1], row[2], row[3])
+    ok, err = _do_publish(str(row[0]), row[1], row[2], row[3], row[4])
     return {"ok": ok, "error": err}
 
 
@@ -519,14 +533,13 @@ def generate_tweet_reaction(*, dry_run: bool = False) -> dict[str, Any]:
         return {"generated": False, "reason": "no sharp reaction produced"}
 
     tweet_text = re.sub(r"\s*https?://t\.co/\S+", "", chosen["text"]).strip()  # drop ugly shortlinks
+    # The tweet card is text-only; the original attachment(s) ride as separate images so the
+    # reaction publishes as a multi-image LinkedIn post: [text card, then each attached media].
     tweet_spec = {
         "type": "tweet", "text": _sanitize(tweet_text),
         "name": chosen["author_name"] or chosen["author_handle"],
         "handle": chosen["author_handle"], "likes": chosen["likes"],
         "reposts": chosen["retweets"], "views": chosen.get("views"), "verified": chosen["verified"],
-        # The original tweet's own media ({url,kind}), baked into the card below the text so the
-        # reaction reproduces what people saw — a photo, or a video/GIF cover frame with a ▶ badge.
-        "media": chosen.get("media") or [],
     }
     try:
         png = render_image(tweet_spec)
@@ -534,17 +547,33 @@ def generate_tweet_reaction(*, dry_run: bool = False) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         card_b64 = None
 
+    # Render each attached photo / video-poster as its own image (video/GIF gets a ▶ play badge).
+    media_images: list[dict] = []
+    for it in (chosen.get("media") or []):
+        try:
+            mb = render_media_image(it)
+        except Exception:  # noqa: BLE001
+            mb = None
+        if mb:
+            media_images.append({
+                "kind": it.get("kind"), "mime": "image/jpeg",
+                "b64": base64.b64encode(mb).decode("ascii"), "video_url": it.get("video_url"),
+            })
+
     title = f"Reacting to @{chosen['author_handle']}: {chosen['text'][:80]}"
     if dry_run:
         return {"generated": True, "dry_run": True, "source": title, "source_url": chosen["url"],
                 "post": post, "format": fmt, "tweet_likes": chosen["likes"],
-                "tweet_retweets": chosen["retweets"], "card_rendered": bool(card_b64)}
+                "tweet_retweets": chosen["retweets"], "card_rendered": bool(card_b64),
+                "media_images": len(media_images)}
 
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "insert into content_posts (source_kind, source_title, source_url, body, format, card, card_image, status) "
-            "values ('tweet', %s, %s, %s, %s, %s, %s, 'draft') returning id",
-            (title[:300], chosen["url"] or None, post, fmt, Jsonb(tweet_spec), card_b64),
+            "insert into content_posts (source_kind, source_title, source_url, body, format, card, "
+            "card_image, media_images, status) "
+            "values ('tweet', %s, %s, %s, %s, %s, %s, %s, 'draft') returning id",
+            (title[:300], chosen["url"] or None, post, fmt, Jsonb(tweet_spec), card_b64,
+             Jsonb(media_images) if media_images else None),
         )
         post_id = str(cur.fetchone()[0])
         cur.execute(

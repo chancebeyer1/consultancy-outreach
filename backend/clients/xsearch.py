@@ -41,13 +41,27 @@ def _int(v: Any) -> int:
 _MEDIA_KIND = {"photo": "photo", "video": "video", "animated_gif": "gif"}
 
 
+def _best_video_url(m: dict) -> str | None:
+    """Highest-bitrate mp4 variant of a video/GIF (for a 'watch' link — not attached to LinkedIn)."""
+    vi = m.get("video_info") or m.get("videoInfo") or {}
+    variants = [
+        v for v in (vi.get("variants") or [])
+        if isinstance(v, dict) and (v.get("content_type") or v.get("contentType")) == "video/mp4"
+        and isinstance(v.get("url"), str)
+    ]
+    if not variants:
+        return None
+    variants.sort(key=lambda v: v.get("bitrate") or v.get("bitRate") or 0)
+    return variants[-1]["url"]
+
+
 def _media_items(t: dict) -> list[dict]:
-    """Attached media as {url, kind} dicts, best-effort across twitterapi.io / X shapes.
+    """Attached media as {url, kind, video_url} dicts, best-effort across twitterapi.io / X shapes.
 
     Native media lives under extended_entities / extendedEntities .media[] (entities.media only
     carries the first of up to four items, so prefer the extended list). `media_url_https` is the
-    still for a photo and the poster/cover frame for a video or GIF — we render a single PNG card
-    either way, tagging video/GIF so the card can stamp a ▶ play badge on the frame.
+    still for a photo and the poster/cover frame for a video or GIF; `video_url` is the playable
+    mp4 for video/GIF (None for photos). A reaction renders each of these as its own image.
     """
     media = None
     for key in ("extendedEntities", "extended_entities", "entities"):
@@ -69,7 +83,8 @@ def _media_items(t: dict) -> list[dict]:
         )
         if isinstance(u, str) and u.startswith("http") and u not in seen:
             seen.add(u)
-            out.append({"url": u, "kind": kind})
+            out.append({"url": u, "kind": kind,
+                        "video_url": _best_video_url(m) if kind in ("video", "gif") else None})
     return out[:4]  # X caps a tweet at four media items
 
 

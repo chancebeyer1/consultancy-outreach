@@ -12,7 +12,7 @@ export type BlogStats = { count: number; last: string | null; slug: string | nul
 // accumulated. Drafts are never paginated — they're the actionable queue and shown in full.
 const PAGE_SIZE = 20;
 const POST_COLS =
-  "id, source_title, source_url, discussion_url, body, format, image_idea, card_image, status, external_id, error, created_at, posted_at";
+  "id, source_title, source_url, discussion_url, body, format, image_idea, card_image, media_images, status, external_id, error, created_at, posted_at";
 
 export default async function ContentPage({
   searchParams,

@@ -312,6 +312,44 @@ def _stamp_play(canvas, cx: int, cy: int, region_min: int) -> None:
     canvas.paste(badge, (int(cx - size / 2), int(cy - size / 2)), badge)
 
 
+def _cap(im, long_edge: int = 1280):
+    """Downscale so the long edge is <= `long_edge` (keeps stored/attached images reasonable)."""
+    from PIL import Image
+
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    w, h = im.size
+    m = max(w, h)
+    if m <= long_edge:
+        return im
+    s = long_edge / m
+    return im.resize((max(1, round(w * s)), max(1, round(h * s))), resample)
+
+
+def _jpeg_bytes(im, quality: int = 85) -> bytes:
+    """Encode a (photographic) image as JPEG — far smaller than PNG for photos/posters."""
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def render_media_image(item: dict) -> bytes | None:
+    """Render one original-tweet attachment as its own standalone JPEG.
+
+    A photo becomes the photo itself; a video/GIF becomes its cover frame with a ▶ play badge so
+    it reads as a still of a clip. Best-effort — returns None if the media can't be fetched.
+    `item` is an {"url","kind"} dict (as produced by xsearch._media_items). Used to build the
+    second-and-later images of a multi-image reaction post, separate from the text tweet card.
+    """
+    got = _fetch_media([item])
+    if not got:
+        return None
+    im, kind = got[0]
+    im = _cap(im, 1280)
+    if kind in ("video", "gif"):
+        _stamp_play(im, im.width // 2, im.height // 2, min(im.width, im.height))
+    return _jpeg_bytes(im)
+
+
 def _compose_media(items: list, maxw: int, maxh: int):
     """Lay 1–4 attached media into one block using X's layouts, badging any video/GIF still.
 

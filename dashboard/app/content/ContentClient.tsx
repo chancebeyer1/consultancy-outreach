@@ -5,6 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+export type MediaImage = {
+  kind?: string | null; // "photo" | "video" | "gif"
+  mime?: string | null; // e.g. "image/jpeg"
+  b64: string; // base64 image bytes
+  video_url?: string | null; // playable mp4 for video/gif (dashboard "watch" link only)
+};
+
 export type ContentPost = {
   id: string;
   source_title: string | null;
@@ -14,6 +21,8 @@ export type ContentPost = {
   format: string | null;
   image_idea: string | null;
   card_image: string | null;
+  // Original-tweet attachments, published after the text card as a multi-image carousel.
+  media_images: MediaImage[] | null;
   status: string;
   external_id: string | null;
   error: string | null;
@@ -372,6 +381,21 @@ function Card({ post, editable = false }: { post: ContentPost; editable?: boolea
   const dirty = body !== post.body;
   const words = body.trim() ? body.trim().split(/\s+/).length : 0;
 
+  // What actually publishes to LinkedIn, in order: the text tweet card, then each original
+  // attachment (photo, or video/GIF cover frame). Two or more become a multi-image carousel.
+  const attachments: { src: string; label: string; video?: string | null }[] = [];
+  if (post.card_image) {
+    attachments.push({ src: `data:image/png;base64,${post.card_image}`, label: "Card" });
+  }
+  for (const m of post.media_images ?? []) {
+    if (!m?.b64) continue;
+    attachments.push({
+      src: `data:${m.mime || "image/jpeg"};base64,${m.b64}`,
+      label: m.kind === "video" ? "Video thumbnail" : m.kind === "gif" ? "GIF thumbnail" : "Photo",
+      video: m.video_url ?? null,
+    });
+  }
+
   async function act(action: "approve" | "save" | "dismiss" | "retry") {
     setBusy(action);
     setMsg(null);
@@ -430,17 +454,41 @@ function Card({ post, editable = false }: { post: ContentPost; editable?: boolea
         <p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-300">{post.body}</p>
       )}
 
-      {post.card_image && (
+      {attachments.length > 0 && (
         <div className="mt-3">
           <div className="mb-1 text-[10px] uppercase tracking-wide text-neutral-500">
-            Attached image
+            LinkedIn images
+            {attachments.length > 1 && (
+              <span className="text-neutral-600"> · {attachments.length} (carousel)</span>
+            )}
           </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={`data:image/png;base64,${post.card_image}`}
-            alt="stat card"
-            className="w-full max-w-[300px] rounded-md border border-neutral-800"
-          />
+          <div className="flex flex-wrap gap-3">
+            {attachments.map((a, i) => (
+              <figure key={i} className="w-[150px]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={a.src}
+                  alt={a.label}
+                  className="h-[150px] w-[150px] rounded-md border border-neutral-800 bg-neutral-950 object-contain"
+                />
+                <figcaption className="mt-1 flex items-center justify-between gap-1 text-[10px] text-neutral-500">
+                  <span>
+                    {i + 1} · {a.label}
+                  </span>
+                  {a.video && (
+                    <a
+                      href={a.video}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="shrink-0 text-sky-400 hover:underline"
+                    >
+                      ▶ watch
+                    </a>
+                  )}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
         </div>
       )}
 

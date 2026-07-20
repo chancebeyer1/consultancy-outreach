@@ -562,22 +562,30 @@ def send_chat_message(
 @_RETRY
 def create_post(
     text: str, *, account_id: str | None = None, external_link: str | None = None,
+    images: list[tuple[str, bytes, str]] | None = None,
     image: bytes | None = None, image_name: str = "card.png",
 ) -> dict[str, Any]:
     """Publish a post to the connected account's feed (LinkedIn share).  POST /posts (multipart).
 
     `account_id` defaults to the global account (multi-user passes the author's). `external_link`
-    adds a preview card. `image` (PNG bytes) attaches a visual. Returns the created post payload
+    adds a preview card. Attach visuals with `images` — a list of (filename, bytes, mime) parts;
+    LinkedIn renders two or more as a single multi-image (carousel) post, in the given order.
+    `image` (PNG bytes) is the legacy single-image shortcut. Returns the created post payload
     (post / share id). 201 = published.
     """
     fields: dict[str, Any] = {"account_id": account_id or _li_account(), "text": text}
     if external_link:
         fields["external_link"] = external_link
-    files = _form(fields)
-    if image:
-        files["attachments"] = (image_name, image, "image/png")
-    with httpx.Client(timeout=90.0) as c:
-        r = c.post(f"{_base()}/posts", headers=_headers(), files=files)
+    # httpx needs a LIST of parts (not a dict) so the `attachments` field can repeat once per image
+    # — that repetition is exactly what makes it a multi-image LinkedIn post.
+    parts: list[tuple[str, Any]] = list(_form(fields).items())
+    atts = list(images or [])
+    if image and not atts:
+        atts = [(image_name, image, "image/png")]
+    for name, data, mime in atts:
+        parts.append(("attachments", (name, data, mime)))
+    with httpx.Client(timeout=120.0) as c:
+        r = c.post(f"{_base()}/posts", headers=_headers(), files=parts)
         r.raise_for_status()
         return r.json()
 
