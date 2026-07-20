@@ -547,17 +547,20 @@ def generate_tweet_reaction(*, dry_run: bool = False) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         card_b64 = None
 
-    # Render each attached photo / video-poster as its own image (video/GIF gets a ▶ play badge).
+    # Attach only the tweet's own photos as extra carousel images. Video/GIF cover frames make weak
+    # stills, so they're skipped entirely — the text card + commentary carry those reactions.
     media_images: list[dict] = []
     for it in (chosen.get("media") or []):
+        if it.get("kind") != "photo":
+            continue
         try:
             mb = render_media_image(it)
         except Exception:  # noqa: BLE001
             mb = None
         if mb:
             media_images.append({
-                "kind": it.get("kind"), "mime": "image/jpeg",
-                "b64": base64.b64encode(mb).decode("ascii"), "video_url": it.get("video_url"),
+                "kind": "photo", "mime": "image/jpeg",
+                "b64": base64.b64encode(mb).decode("ascii"),
             })
 
     title = f"Reacting to @{chosen['author_handle']}: {chosen['text'][:80]}"
