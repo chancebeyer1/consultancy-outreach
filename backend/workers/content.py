@@ -494,6 +494,9 @@ def generate_tweet_reaction(*, dry_run: bool = False) -> dict[str, Any]:
         and _ai_relevant(t["text"])
         and t["author_handle"]
         and not _looks_like_spam(t["text"])
+        # React only to text/photo tweets — a video tweet's visual is the clip itself, which we
+        # can't carry into a LinkedIn image post, so the reaction would land without its context.
+        and not any((m.get("kind") in ("video", "gif")) for m in (t.get("media") or []))
     ]
     if not fresh:
         return {"generated": False, "reason": "no fresh substantive AI tweets"}
