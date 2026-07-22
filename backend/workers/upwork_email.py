@@ -15,6 +15,7 @@ from config import Config
 from prompts_loader import system_prefix
 from workers.opportunity_sourcing import (
     BIDS_CAMPAIGN,
+    DRAFT_LIMIT,
     MIN_FIT_TO_DRAFT,
     SCORE_LIMIT,
     _admin_user_id,
@@ -25,10 +26,21 @@ from workers.opportunity_sourcing import (
 )
 
 
-def ingest_upwork_emails(*, account_id: str | None = None, dry_run: bool = False, limit_emails: int = 40) -> dict[str, Any]:
+def ingest_upwork_emails(
+    *,
+    account_id: str | None = None,
+    dry_run: bool = False,
+    limit_emails: int = 40,
+    score_cap: int | None = None,
+    draft_cap: int | None = None,
+) -> dict[str, Any]:
     """Scan the connected inbox for Upwork job alerts, extract postings, and pipe them into
     the bid queue. `account_id` selects which connected mailbox receives the alerts (defaults
-    to UPWORK_ALERT_EMAIL_ACCOUNT_ID, else the main email account)."""
+    to UPWORK_ALERT_EMAIL_ACCOUNT_ID, else the main email account). `limit_emails` is how many
+    inbox emails to scan (raise it to backfill history); `score_cap`/`draft_cap` bound LLM cost
+    per run (default to the standard per-sweep caps)."""
+    score_cap = score_cap or SCORE_LIMIT
+    draft_cap = draft_cap or DRAFT_LIMIT
     if not Config.unipile_api_key:
         return {"skipped": "no unipile"}
     acct = account_id or Config.upwork_alert_email_account_id or None
@@ -71,16 +83,24 @@ def ingest_upwork_emails(*, account_id: str | None = None, dry_run: bool = False
         fresh.append(j)
 
     scored = drafted = ingested = 0
-    for opp in fresh[:SCORE_LIMIT]:
+    for opp in fresh[:score_cap]:
         fit = _score(opp, prefix)
         scored += 1
         bid = None
-        if int(fit.get("fit_score") or 0) >= MIN_FIT_TO_DRAFT and bool(fit.get("is_software")):
+        if (
+            int(fit.get("fit_score") or 0) >= MIN_FIT_TO_DRAFT
+            and bool(fit.get("is_software"))
+            and drafted < draft_cap
+        ):
             bid = _draft(opp, fit, prefix, owner_id)
             if bid:
                 drafted += 1
         if not dry_run and Config.database_url and _ingest(opp, fit, bid, owner_id):
             ingested += 1
+        # In a dry run, show what was found + how it scored so we can eyeball the real format.
+        if dry_run:
+            print(f"  [upwork-email] fit={fit.get('fit_score')} sw={fit.get('is_software')} "
+                  f"{'DRAFT' if bid else '    '}  {(opp.get('title') or '')[:60]}")
 
     return {
         "emails_scanned": len(emails),
@@ -90,4 +110,5 @@ def ingest_upwork_emails(*, account_id: str | None = None, dry_run: bool = False
         "scored": scored,
         "drafted": drafted,
         "ingested": ingested,
+        "deferred": max(0, len(fresh) - score_cap),
     }

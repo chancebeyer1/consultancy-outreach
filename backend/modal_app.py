@@ -625,13 +625,17 @@ def bids_submit_ready(request_body: dict) -> dict:
     return _logged("bids_submit_ready", submit_ready_freelancer(auto=False))
 
 
-@app.function(secrets=secrets, timeout=300)
-def upwork_emails_now(dry_run: bool = False) -> dict:
+@app.function(secrets=secrets, timeout=900)
+def upwork_emails_now(dry_run: bool = False, limit_emails: int = 40, score_cap: int = 0, draft_cap: int = 0) -> dict:
     """Ingest Upwork jobs from your job-alert emails on demand (ToS-safe — parses your own
-    inbox, no scraping). `modal run modal_app.py::upwork_emails_now --dry-run`."""
+    inbox, no scraping). Backfill history by raising --limit-emails (and --score-cap /
+    --draft-cap for a big first run). `modal run modal_app.py::upwork_emails_now --dry-run --limit-emails 200`."""
     from workers.upwork_email import ingest_upwork_emails
 
-    return _logged("upwork_email_ingest", ingest_upwork_emails(dry_run=dry_run))
+    return _logged("upwork_email_ingest", ingest_upwork_emails(
+        dry_run=dry_run, limit_emails=limit_emails,
+        score_cap=score_cap or None, draft_cap=draft_cap or None,
+    ))
 
 
 @app.function(secrets=secrets, timeout=120)
