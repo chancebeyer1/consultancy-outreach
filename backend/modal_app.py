@@ -474,6 +474,14 @@ def _maybe_sweep_opportunities() -> dict:
     from workers.opportunity_sourcing import source_all
 
     result = source_all(dry_run=False, time_budget_s=500)
+    # Ingest Upwork jobs from the operator's own job-alert emails (ToS-safe; no scraping).
+    # Best-effort — a mail/LLM hiccup must not fail the sweep.
+    try:
+        from workers.upwork_email import ingest_upwork_emails
+
+        result["upwork_email"] = ingest_upwork_emails(dry_run=False)
+    except Exception as e:  # noqa: BLE001
+        result.setdefault("errors", []).append(f"upwork email ingest: {e}")
     # Opt-in, OFF by default: auto-place approved Freelancer bids (guarded by min-fit + daily
     # cap in the worker). Runs after the sweep so freshly auto-approved strong-fit bids can go
     # same-day. Best-effort — a submit failure must not fail the sweep.
@@ -615,6 +623,15 @@ def bids_submit_ready(request_body: dict) -> dict:
     from workers.bids_autosubmit import submit_ready_freelancer
 
     return _logged("bids_submit_ready", submit_ready_freelancer(auto=False))
+
+
+@app.function(secrets=secrets, timeout=300)
+def upwork_emails_now(dry_run: bool = False) -> dict:
+    """Ingest Upwork jobs from your job-alert emails on demand (ToS-safe — parses your own
+    inbox, no scraping). `modal run modal_app.py::upwork_emails_now --dry-run`."""
+    from workers.upwork_email import ingest_upwork_emails
+
+    return _logged("upwork_email_ingest", ingest_upwork_emails(dry_run=dry_run))
 
 
 @app.function(secrets=secrets, timeout=120)

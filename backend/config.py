@@ -119,6 +119,10 @@ class Config:
     apify_upwork_query: str = _env("APIFY_UPWORK_QUERY")
     # Freelancer.com — self-serve token from freelancer.com Settings → API. Unset → skipped.
     freelancer_oauth_token: str = _env("FREELANCER_OAUTH_TOKEN")
+    # Upwork job-alert EMAIL ingestion (ToS-safe: parses alert emails Upwork sends you, no
+    # scraping). Which connected Unipile mailbox receives the alerts; unset → the main email
+    # account. Forward Upwork alerts here (Gmail filter) or connect that Gmail to Unipile.
+    upwork_alert_email_account_id: str = _env("UPWORK_ALERT_EMAIL_ACCOUNT_ID")
 
     # Bidding automation. AUTO-APPROVE: fit >= this (and is_software + eligible) → the drafted
     # bid lands pre-approved in "Ready to submit" instead of "Needs approval". 0 = off (every
