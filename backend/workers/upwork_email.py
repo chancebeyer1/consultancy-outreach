@@ -44,6 +44,8 @@ def ingest_upwork_emails(
     if not Config.unipile_api_key:
         return {"skipped": "no unipile"}
     acct = account_id or Config.upwork_alert_email_account_id or None
+    # Unipile's /emails endpoint rejects large limits (limit=300 → 400). 200 is the tested ceiling.
+    limit_emails = min(max(1, limit_emails), 200)
     try:
         emails = unipile.list_emails(role="inbox", limit=limit_emails, account_id=acct)
     except Exception as e:  # noqa: BLE001
