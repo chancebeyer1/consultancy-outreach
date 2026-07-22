@@ -63,12 +63,21 @@ def _search(query: str, limit: int) -> dict[str, Any]:
 def _budget_str(p: dict[str, Any]) -> str | None:
     b = p.get("budget") or {}
     lo, hi = b.get("minimum"), b.get("maximum")
-    cur = ((p.get("currency") or {}).get("code")) or "USD"
+    cur_obj = p.get("currency") or {}
+    cur = cur_obj.get("code") or "USD"
+    rate = cur_obj.get("exchange_rate")  # multiplier to USD
     ptype = p.get("type")  # 'fixed' | 'hourly'
     if lo is None and hi is None:
         return None
     rng = f"{lo or '?'}–{hi or '?'} {cur}"
-    return f"{rng}/hr" if ptype == "hourly" else f"{rng} (fixed)"
+    # Show a USD equivalent for non-USD budgets so the fit-scorer judges real value — a big INR
+    # number is often a tiny USD rate, and the scorer must not be fooled by the raw figure.
+    usd = ""
+    if isinstance(rate, (int, float)) and rate > 0 and cur != "USD":
+        def _u(v: Any) -> str:
+            return f"${round(v * rate)}" if isinstance(v, (int, float)) else "?"
+        usd = f" (~{_u(lo)}–{_u(hi)} USD)"
+    return f"{rng}{usd}/hr" if ptype == "hourly" else f"{rng}{usd} (fixed)"
 
 
 def _normalize(p: dict[str, Any]) -> dict[str, Any] | None:

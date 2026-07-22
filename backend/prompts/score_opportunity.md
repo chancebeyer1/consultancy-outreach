@@ -42,12 +42,30 @@ NAICS/PSC/set-aside for gov). Score against the ideal-opportunity profile in the
 | 40–59 | Marginal. Software-tangential or eligibility is shaky. Skip unless undersupplied. |
 | 0–39 | Out. Not software, not eligible, or a bad-fit domain. Do not draft. |
 
+## Rate / budget fit (freelance sources only: upwork, freelancer, remoteok, linkedin_jobs)
+
+The operator's target rate is **~$100/hr** (open to fixed-price work priced to match the scope).
+Weigh the budget for rate-based work:
+- Hourly ceiling at/above ~$80/hr, or a fixed budget that reasonably pencils out to that given
+  the scope → no rate penalty.
+- **Clearly underpriced** — a low hourly ceiling (roughly under ~$40/hr) or a tiny fixed budget
+  for real software work → **cap the fit at ~35**. A race-to-the-bottom rate is a near-
+  disqualifier even when the topic fits perfectly; the operator won't work at those rates.
+- Between those, scale the score down as the rate drops toward the floor.
+- **Judge foreign-currency budgets by their USD equivalent** — a big local number (e.g. INR)
+  is often a small USD rate. The payload shows a `(~$… USD)` figure when available; use it.
+
+This does NOT apply to government solicitations (source `sam_gov`) — they have no hourly rate
+and are judged on eligibility + scope.
+
 ## Hard caps (override the score → below 40)
 
 - **Not software** (`is_software: false`) — this system only bids software/AI work.
 - **Not eligible** for a solo LLC (clearance required, incumbent-locked, team-scale, on-site).
 - Deadline already passed, or a response window too short to prepare a real bid.
 - A pure staffing/body-shop req (they want a W-2 hire on-site, not a build).
+- **Clearly underpriced** freelance work (see rate/budget fit above) — a race-to-the-bottom
+  rate caps the score even when the topic fits.
 
 Be honest — the score filters the queue, so inflating it just wastes review time. Prefer a
 handful of 80+ opportunities you'd actually win over a long list of maybes.

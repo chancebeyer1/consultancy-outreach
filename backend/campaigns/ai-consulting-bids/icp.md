@@ -19,7 +19,8 @@ against this.
 
 - Explicit AI / LLM / agent / automation / RAG / chatbot / ML / NLP language
 - Clear, bounded scope a solo could deliver in weeks-to-a-few-months
-- Budget or rate that supports real work (favor fixed >$5k or hourly >$60; gov sub-$250K buys)
+- Budget/rate that supports real work — **target ~$100/hr**; favor hourly ceilings ≥ ~$80/hr
+  or fixed budgets priced to match scope; gov sub-$250K buys (judge foreign currency by USD)
 - Remote / no on-site requirement
 - For gov: a **small-business set-aside** (Total Small Business, 8(a), SDVOSB, WOSB, HUBZone),
   NAICS in 5415xx / 518210, and a response window long enough to prepare a real bid
@@ -32,5 +33,6 @@ against this.
   past-performance record, incumbent-locked, or team/prime-of-primes scale
 - On-site / relocation required
 - Deadline passed or a response window too short to prepare
-- Obvious low-budget churn ($5/hr races to the bottom, "simple 1-hour fix" bait)
+- **Underpriced** freelance work — low hourly ceiling (~under $40/hr) or a tiny fixed budget
+  for a real build; obvious low-budget churn and "simple 1-hour fix" bait race to the bottom
 - Crypto/MLM/"revolutionary idea, equity only" red flags
