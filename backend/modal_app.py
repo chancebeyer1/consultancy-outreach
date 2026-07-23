@@ -474,14 +474,8 @@ def _maybe_sweep_opportunities() -> dict:
     from workers.opportunity_sourcing import source_all
 
     result = source_all(dry_run=False, time_budget_s=500)
-    # Ingest Upwork jobs from the operator's own job-alert emails (ToS-safe; no scraping).
-    # Best-effort — a mail/LLM hiccup must not fail the sweep.
-    try:
-        from workers.upwork_email import ingest_upwork_emails
-
-        result["upwork_email"] = ingest_upwork_emails(dry_run=False)
-    except Exception as e:  # noqa: BLE001
-        result.setdefault("errors", []).append(f"upwork email ingest: {e}")
+    # (Upwork job-alert emails are ingested HOURLY via track_bids_cron → upwork_emails, not
+    # here — so new alerts get scored within the hour, not once a day.)
     # Opt-in, OFF by default: auto-place approved Freelancer bids (guarded by min-fit + daily
     # cap in the worker). Runs after the sweep so freshly auto-approved strong-fit bids can go
     # same-day. Best-effort — a submit failure must not fail the sweep.
@@ -593,11 +587,12 @@ def bid_submit_now(opportunity_id: str, amount: float = 0.0, period_days: int = 
     return _logged("bid_submitted", result)
 
 
-@app.function(secrets=secrets, timeout=180)
+@app.function(secrets=secrets, timeout=300)
 def track_bids_cron() -> dict:
-    """Poll platform APIs for outcomes AND client messages on submitted bids (Freelancer).
-    Hourly because awards are accept-within-a-window; zero API calls when nothing outstanding.
-    `modal run modal_app.py::track_bids_cron` for an ad-hoc check."""
+    """Hourly bid-pipeline upkeep: (1) poll Freelancer for bid outcomes + client messages, and
+    (2) ingest new Upwork job-alert emails so they're scored within the hour of arrival (not
+    once a day). `skip_seen=True` makes re-checking the inbox free when nothing's new.
+    `modal run modal_app.py::track_bids_cron` for an ad-hoc run."""
     from workers.bids_track import poll_freelancer_bids, poll_freelancer_messages
 
     out = {"outcomes": poll_freelancer_bids()}
@@ -605,6 +600,12 @@ def track_bids_cron() -> dict:
         out["messages"] = poll_freelancer_messages()
     except Exception as e:  # noqa: BLE001
         out["messages"] = {"error": str(e)[:200]}
+    try:
+        from workers.upwork_email import ingest_upwork_emails
+
+        out["upwork_email"] = ingest_upwork_emails(dry_run=False, skip_seen=True)
+    except Exception as e:  # noqa: BLE001
+        out["upwork_email"] = {"error": str(e)[:200]}
     return _logged("cron_track_bids", out)
 
 

@@ -7,6 +7,7 @@ proposal when it's a strong-fit software job.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from campaigns_loader import load_campaign
@@ -33,12 +34,14 @@ def ingest_upwork_emails(
     limit_emails: int = 40,
     score_cap: int | None = None,
     draft_cap: int | None = None,
+    skip_seen: bool = False,
 ) -> dict[str, Any]:
     """Scan the connected inbox for Upwork job alerts, extract postings, and pipe them into
     the bid queue. `account_id` selects which connected mailbox receives the alerts (defaults
     to UPWORK_ALERT_EMAIL_ACCOUNT_ID, else the main email account). `limit_emails` is how many
     inbox emails to scan (raise it to backfill history); `score_cap`/`draft_cap` bound LLM cost
-    per run (default to the standard per-sweep caps)."""
+    per run. `skip_seen=True` (the hourly cron) only LLM-extracts alert emails not seen in a
+    prior run — so re-checking the inbox every hour costs nothing when there's nothing new."""
     score_cap = score_cap or SCORE_LIMIT
     draft_cap = draft_cap or DRAFT_LIMIT
     if not Config.unipile_api_key:
@@ -56,6 +59,18 @@ def ingest_upwork_emails(
         if isinstance(e, dict)
         and upwork_email.is_upwork_alert((e.get("from_attendee") or {}).get("identifier"), e.get("subject"))
     ]
+
+    # Cost guard for the hourly cron: only extract alert emails we haven't processed before
+    # (tracked by email id in app_settings). Manual/backfill runs pass skip_seen=False.
+    seen_ids: list[str] = []
+    if skip_seen and Config.database_url:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("select value from app_settings where key = 'upwork_email_seen_ids'")
+            row = cur.fetchone()
+        seen_ids = list(row[0]) if row and isinstance(row[0], list) else []
+        seen_set = set(seen_ids)
+        alerts = [e for e in alerts if str(e.get("id")) not in seen_set]
+
     if not alerts:
         return {"emails_scanned": len(emails), "alerts": 0}
 
@@ -103,6 +118,19 @@ def ingest_upwork_emails(
         if dry_run:
             print(f"  [upwork-email] fit={fit.get('fit_score')} sw={fit.get('is_software')} "
                   f"{'DRAFT' if bid else '    '}  {(opp.get('title') or '')[:60]}")
+
+    # Remember which alert emails we processed so the hourly cron skips them next time (bound
+    # to the last 300 ids). Only when actually persisting (not dry_run) and tracking is on.
+    if skip_seen and not dry_run and Config.database_url:
+        new_ids = [str(e.get("id")) for e in alerts if e.get("id")]
+        merged = (new_ids + seen_ids)[:300]
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "insert into app_settings (key, value) values ('upwork_email_seen_ids', %s) "
+                "on conflict (key) do update set value = excluded.value",
+                (json.dumps(merged),),
+            )
+            conn.commit()
 
     return {
         "emails_scanned": len(emails),
