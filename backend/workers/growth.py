@@ -170,8 +170,8 @@ def comment_digest(*, dry_run: bool = False) -> dict[str, Any]:
         return {"queued": 0, "dry_run": True, "keyword": kw, "targets": len(targets),
                 "preview": preview[:600]}
 
-    # Queue each drafted comment as 'pending' for one-click approval. The pacer
-    # (workers/comment_pacer.py) posts approved ones spaced out across the day.
+    # Queue each drafted comment pre-approved; the pacer (workers/comment_pacer.py) drips them
+    # out across the day, and /comments stays the place to reject one before it posts.
     queued = 0
     with _connect() as conn, conn.cursor() as cur:
         for p in targets:
@@ -179,9 +179,12 @@ def comment_digest(*, dry_run: bool = False) -> dict[str, Any]:
             if not sid or not cmt:
                 continue
             cur.execute(
+                # status='approved' on insert (2026-07-23, operator-requested auto-approve): the
+                # recruitment-post gate + em-dash humanize already ran upstream, and the pacer's
+                # 1/hr weekday drip leaves a review window in /comments to reject before it posts.
                 "insert into comment_queue (social_id, post_url, author_name, author_headline, "
-                "post_excerpt, reactions, comments, keyword, body) "
-                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (social_id) do nothing",
+                "post_excerpt, reactions, comments, keyword, body, status, approved_at) "
+                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,'approved',now()) on conflict (social_id) do nothing",
                 (sid, p.get("url"), p.get("author_name"), (p.get("author_headline") or "")[:200],
                  (p.get("text") or "")[:280], int(p.get("reactions") or 0),
                  int(p.get("comments") or 0), kw, cmt),

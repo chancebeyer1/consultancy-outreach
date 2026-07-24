@@ -23,7 +23,10 @@ import psycopg
 from clients import unipile
 from config import require
 
-WINDOW_START_UTC = 14   # 14:00 UTC ≈ 10am ET / 7am PT — US feed is active
+# 15 since 2026-07-23: engagement sweep over 87 posted comments showed the earliest slot
+# performed worst (12-14 UTC: 31% engaged) while 18-20 UTC hit 50%; window now starts an hour
+# later and the 8h span matches DAILY_CAP at the 1/hr drip.
+WINDOW_START_UTC = 15   # 15:00 UTC ≈ 11am ET / 8am PT — US feed is fully awake
 WINDOW_END_UTC = 23     # last eligible hour is 22:xx (range is [start, end))
 DAILY_CAP = 8           # ceiling; the real limiter is how many the operator approves (digest drafts ≤6)
 SKIP_PROB = 0.30        # random hold per tick so the cadence isn't clockwork
