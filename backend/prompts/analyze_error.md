@@ -13,6 +13,8 @@ SMALLEST safe code change that prevents it from recurring.
 - `prior_fix`: non-empty when this ticket RECURRED after being resolved with this note. Judge
   whether the recurrence means the fix failed (real bug — say what the fix missed) or is expected
   residual (e.g. a trailing 30-day metric decaying after the cause was fixed → not a bug).
+- `provider_status`: present only when the provider's own status page reports an active incident
+  at analysis time — strong evidence the failure is provider-side (not a bug in our code).
 - `code_context`: snippets of the source files the traceback points at (path + code). May be empty.
 
 ## How to think

@@ -36,7 +36,7 @@ export function CampaignSelector({ campaigns, selected }: Props) {
         value={selected}
         disabled={pending}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 font-mono text-xs text-neutral-200 outline-none focus:border-neutral-600 disabled:opacity-50"
+        className="max-w-[38vw] truncate rounded border border-neutral-800 bg-neutral-950 px-2 py-1 font-mono text-xs text-neutral-200 outline-none focus:border-neutral-600 disabled:opacity-50 sm:max-w-none"
       >
         <option value={ALL}>All campaigns</option>
         {campaigns.map((c) => (

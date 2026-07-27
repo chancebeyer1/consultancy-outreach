@@ -270,6 +270,31 @@ def search_people(
     return {"items": items, "cursor": next_cursor}
 
 
+def status_operational() -> bool | None:
+    """Whether Unipile's status page reports all-systems-operational. None = couldn't tell.
+
+    status.unipile.com exposes no public JSON (standard statuspage paths 403/404), so this
+    checks the HTML banner marker. Fail-OPEN: callers only use this to ANNOTATE (suppressing
+    blame on our code during provider incidents), never to gate sending.
+    """
+    try:
+        r = httpx.get(
+            "https://status.unipile.com/",
+            timeout=10,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        if r.status_code != 200:
+            return None
+        text = r.text
+        if "All Systems Operational" in text:
+            return True
+        # Page rendered but the banner isn't the all-clear — treat as degraded.
+        return False if "perational" in text or "ncident" in text else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @_RETRY
 def search_posts(keywords: str, *, account_id: str | None = None, cursor: str | None = None) -> dict[str, Any]:
     """Search LinkedIn posts by keyword.  POST /linkedin/search (category=posts).

@@ -125,10 +125,63 @@ def generate_weekly_report(*, dry_run: bool = False) -> dict[str, Any]:
 
     var_lines = []
     for v, sent, acc in variants:
-        label = {"a": "a (curiosity note)", "b": "b (peer note)", "c": "c (NO note)"}.get(v, v)
+        label = {"a": "a (curiosity note)", "b": "b (peer note)", "c": "c (NO note)",
+                 "d": "d (peer + question)"}.get(v, v)
         rate = f"{100*acc/sent:.0f}%" if sent else "-"
         var_lines.append(f"    {label:<22} {sent:>4} sent  {acc:>3} accepted  ({rate})")
     reply_line = ", ".join(f"{i}: {n}" for i, n in reply_rows) or "none"
+
+    # --- Growth-comment engagement (Unipile per-comment counters, shipped 2026-06 update).
+    # Samples the last 2 weeks of posted comments, time-budgeted; the report never blocks on it.
+    cmt_line = None
+    try:
+        import time as _t
+
+        import httpx as _hx
+
+        from clients.unipile import _base, _headers, _li_account
+
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """select social_id, external_id, left(body, 70) from comment_queue
+                   where status='posted' and external_id is not null
+                     and posted_at > now() - interval '14 days'
+                   order by posted_at desc limit 30"""
+            )
+            cmt_rows = cur.fetchall()
+        if cmt_rows:
+            deadline = _t.monotonic() + 45
+            tot_r = tot_rep = tot_imp = engaged = seen = 0
+            best: tuple[str | None, int] = (None, -1)
+            with _hx.Client(timeout=20.0, follow_redirects=True) as hc:
+                for social_id, ext, snippet in cmt_rows:
+                    if _t.monotonic() > deadline:
+                        break
+                    try:
+                        rr = hc.get(f"{_base()}/posts/{social_id}/comments", headers=_headers(),
+                                    params={"account_id": _li_account(), "limit": 100})
+                        mine = next((i for i in rr.json().get("items", [])
+                                     if str(i.get("id")) == str(ext)), None)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if not mine:
+                        continue
+                    seen += 1
+                    rc = int(mine.get("reaction_counter") or 0)
+                    rp = int(mine.get("reply_counter") or 0)
+                    tot_imp += int(mine.get("impressions_counter") or 0)
+                    tot_r += rc
+                    tot_rep += rp
+                    engaged += 1 if rc + rp > 0 else 0
+                    if rc + 2 * rp > best[1]:
+                        best = (snippet, rc + 2 * rp)
+            if seen:
+                cmt_line = (f"  Comment engagement (last {seen} posted): {engaged} engaged | "
+                            f"{tot_rep} author replies | {tot_r} reactions | {tot_imp} impressions")
+                if best[0] and best[1] > 0:
+                    cmt_line += f'\n    top: "{best[0]}..."'
+    except Exception:  # noqa: BLE001 — engagement stats must never sink the report
+        cmt_line = None
 
     body = f"""Your outreach machine, week in review.
 
@@ -151,6 +204,7 @@ EMAIL
 
 GROWTH ENGINE
   LinkedIn posts published: {posts_pub} | Growth comments posted: {comments_posted}
+{cmt_line if cmt_line else '  Comment engagement: (no posted comments in window)'}
   Blog articles live: {blog_total} | Tool uses this week: {(audits_7d if isinstance(audits_7d, int) else 0) + (roasts_7d if isinstance(roasts_7d, int) else 0)} (audit {audits_7d}, roast {roasts_7d})
 
 SYSTEM

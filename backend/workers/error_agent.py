@@ -363,6 +363,7 @@ def analyze_new(*, max_n: int = 8) -> dict[str, Any]:
         tickets = cur.fetchall()
 
     analyzed = 0
+    provider_status: dict[str, bool | None] = {}  # lazily checked once per run
     for sig, source, summary, detail, occ, app, prior_fix in tickets:
         # Only apps whose source tree is mounted here get code context; others are analyzed
         # from the traceback alone (root cause still lands in the digest, PR step self-skips).
@@ -377,6 +378,19 @@ def analyze_new(*, max_n: int = 8) -> dict[str, Any]:
                 _code_context(detail or "", source=source, summary=summary) if has_code else []
             ),
         }
+        # Unipile-adjacent failure? Tell the analyzer whether the provider itself is down —
+        # a provider incident is a textbook not-a-bug. Checked at most once per run; fail-open.
+        if any(k in f"{source} {summary} {detail}".lower()
+               for k in ("unipile", "linkedin", "cron_send", "replies", "comment")):
+            if "unipile" not in provider_status:
+                try:
+                    from clients.unipile import status_operational
+
+                    provider_status["unipile"] = status_operational()
+                except Exception:  # noqa: BLE001
+                    provider_status["unipile"] = None
+            if provider_status["unipile"] is False:
+                payload["provider_status"] = "status.unipile.com is reporting an ACTIVE INCIDENT"
         try:
             res = claude.call_json(
                 instruction=load_prompt("analyze_error"),
@@ -518,6 +532,17 @@ def send_digest(*, dry_run: bool = False) -> dict[str, Any]:
         f"{len(open_rows)} open issue(s) across your systems. {prs} have a fix PR ready to review. "
         "This digest replaces the per-error alert spam.\n",
     ]
+    # Provider context: LinkedIn/email failures during a Unipile incident are THEIR outage, not
+    # our bug — say so up front instead of letting the tickets read as regressions. Fail-open.
+    if open_rows:
+        try:
+            from clients.unipile import status_operational
+
+            if status_operational() is False:
+                lines.insert(0, "⚠ status.unipile.com is reporting an INCIDENT right now — "
+                                "LinkedIn/email failures below may be provider-side.\n")
+        except Exception:  # noqa: BLE001
+            pass
     apps_present = {r[11] for r in open_rows}
     for i, (sig, source, summary, occ, sev, conf, risk, cause, fixsum, pr, status, app) in enumerate(open_rows, 1):
         app_tag = f" [{app}]" if len(apps_present) > 1 else ""

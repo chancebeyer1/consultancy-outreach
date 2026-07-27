@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { AuthStatus } from "./AuthStatus";
 import { CampaignSelector } from "./CampaignSelector";
 import { NavLinks } from "./NavLinks";
+import { RefreshButton } from "./RefreshButton";
 import { getCurrentProfile } from "../lib/auth";
 import { CAMPAIGN_COOKIE } from "../lib/campaign-filter";
 import { getCampaigns } from "../lib/queries";
@@ -71,16 +72,18 @@ export async function Nav() {
   return (
     <header className="sticky top-0 z-30 border-b border-neutral-800 bg-[#0a0a0a]/80 backdrop-blur-md">
       <div className="mx-auto max-w-7xl px-4 sm:px-6">
-        {/* Row 1 — brand + utilities. Kept light so the tab bar below has room to breathe. */}
-        <div className="flex h-14 items-center justify-between gap-4">
+        {/* Row 1 — brand + utilities. Shrinks on mobile: shorter bar, tighter gaps, and the
+            campaign selector truncates instead of pushing the row past the viewport. */}
+        <div className="flex h-12 items-center justify-between gap-2 sm:h-14 sm:gap-4">
           <Link
             href="/"
             className="flex shrink-0 items-center gap-2 font-mono text-sm font-bold tracking-wide text-white"
           >
             <span className="h-2 w-2 rounded-full bg-sky-400" />
-            OUTREACH
+            <span className="hidden min-[380px]:inline">OUTREACH</span>
           </Link>
-          <div className="flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
+            <RefreshButton />
             <CampaignSelector campaigns={campaigns} selected={selected} />
             <span
               className={`hidden font-mono text-[10px] uppercase tracking-wide sm:inline ${sourceColor[dataSource]}`}
