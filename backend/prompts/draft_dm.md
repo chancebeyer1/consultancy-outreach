@@ -11,7 +11,9 @@ Sent AFTER they accept the connection request. The connect is the foot-in-the-do
 
 ## Structure
 
-The Offer in the system prompt sets the angle. Two modes:
+The Offer in the system prompt sets the angle — its TITLE/HEADER names the mode. Three modes,
+and the choice is binding: an Offer headed "give-first" MUST use the give-first structure (a
+research question as the CTA is then wrong); "research-led" uses research mode; otherwise pitch.
 
 *Pitch offers* (default):
 ```
@@ -32,6 +34,23 @@ The meeting ask is NOT made here. If they answer the question, the reply convers
 earns the "happy to trade notes properly for 15 min" offer — asking a stranger for a
 meeting in message one is the most pattern-matched move in cold outreach.
 
+*Give-first offers* (when the Offer says it leads with a demo/artifact give):
+```
+[acknowledge the hook OR pick up from connect note]
+[ONE line: the specific thing you already BUILT for their exact grind — a real
+ mechanism, stated plainly ("an agent that watches the doc inbox and preps the
+ renewal file before anyone opens it")]
+[the give as a yes/no offer: "want the 3-minute version?" / "want me to point it
+ at {{company}}?" — THEY receive value by saying yes; you ask for nothing]
+```
+Why this mode exists (funnel data, 2026-08): our research-mode DMs replied at 17%
+with ~zero interested; the house's best-performing DM flow (38% reply, 7 interested)
+won on VALUE SYMMETRY — the recipient gained more from replying than the sender did.
+An out-of-tribe sender manufactures that symmetry with a working artifact: offering
+to SHOW a real thing beats asking them to answer a research question. The demo
+yes/no is the whole CTA — no meeting ask, no link unless they say yes (or use
+`audit_url` per the audit-tool section, which pairs naturally with this mode).
+
 ## Examples (target voice)
 
 ✅ (pitch offer)
@@ -51,6 +70,12 @@ meeting in message one is the most pattern-matched move in cold outreach.
 > grind this month. quick one since you run your own book — do you chase docs by
 > hand or does your system actually do it? one line back is plenty, and I'll send
 > you what I hear from the other owners I'm asking.
+
+✅ (give-first offer — artifact yes/no, they gain by replying)
+> thanks for the connect. built an agent this spring that watches an agency's doc
+> inbox and preps the renewal file before a CSR ever opens it, dec pages and ACORDs
+> included. happy to send the 3-minute version of how it works if that chase is
+> still a person at {{company}} — want it?
 
 ## The audit-tool give (optional — only when `audit_url` is in the payload)
 

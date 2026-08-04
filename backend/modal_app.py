@@ -1640,6 +1640,25 @@ def dispatch_comments_cron() -> dict:
     return _logged("cron_dispatch_comments", res)
 
 
+@app.function(secrets=secrets, timeout=300)
+def post_engagement_cron() -> dict:
+    """Auto-reply to new comments on OUR recent LinkedIn posts (workers/post_engagement.py).
+
+    The golden-hour playbook item "reply to EVERY comment as it lands" — automated
+    2026-08-04 at the operator's request. Capped per run, deduped via content_seen,
+    self-comments excluded; no-op when there are no recent posts or no new comments.
+    """
+    from workers.post_engagement import reply_to_post_comments
+
+    try:
+        res = reply_to_post_comments(time_budget_s=180)
+    except Exception:  # noqa: BLE001 — surface a crash as a result error so it alerts + logs
+        import traceback
+
+        res = {"error": traceback.format_exc()[:1500]}
+    return _logged("cron_post_engagement", res)
+
+
 @app.function(secrets=secrets, timeout=180)
 def ramp_caps_cron() -> dict:
     """Auto-ramp per-account LinkedIn invite caps (workers/ramp.py).
@@ -1840,6 +1859,7 @@ def hourly_dispatcher() -> dict:
         ("replenish_queue", replenish_queue_cron, 1500),
         ("send_approved", send_approved_cron, 600),
         ("dispatch_comments", dispatch_comments_cron, 600),
+        ("post_engagement", post_engagement_cron, 300),
         ("ramp_caps", ramp_caps_cron, 180),
         # Bid outcomes: hourly because a Freelancer award must be accepted within their
         # window; no-op (zero API calls) when no submitted bids are outstanding.

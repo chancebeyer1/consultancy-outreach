@@ -51,5 +51,5 @@ export default async function RepliesPage() {
     }));
   }
 
-  return <RepliesClient initialRows={rows} scheduled={scheduled} />;
+  return <RepliesClient initialRows={rows} scheduled={scheduled} meId={profile?.id ?? null} />;
 }

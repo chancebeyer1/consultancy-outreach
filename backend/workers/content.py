@@ -232,21 +232,33 @@ def _do_publish(post_id: str, body: str, account_id: str | None, card_b64: str |
                   summary="Published a LinkedIn post", entity_type="content_post", entity_id=post_id)
         except Exception:  # noqa: BLE001
             pass
-        # Golden-hour alert: the first 60-90 min engagement test (~7% of network) decides whether
-        # the post gets extended distribution — the operator's replies/comments in that window are
-        # the highest-leverage minutes of the day. This nudge is what makes auto-publish safe.
+        # Golden-hour boost, AUTOMATED (2026-08-04, operator-requested): the first 60-90 min
+        # engagement test decides distribution. The old email told the operator to do three
+        # things by hand; the first two now happen automatically:
+        #   1. Comment replies — the hourly post_engagement leg answers every commenter.
+        #   2. Niche presence — release one approved growth comment right now (the pacer's
+        #      hourly drip continues after it).
+        try:
+            from workers.comment_pacer import dispatch_due_comments
+
+            dispatch_due_comments(force=True)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from workers.email_sender import notify
 
             notify(
-                subject="🚀 LinkedIn post is LIVE — golden hour starts now",
+                subject="🚀 LinkedIn post is LIVE — golden hour handled",
                 body=(
                     "Your post just published. The next 60–90 minutes decide its reach "
                     "(LinkedIn tests it on ~7% of your network first).\n\n"
-                    "Do these now for max distribution:\n"
-                    "1. Reply to EVERY comment as it lands (comments count ~2x likes).\n"
-                    "2. Spend 10–15 min leaving thoughtful comments on big accounts in your niche.\n"
-                    "3. Don't edit the post in the first hour.\n\n"
+                    "Already automated for you:\n"
+                    "1. Replies to every comment will go out automatically as they land.\n"
+                    "2. A growth comment on a big account in your niche was just posted "
+                    "(more drip out hourly).\n\n"
+                    "The one thing left to you: don't edit the post in the first hour. "
+                    "Jump into the comment thread yourself only for nuanced conversations "
+                    "worth your voice.\n\n"
                     f"--- your post ---\n{(body or '')[:600]}"
                 ),
             )

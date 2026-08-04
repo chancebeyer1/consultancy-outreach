@@ -49,6 +49,7 @@ export interface Lead {
   id: string;
   linkedin_url: string;
   provider_id?: string | null; // LinkedIn member id — needed to DM/thread from the dashboard
+  user_id?: string | null; // owning operator (multi-user); null = legacy rows, owned by the admin
   name: string | null;
   headline: string | null;
   company: string | null;

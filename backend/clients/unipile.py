@@ -270,6 +270,47 @@ def search_people(
     return {"items": items, "cursor": next_cursor}
 
 
+@_RETRY
+def list_post_comments(social_id: str, *, account_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    """All comments on a post.  GET /posts/{social_id}/comments — each item carries id, author,
+    author_details{id,...}, text, reaction_counter, reply_counter."""
+    params = {"account_id": account_id or _li_account(), "limit": limit}
+    with httpx.Client(timeout=60.0, follow_redirects=True) as c:
+        r = c.get(f"{_base()}/posts/{social_id}/comments", headers=_headers(), params=params)
+        r.raise_for_status()
+        data = r.json()
+    return data.get("items", []) if isinstance(data, dict) else (data or [])
+
+
+@_RETRY
+def reply_to_comment(social_id: str, comment_id: str, text: str, *, account_id: str | None = None) -> dict[str, Any]:
+    """Reply in a comment's thread on a post.  POST /posts/{social_id}/comments with comment_id.
+
+    Used by the post-engagement worker to answer commenters on OUR posts during the golden
+    hour. If the provider ignores comment_id it degrades to a top-level comment on the same
+    post — still a visible author response, never an error.
+    """
+    body = {"account_id": account_id or _li_account(), "text": text, "comment_id": comment_id}
+    with httpx.Client(timeout=60.0, follow_redirects=True) as c:
+        r = c.post(f"{_base()}/posts/{social_id}/comments", headers=_headers(), json=body)
+        r.raise_for_status()
+        return r.json() if r.content else {"ok": True}
+
+
+def own_provider_id(*, account_id: str | None = None) -> str | None:
+    """The connected account's own LinkedIn provider id (to recognize our comments as ours).
+    GET /users/me. None on any failure — callers fall back to author-name matching."""
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as c:
+            r = c.get(f"{_base()}/users/me", headers=_headers(),
+                      params={"account_id": account_id or _li_account()})
+            r.raise_for_status()
+            p = r.json()
+        return str(p.get("provider_id") or p.get("id") or "") or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def status_operational() -> bool | None:
     """Whether Unipile's status page reports all-systems-operational. None = couldn't tell.
 

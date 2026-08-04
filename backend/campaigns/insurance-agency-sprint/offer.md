@@ -1,11 +1,14 @@
-# Offer — AI back-office agents for insurance agencies (research-led)
+# Offer — AI back-office agents for insurance agencies (give-first)
 
-**This is a research-led discovery campaign, NOT a pitch.** The first touch leads with
-genuine curiosity about how the agency runs its admin, and asks ONE question they can
-answer in a single line — the 15-minute call is earned only after they engage —
-not for a meeting to be sold to. The offer surfaces only if they ask or after they reply.
+**Connect notes follow the assigned variant. The post-accept DM leads with a GIVE, not a
+research ask.** I already build the exact agents for an agency's paperwork grind, so the DM
+offers to SHOW one — "want the 3-minute version?" / point the free audit at their site — as a
+yes/no where THEY gain by replying and nothing is asked of them. (Funnel data 2026-08: our
+research-question DMs replied 17% with ~zero interested; the house's best DM flow won 38%/7
+interested on value symmetry. Manufacture symmetry with the artifact.) The 15-minute call is
+earned only after they engage — never asked for in message one.
 
-## What we actually do (only when it comes up)
+## What we actually do (the substance of the give)
 
 I build **AI agents that take the repetitive back-office work off an agency's plate**:
 - **Document intake + chasing** — collecting dec pages, loss runs, applications, signed
@@ -21,24 +24,25 @@ flow, so your producers sell instead of chase documents.*
 ## The angle
 
 Independent agencies run on documents and follow-ups, and most of it still happens by hand.
-That's the wedge. I genuinely want to learn **where the time actually goes** — which makes
-the research ask honest, not a Trojan horse.
+That's the wedge — and I've already BUILT the agents for exactly that grind. So the DM
+doesn't ask them to explain their pain; it offers to show the working fix for it. They get
+value by replying "sure, send it"; I ask for nothing.
 
 ## Soft-ask ladder (don't jump the rungs)
 
 1. **Connection note** — who I am in one line + the specific thing I noticed about their
    agency. No ask beyond connecting.
-2. **First DM (post-accept)** — one plain line on what I'm researching (how agencies handle
-   the back-office grind), then **ONE research question answerable in a single line by
-   reply** ("one line back is plenty") + a promise to share what other owners say. No
-   product, no link, NO meeting ask — the 15-min offer comes after they answer.
-3. **Only if they engage** — share what I'm finding, and *if they ask*, the one case-study
-   line about an agent I built.
+2. **First DM (post-accept) — THE GIVE:** one line naming the specific agent already built
+   for their exact grind (real mechanism, plainly stated), then a yes/no offer to SHOW it:
+   "want the 3-minute version?" or point the free audit at their site. NO research question
+   as the CTA, no meeting ask. If a link is used it's the audit tool, framed as a give.
+3. **Only if they engage** — walk through the demo, answer questions, and the 15-minute
+   call offer comes naturally once they've seen it.
 
 ## Rules
 
-- Never lead with "I can save you time/money." Lead with curiosity.
-- One ask maximum per message. The one-line-answerable question is the goal of the DM;
-  the 15-minute call is offered only once they've replied.
+- Never lead with "I can save you time/money." Lead with the concrete thing that exists.
+- One ask maximum per message. The yes/no demo offer is the goal of the DM; the 15-minute
+  call is offered only once they've engaged.
 - No links in the cold DM.
 - Reference something real about *their* agency (lines they write, growth, service angle).

@@ -22,7 +22,12 @@ export type ScheduledRow = {
 interface Props {
   initialRows: ReplyReviewRow[];
   scheduled?: ScheduledRow[];
+  // Signed-in operator's profile id — splits the list into "mine" vs the other
+  // operator's (Tanner's) conversations. Null in mock/file mode (single-owner view).
+  meId?: string | null;
 }
+
+type OwnerScope = "mine" | "tanner" | "all";
 
 // Sort: unhandled first, then newest → oldest within each group. (Handled ones sink to the
 // bottom, dimmed, so the active queue is always the freshest things that still need you.)
@@ -34,8 +39,9 @@ function sortRows(rows: ReplyReviewRow[]): ReplyReviewRow[] {
   });
 }
 
-export function RepliesClient({ initialRows, scheduled = [] }: Props) {
+export function RepliesClient({ initialRows, scheduled = [], meId = null }: Props) {
   const [rows, setRows] = useState(() => sortRows(initialRows));
+  const [owner, setOwner] = useState<OwnerScope>("mine");
   const [activeId, setActiveId] = useState<string | null>(() => sortRows(initialRows)[0]?.reply.id ?? null);
   const [scheduledRows, setScheduledRows] = useState<ScheduledRow[]>(scheduled);
   const [cancelling, setCancelling] = useState<string | null>(null);
@@ -43,34 +49,76 @@ export function RepliesClient({ initialRows, scheduled = [] }: Props) {
   const nudgeDrafts = useMemo(() => scheduledRows.filter((s) => s.status === "draft"), [scheduledRows]);
   const pendingSends = useMemo(() => scheduledRows.filter((s) => s.status === "pending"), [scheduledRows]);
 
+  // Owner split: leads with no user_id are legacy rows owned by the admin ("mine").
+  // The chips only render when the list actually contains someone else's conversations.
+  const isMine = useCallback(
+    (r: ReplyReviewRow) => !r.lead.user_id || !meId || r.lead.user_id === meId,
+    [meId],
+  );
+  const hasForeign = useMemo(() => rows.some((r) => !isMine(r)), [rows, isMine]);
+  const scoped = useMemo(() => {
+    if (!hasForeign || owner === "all") return rows;
+    return rows.filter((r) => (owner === "mine" ? isMine(r) : !isMine(r)));
+  }, [rows, owner, hasForeign, isMine]);
+
+  // THREADING: one list item per lead (the conversation), represented by its most urgent
+  // reply (scoped is already sorted unhandled-first / newest-first). The right-hand
+  // ReplyView shows the full conversation, so the list never repeats a person.
+  const threads = useMemo(() => {
+    const byLead = new Map<string, { row: ReplyReviewRow; count: number; unhandled: number }>();
+    for (const r of scoped) {
+      const t = byLead.get(r.lead.id);
+      if (!t) byLead.set(r.lead.id, { row: r, count: 1, unhandled: r.reply.handled_at ? 0 : 1 });
+      else {
+        t.count += 1;
+        if (!r.reply.handled_at) t.unhandled += 1;
+      }
+    }
+    return Array.from(byLead.values());
+  }, [scoped]);
+  const threadRows = useMemo(() => threads.map((t) => t.row), [threads]);
+  const threadCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const t of threads) m[t.row.reply.id] = t.count;
+    return m;
+  }, [threads]);
+
   const activeIdx = useMemo(() => {
-    const i = rows.findIndex((r) => r.reply.id === activeId);
+    const i = threadRows.findIndex((r) => r.reply.id === activeId);
     return i >= 0 ? i : 0;
-  }, [rows, activeId]);
-  const active = rows[activeIdx];
+  }, [threadRows, activeId]);
+  const active = threadRows[activeIdx];
 
-  const unhandledCount = useMemo(() => rows.filter((r) => !r.reply.handled_at).length, [rows]);
+  const unhandledCount = useMemo(() => threads.filter((t) => t.unhandled > 0).length, [threads]);
 
-  // Mark a reply handled (from the button, or after sending/scheduling), then advance the
-  // selection to the next still-unhandled reply so the handled one drops out of focus.
+  // Mark a conversation handled: handling the visible reply handles the WHOLE thread
+  // (every unhandled reply from that lead), then advances to the next unhandled thread.
   const markHandled = useCallback(
     (replyId: string) => {
+      const target = rows.find((r) => r.reply.id === replyId);
+      const leadId = target?.lead.id;
+      const ids = rows
+        .filter((r) => r.lead.id === leadId && !r.reply.handled_at)
+        .map((r) => r.reply.id);
+      const now = new Date().toISOString();
       const next = sortRows(
         rows.map((r) =>
-          r.reply.id === replyId
-            ? { ...r, reply: { ...r.reply, handled_at: r.reply.handled_at ?? new Date().toISOString() } }
+          ids.includes(r.reply.id)
+            ? { ...r, reply: { ...r.reply, handled_at: r.reply.handled_at ?? now } }
             : r,
         ),
       );
       setRows(next);
-      const nextUnhandled = next.find((r) => !r.reply.handled_at && r.reply.id !== replyId);
+      const nextUnhandled = next.find((r) => !r.reply.handled_at && r.lead.id !== leadId);
       setActiveId(nextUnhandled?.reply.id ?? next[0]?.reply.id ?? null);
-      // Persist so it survives a refresh (the optimistic update above is just the UI).
-      fetch("/api/replies", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ replyId, handled: true }),
-      }).catch(() => {});
+      // Persist each reply of the thread so it survives a refresh.
+      for (const id of ids) {
+        fetch("/api/replies", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ replyId: id, handled: true }),
+        }).catch(() => {});
+      }
     },
     [rows],
   );
@@ -115,11 +163,11 @@ export function RepliesClient({ initialRows, scheduled = [] }: Props) {
 
   const move = useCallback(
     (delta: number) => {
-      if (rows.length === 0) return;
-      const nextIdx = Math.max(0, Math.min(rows.length - 1, activeIdx + delta));
-      setActiveId(rows[nextIdx].reply.id);
+      if (threadRows.length === 0) return;
+      const nextIdx = Math.max(0, Math.min(threadRows.length - 1, activeIdx + delta));
+      setActiveId(threadRows[nextIdx].reply.id);
     },
-    [rows, activeIdx],
+    [threadRows, activeIdx],
   );
 
   useEffect(() => {
@@ -215,16 +263,42 @@ export function RepliesClient({ initialRows, scheduled = [] }: Props) {
           </div>
         )}
 
+        {hasForeign && (
+          <div className="mb-3 flex gap-1">
+            {(["mine", "tanner", "all"] as const).map((k) => (
+              <button
+                key={k}
+                onClick={() => {
+                  setOwner(k);
+                  setActiveId(null); // re-anchor to the first thread of the new scope
+                }}
+                className={clsx(
+                  "rounded border px-2 py-0.5 text-[11px] capitalize",
+                  owner === k
+                    ? "border-sky-700 bg-sky-950/40 text-sky-300"
+                    : "border-neutral-800 text-neutral-500 hover:text-neutral-300",
+                )}
+              >
+                {k === "tanner" ? "Tanner's" : k}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="mb-3 flex items-baseline justify-between">
           <h2 className="text-xs uppercase tracking-wide text-neutral-500">
-            Replies · {unhandledCount} to handle
+            Conversations · {unhandledCount} to handle
           </h2>
           <span className={clsx("text-xs", unhandledCount > 0 ? "text-amber-400" : "text-neutral-600")}>
-            {rows.length} total
+            {threadRows.length} total
           </span>
         </div>
-        {rows.length > 0 ? (
-          <ReplyList rows={rows} activeIdx={activeIdx} onSelect={(i) => setActiveId(rows[i].reply.id)} />
+        {threadRows.length > 0 ? (
+          <ReplyList
+            rows={threadRows}
+            counts={threadCounts}
+            activeIdx={activeIdx}
+            onSelect={(i) => setActiveId(threadRows[i].reply.id)}
+          />
         ) : (
           <p className="rounded-md border border-neutral-800 bg-neutral-950 px-3 py-4 text-center text-xs text-neutral-500">
             No replies to triage.

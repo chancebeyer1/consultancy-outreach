@@ -109,8 +109,16 @@ def generate_blog_post(*, dry_run: bool = False) -> dict[str, Any]:
         )
         # Queue a LinkedIn post promoting the article — a DRAFT for review (status='draft'); it shows
         # in the Content "Needs review" queue and never auto-posts, per the operator's preference.
+        # Capped at 2 promo drafts/week (2026-08-04): the operator dismissed 74% of daily blog promos
+        # and the posted ones scored worst of any source (0.8 mean vs 3.9 for tweet reactions).
         li = (result.get("linkedin_post") or "").strip()
         li_queued = False
+        cur.execute(
+            "select count(*) from content_posts where source_kind='blog' "
+            "and created_at > now() - interval '7 days'"
+        )
+        if li and int(cur.fetchone()[0]) >= 2:
+            li = ""
         if li:
             blog_url = f"https://agentry.contentdrip.ai/blog/{slug}"  # slug is final (post de-collision)
             li_body = f"{li}\n\nfull breakdown: {blog_url}"

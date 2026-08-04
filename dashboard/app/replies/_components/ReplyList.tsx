@@ -8,6 +8,9 @@ interface Props {
   rows: ReplyReviewRow[];
   activeIdx: number;
   onSelect: (i: number) => void;
+  // Messages per conversation, keyed by the representative reply's id — rows are one
+  // per lead (threaded), so >1 shows a thread-size badge.
+  counts?: Record<string, number>;
 }
 
 const intentStyles: Record<Intent | "other", string> = {
@@ -41,7 +44,7 @@ function timeAgo(iso: string): string {
   return "just now";
 }
 
-export function ReplyList({ rows, activeIdx, onSelect }: Props) {
+export function ReplyList({ rows, activeIdx, onSelect, counts }: Props) {
   return (
     <ul className="space-y-1">
       {rows.map((r, i) => {
@@ -74,7 +77,14 @@ export function ReplyList({ rows, activeIdx, onSelect }: Props) {
                   >
                     {intentLabel[intent]}
                   </span>
-                  <div className="mt-1 text-[10px] text-neutral-500">{timeAgo(r.reply.received_at)}</div>
+                  <div className="mt-1 text-[10px] text-neutral-500">
+                    {timeAgo(r.reply.received_at)}
+                    {(counts?.[r.reply.id] ?? 1) > 1 && (
+                      <span className="ml-1 rounded bg-neutral-800 px-1 text-neutral-400">
+                        {counts![r.reply.id]} msgs
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="mt-1.5 line-clamp-2 text-xs text-neutral-400">

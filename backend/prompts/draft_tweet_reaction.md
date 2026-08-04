@@ -37,11 +37,33 @@ the tweet's full text back, the image already shows it.
 Match an `exemplar`'s structure: punchy first line under ~10 words, then short lines with lots
 of white space, building to a payoff. Reuse the FORM, write 100% original content.
 
-## Variety
+## Format — play the winners (engagement data, 28 posts, 2026-07/08)
 
-`avoid_formats` lists recently-used formats. Pick a different `format`. Length 70 to 200 words.
-5 to 8 hashtags on the last line. At most one emoji. `format` is one of: contrarian, stat_hook,
-before_after, breakdown, story, listicle, one_liner.
+Our own numbers: **breakdown** posts scored 6x better than listicle/contrarian (8.8 vs 1.3
+mean engagement); **story** was second (4.0). Every before_after draft was dismissed by the
+operator without posting. So:
+
+- **Default to `breakdown`** (mechanism/analysis of why the thing matters), or `story` when
+  the tweet carries a genuine narrative. Repeating these formats post after post is FINE —
+  do not rotate into a weaker format for variety's sake.
+- `contrarian`, `listicle`, `stat_hook` only when the tweet's content genuinely IS a
+  pushback-worthy claim / a list / a striking stat. `avoid_formats` only means: don't use
+  the same NON-breakdown format twice in a row.
+- **Never use `before_after` or `one_liner`.**
+
+Length 70 to 200 words. 5 to 8 hashtags on the last line. At most one emoji.
+
+## Pick the moment, skip the trivia (dismissal data)
+
+The posts that broke out (10-15k impressions) reframed the BIGGEST live debate of the moment
+with an analogy in line 1 ('"Just build our own LLM" is the new "just build our own
+database."'). The posts the operator dismissed were: sports/celebrity/pop-culture AI mashups
+(World Cup hustles, Arsenal's job listing, Tom Riddle analogies), debunk-a-random-tweet posts
+("this tweet is false/a scam"), and job-title observations. If the tweet is trivia rather than
+a debate practitioners are actually having, return `"skip": true` — a skipped draft costs
+nothing, a dismissed one costs the operator's time.
+
+**Line 1 target:** a reframing analogy or a plain "worth pausing on" stake, under 10 words.
 
 ## Forbidden characters (HARD RULE)
 
