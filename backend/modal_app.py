@@ -928,12 +928,15 @@ def content_webhook(request_body: dict, x_content_token: str | None = None) -> d
     raise HTTPException(status_code=400, detail="unknown action")
 
 
-@app.function(secrets=secrets, timeout=45)
-@modal.fastapi_endpoint(method="POST")
 def _lead_account(provider_id: str | None = None, chat_id: str | None = None) -> str | None:
     """The lead owner's Unipile LinkedIn account, resolved via leads.provider_id or a
     reply's chat_id. None → caller falls back to the env-global account. Best-effort:
-    any lookup failure returns None rather than blocking a human-initiated reply."""
+    any lookup failure returns None rather than blocking a human-initiated reply.
+
+    PLAIN HELPER — never decorate it. An earlier edit inserted this function between
+    linkedin_thread and ITS decorators, silently turning the helper into a web endpoint
+    (unauthenticated!) and un-deploying linkedin_thread; both linkedin_thread and
+    linkedin_reply then crashed with "'Function' object is not callable"."""
     try:
         import psycopg
 
