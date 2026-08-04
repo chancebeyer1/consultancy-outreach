@@ -969,6 +969,8 @@ def _lead_account(provider_id: str | None = None, chat_id: str | None = None) ->
     return None
 
 
+@app.function(secrets=secrets, timeout=60)
+@modal.fastapi_endpoint(method="POST")
 def linkedin_thread(request_body: dict) -> dict:
     """Read-only: fetch a LinkedIn conversation thread for the dashboard Replies page.
 
