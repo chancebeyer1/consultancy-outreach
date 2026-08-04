@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "homestead-proto",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--no-project", "python", "-m", "http.server", "8321", "--directory", "C:/Users/chanc/Documents/Github/homestead-real/prototype"],
+      "port": 8321
+    },
+    {
       "name": "paf-dashboard",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "--directory", "C:/Users/chanc/Documents/Github/process-agent-factory/backend", "python", "cli.py", "dashboard"],
