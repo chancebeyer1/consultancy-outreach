@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "paf-dashboard",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--directory", "C:/Users/chanc/Documents/Github/process-agent-factory/backend", "python", "cli.py", "dashboard"],
+      "port": 8300
+    },
+    {
       "name": "agentry-site",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "website", "run", "dev"],
