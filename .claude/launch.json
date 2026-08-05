@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "gravehold-proto",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--no-project", "python", "-m", "http.server", "8322", "--directory", "C:/Users/chanc/Documents/Github/gravehold/prototype"],
+      "port": 8322
+    },
+    {
       "name": "homestead-proto",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "--no-project", "python", "-m", "http.server", "8321", "--directory", "C:/Users/chanc/Documents/Github/homestead-real/prototype"],
