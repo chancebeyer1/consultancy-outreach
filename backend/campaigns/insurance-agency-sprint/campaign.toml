@@ -5,6 +5,7 @@
 
 name = "Insurance Agency Sprint"
 slug = "insurance-agency-sprint"
+status = "paused"  # 2026-08-07: paused for PanelPath founder-search pivot (status was implicit-active)
 is_default = false
 
 # Auto-send: approved first-touch openers go out without manual review (fit-gated >=60).

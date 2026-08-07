@@ -8,6 +8,7 @@
 
 name = "AI Consulting Bids"
 slug = "ai-consulting-bids"
+status = "paused"  # 2026-08-07: paused for PanelPath founder-search pivot (status was implicit-active)
 is_default = false
 
 # No auto-anything: every bid is drafted for human review, then you submit by hand.

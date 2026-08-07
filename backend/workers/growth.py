@@ -28,12 +28,19 @@ from operator_profile import operator_bio
 from prompts_loader import load_prompt
 
 # Rotate the niche query by weekday so the digest doesn't tunnel on one phrase.
+# 2026-08-07: refocused on PanelPath (credentialing/private-practice + founder circles)
+# while the consulting campaigns are paused. Two legacy AI keywords stay in rotation to
+# keep the consulting topic fingerprint warm. Previous list, for easy revert:
+#   ["AI agents", "AI automation business", "building AI agents",
+#    "AI agents production", "LLM automation"]
 KEYWORDS = [
-    "AI agents",
-    "AI automation business",
-    "building AI agents",
-    "AI agents production",
-    "LLM automation",
+    "insurance credentialing",       # the direct niche — therapists + billers post here
+    "therapist private practice",    # broad ICP audience posts
+    "insurance panels therapist",    # paneling pain posts (Headway/Alma debates live here)
+    "behavioral health startup",     # founder/health-tech circles
+    "healthtech cofounder",          # founder-search visibility
+    "AI agents",                     # legacy — keeps consulting fingerprint warm
+    "AI automation business",        # legacy
 ]
 
 MIN_REACTIONS = 5    # floor — search surfaces RECENT posts, and commenting early on a rising post

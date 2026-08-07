@@ -7,6 +7,7 @@
 
 name = "Home Services Sprint"
 slug = "home-services-sprint"
+status = "paused"  # 2026-08-07: paused for PanelPath founder-search pivot (status was implicit-active)
 is_default = false
 
 # Manual review first: approve the first batches in /drafts to validate the voice

@@ -1,0 +1,23 @@
+# PanelPath — distribution partners & co-founder-adjacent BD.
+#
+# 2026-08-07: replaces the operator's own consulting LinkedIn campaigns (all paused
+# same day). Audience is NOT therapists (PanelPath's customers) — it's the people
+# who already have therapist trust and can distribute for a rev-share: mental-health
+# billers, practice-building coaches/consultants, group-practice consultants,
+# therapist community/newsletter owners, plus credentialing specialists who might
+# become an operating partner. Full playbook lives in the PanelPath repo:
+# bh-credentialing-desk/outreach/partner-search.md
+#
+# BD conversations, not volume spray: auto_send stays FALSE — every draft goes
+# through the dashboard review queue before anything is sent.
+
+name = "PanelPath Partners (BD)"
+slug = "panelpath-partners"
+is_default = false
+status = "active"
+
+auto_send = false
+
+channels = ["linkedin_connect", "linkedin_dm"]
+
+landing_url = "https://panelpath.vercel.app"
