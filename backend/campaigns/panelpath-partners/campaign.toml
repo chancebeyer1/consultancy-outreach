@@ -47,3 +47,7 @@ founder_keywords = [
     "health tech",
     "healthcare",
 ]
+
+# Skip engineer-profile candidates in discovery (operator covers the technical side);
+# ops/sales/healthcare-ops signals override. See _wrong_role in workers/founders_sweep.py.
+founder_exclude_engineers = true

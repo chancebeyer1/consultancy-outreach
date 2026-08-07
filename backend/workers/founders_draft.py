@@ -105,6 +105,14 @@ def campaign_keywords(campaign: Campaign) -> list[str]:
     return out[:40]
 
 
+def exclude_engineers(campaign: Campaign) -> bool:
+    """True when the campaign opts into role filtering via `founder_exclude_engineers = true`
+    in campaign.toml: the sweep then skips engineer-profile candidates unless they also show
+    ops/sales/healthcare-ops signals. For campaigns whose operator already covers the
+    technical side of the table."""
+    return bool(_campaign_meta(campaign.slug).get("founder_exclude_engineers"))
+
+
 def _active_venues(cur) -> list[dict[str, Any]]:
     cur.execute(
         "select id, slug, name, url, kind, api_mode, posting_rules, cadence_days "

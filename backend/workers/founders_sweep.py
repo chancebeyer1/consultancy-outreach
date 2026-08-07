@@ -34,7 +34,7 @@ import psycopg
 from campaigns_loader import load_campaign
 from config import Config, require
 from prompts_loader import system_prefix
-from workers.founders_draft import call_draft, campaign_keywords, opted_in_slugs
+from workers.founders_draft import call_draft, campaign_keywords, exclude_engineers, opted_in_slugs
 
 HITS_PER_CAMPAIGN = 5     # max NEW reachouts drafted per campaign per run (bounds LLM cost)
 HN_COMMENT_MIN_LEN = 60   # ignore stub comments
@@ -73,6 +73,31 @@ def _keyword_regex(keywords: list[str]) -> re.Pattern | None:
         else:
             parts.append(r"\s+".join(re.escape(w) for w in kw.split()))
     return re.compile("|".join(parts), re.IGNORECASE) if parts else None
+
+
+# Role filter (opt-in per campaign via `founder_exclude_engineers = true`): candidate posts
+# that read as pure software-engineer profiles are skipped UNLESS they also carry ops/sales/
+# healthcare-ops signals. HN's who-wants-to-be-hired threads are ~engineers, so a domain
+# keyword match alone ("healthcare") often surfaces the wrong side of the table.
+_ENGINEER_SIGNALS = re.compile(
+    r"software (engineer|developer)|full[- ]?stack|front[- ]?end (engineer|developer|dev)"
+    r"|back[- ]?end (engineer|developer|dev)|SWE|web developer|mobile (developer|engineer)"
+    r"|devops|data engineer|ML engineer|machine[- ]learning engineer|platform engineer"
+    r"|site reliability|embedded (engineer|developer)|ios developer|android developer",
+    re.IGNORECASE)
+_OPS_SIGNALS = re.compile(
+    r"sales|business development|BD|partnerships?|operations|ops"
+    r"|account (executive|manager)|customer success|revenue cycle|RCM|billing"
+    r"|credentialing|payer|provider relations|practice (manager|administrator|owner)"
+    r"|healthcare (admin|administration|operations)|go[- ]to[- ]market|GTM"
+    r"|growth|marketing|clinic|health system",
+    re.IGNORECASE)
+
+
+def _wrong_role(text: str) -> bool:
+    """Engineer-profile post with no ops/sales/healthcare-ops signal."""
+    t = text or ""
+    return bool(_ENGINEER_SIGNALS.search(t)) and not _OPS_SIGNALS.search(t)
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +295,7 @@ def sweep_all(campaign_slug: str | None = None, *, dry_run: bool = False,
         hn_venue = _venue_row(cur, _HN_VENUE)
         reddit_venue = _venue_row(cur, _REDDIT_VENUE)
 
-    found = drafted = 0
+    found = drafted = skipped_role = 0
     drafted_items: list[dict[str, Any]] = []
     for slug in slugs:
         if time.monotonic() - started > time_budget_s:
@@ -287,6 +312,7 @@ def sweep_all(campaign_slug: str | None = None, *, dry_run: bool = False,
                           f"or quoted marker phrases to icp.md)")
             continue
         prefix = system_prefix(campaign)
+        role_filter = exclude_engineers(campaign)
 
         with _connect() as conn, conn.cursor() as cur:
             existing = _existing_targets(cur, slug)
@@ -317,6 +343,9 @@ def sweep_all(campaign_slug: str | None = None, *, dry_run: bool = False,
                     break
                 if (venue["id"], cand["url"]) in existing:
                     continue
+                if role_filter and _wrong_role(cand["text"]):
+                    skipped_role += 1
+                    continue
                 found += 1
                 try:
                     draft = call_draft(
@@ -346,6 +375,7 @@ def sweep_all(campaign_slug: str | None = None, *, dry_run: bool = False,
         "campaigns": slugs,
         "reddit_configured": _reddit_configured(),
         "matched": found,
+        "skipped_wrong_role": skipped_role,
         "drafted": drafted,
         "drafted_items": drafted_items,
         "elapsed_s": round(time.monotonic() - started, 1),
