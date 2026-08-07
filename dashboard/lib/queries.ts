@@ -5,7 +5,13 @@
 
 import type { Scope } from "./auth";
 import { loadDraftReviewRowsFromFile } from "./jsonl-source";
-import { MOCK_BID_ROWS, MOCK_CAMPAIGNS, MOCK_DRAFT_ROWS, MOCK_REPLY_ROWS } from "./mock-data";
+import {
+  MOCK_BID_ROWS,
+  MOCK_CAMPAIGNS,
+  MOCK_DRAFT_ROWS,
+  MOCK_FOUNDER_ROWS,
+  MOCK_REPLY_ROWS,
+} from "./mock-data";
 import { loadReplyRowsFromFile } from "./replies-source";
 import { dataSource, serverAdminClient, serverClient } from "./supabase";
 import type {
@@ -1244,7 +1250,13 @@ export type FoundersPageResult = {
 const EMPTY_FOUNDERS: FoundersPageResult = { rows: [], campaigns: [] };
 
 export async function getFounderReviewRows(): Promise<FoundersPageResult> {
-  // Founder search is DB-backed only — mock/file mode just shows the empty state.
+  if (dataSource === "mock") {
+    return {
+      rows: MOCK_FOUNDER_ROWS,
+      campaigns: Array.from(new Set(MOCK_FOUNDER_ROWS.map((r) => r.post.campaign_slug))).sort(),
+    };
+  }
+  // File mode has no founder data — empty state.
   if (dataSource !== "supabase") return EMPTY_FOUNDERS;
   const admin = serverAdminClient();
 
