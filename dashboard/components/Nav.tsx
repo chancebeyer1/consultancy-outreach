@@ -17,6 +17,7 @@ const links = [
   { href: "/sends", label: "Sends" },
   { href: "/pipeline", label: "Pipeline" },
   { href: "/bids", label: "Bids" },
+  { href: "/founders", label: "Founders" },
   { href: "/leads", label: "Leads" },
   { href: "/sequences", label: "Sequences" },
   { href: "/mailboxes", label: "Mailboxes" },

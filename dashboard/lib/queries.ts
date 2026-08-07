@@ -16,6 +16,9 @@ import type {
   Draft,
   DraftReviewRow,
   DraftStatus,
+  FounderPost,
+  FounderReviewRow,
+  FounderVenue,
   Hook,
   Intent,
   Lead,
@@ -1223,4 +1226,49 @@ async function loadBidReviewRowsFromSupabase(
     lowFitTotalPages,
     lowFitTotal,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Founder search — /founders review queue. Drafted venue posts / profile copy /
+// reachouts joined with their venue. The founder tables are RLS service-role-only
+// (0047), so this reads via the admin client BEHIND the page's requireAdmin gate —
+// mirror that gate in any new caller. Nothing here is ever auto-posted: the queue
+// exists precisely so a human pastes each piece by hand.
+// ---------------------------------------------------------------------------
+
+export type FoundersPageResult = {
+  rows: FounderReviewRow[];
+  campaigns: string[]; // distinct campaign slugs present, for the filter chips
+};
+
+const EMPTY_FOUNDERS: FoundersPageResult = { rows: [], campaigns: [] };
+
+export async function getFounderReviewRows(): Promise<FoundersPageResult> {
+  // Founder search is DB-backed only — mock/file mode just shows the empty state.
+  if (dataSource !== "supabase") return EMPTY_FOUNDERS;
+  const admin = serverAdminClient();
+
+  const [postsRes, venuesRes] = await Promise.all([
+    admin
+      .from("founder_posts")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(400),
+    admin.from("founder_venues").select("*"),
+  ]);
+  if (postsRes.error) throw postsRes.error;
+  if (venuesRes.error) throw venuesRes.error;
+
+  const venuesById = new Map<string, FounderVenue>();
+  for (const v of (venuesRes.data ?? []) as unknown as FounderVenue[]) venuesById.set(v.id, v);
+
+  const rows: FounderReviewRow[] = [];
+  const campaigns = new Set<string>();
+  for (const post of (postsRes.data ?? []) as unknown as FounderPost[]) {
+    const venue = venuesById.get(post.venue_id);
+    if (!venue) continue; // orphan (venue deleted) — nothing to paste against
+    rows.push({ post, venue });
+    campaigns.add(post.campaign_slug);
+  }
+  return { rows, campaigns: Array.from(campaigns).sort() };
 }

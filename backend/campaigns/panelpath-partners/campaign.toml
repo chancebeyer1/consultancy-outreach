@@ -21,3 +21,29 @@ auto_send = false
 channels = ["linkedin_connect", "linkedin_dm"]
 
 landing_url = "https://panelpath.vercel.app"
+
+# --- Founder search (co-founder / operating-partner / distribution-partner venues) ---
+# Opts this campaign into the founder-search module (workers/founders_draft + founders_sweep
+# → dashboard /founders). Drafts venue-native posts, YC-CFM profile copy, and reachouts from
+# this bundle's icp.md + offer.md. Nothing is ever auto-posted — a human pastes every post
+# and sends every reachout. See FOUNDERS.md.
+founder_search = true
+
+# Discovery keywords the read-only sweep matches against HN who-wants-to-be-hired /
+# who-is-hiring comments and new r/cofounder posts. Optional: without this list the sweep
+# falls back to the double-quoted marker phrases in icp.md.
+founder_keywords = [
+    "credentialing",
+    "payer enrollment",
+    "provider enrollment",
+    "behavioral health",
+    "mental health",
+    "therapist",
+    "private practice",
+    "medical billing",
+    "mental health billing",
+    "revenue cycle",
+    "digital health",
+    "health tech",
+    "healthcare",
+]

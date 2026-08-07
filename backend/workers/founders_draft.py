@@ -25,6 +25,7 @@ import re
 import sys
 import time
 import tomllib
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -141,11 +142,7 @@ def _venue_slot_state(cur, campaign_slug: str, venue: dict[str, Any], kind: str)
     if status == "replied":
         return "existing post got a response (kept)"
     if posted_at is not None:
-        cur.execute(
-            "select %s::timestamptz > now() - make_interval(days => %s)",
-            (posted_at, venue["cadence_days"]),
-        )
-        if bool(cur.fetchone()[0]):
+        if datetime.now(UTC) - posted_at < timedelta(days=venue["cadence_days"]):
             return f"posted within cadence ({venue['cadence_days']}d)"
     return None  # posted long ago → eligible for a refreshed draft
 

@@ -285,3 +285,51 @@ export interface BidReviewRow {
   opportunity: Opportunity;
   bid: Bid | null;
 }
+
+// ---------------------------------------------------------------------------
+// Founder search — mirrors backend/db/migrations/0047_founder_search.sql.
+// Venues are founder-matching surfaces; founder posts are drafted copy a HUMAN
+// pastes by hand (nothing is ever auto-posted).
+// ---------------------------------------------------------------------------
+
+export type FounderVenueKind = "cofounder_matching" | "community" | "forum" | "subreddit";
+
+export type FounderVenueApiMode = "manual" | "reddit_api" | "hn_algolia";
+
+export type FounderPostKind = "venue_post" | "profile_copy" | "reachout_dm" | "comment_reply";
+
+export type FounderPostStatus = "draft" | "approved" | "posted" | "skipped" | "replied";
+
+export interface FounderVenue {
+  id: string;
+  slug: string;
+  name: string;
+  url: string | null;
+  kind: FounderVenueKind;
+  api_mode: FounderVenueApiMode;
+  posting_rules: string | null;
+  cadence_days: number;
+  active: boolean;
+}
+
+export interface FounderPost {
+  id: string;
+  campaign_slug: string;
+  venue_id: string;
+  kind: FounderPostKind;
+  title: string | null;
+  body: string;
+  target_url: string | null;
+  status: FounderPostStatus;
+  fit_note: string | null;
+  posted_at: string | null;
+  response_summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Aggregate view for /founders: a drafted post joined with its venue.
+export interface FounderReviewRow {
+  post: FounderPost;
+  venue: FounderVenue;
+}

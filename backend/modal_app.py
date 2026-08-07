@@ -247,6 +247,13 @@ def replenish_queue_cron() -> dict:
         bids = _maybe_sweep_opportunities()
     except Exception as e:  # noqa: BLE001
         bids = {"error": str(e)}
+    # And — at most once a day — the founder-search leg: read-only candidate discovery
+    # (HN/Reddit) + venue-post drafts for campaigns with founder_search = true. Drafts land
+    # on /founders; nothing is ever auto-posted (a human pastes every post — FOUNDERS.md).
+    try:
+        founders = _maybe_founder_search()
+    except Exception as e:  # noqa: BLE001
+        founders = {"error": str(e)}
     # And — Monday mornings — the weekly "state of the machine" report (funnel, experiments,
     # system health, needs-you list). One email replaces the ad-hoc "how's it going" audit.
     try:
@@ -268,7 +275,7 @@ def replenish_queue_cron() -> dict:
     return _logged(
         "cron_replenish",
         {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
-         "blog": blog, "growth_digest": digest, "bids": bids,
+         "blog": blog, "growth_digest": digest, "bids": bids, "founders": founders,
          "weekly_report": weekly, "revivals": revivals, "proof": proof},
     )
 
@@ -541,6 +548,68 @@ def opportunities_sweep_now(dry_run: bool = False) -> dict:
     from workers.opportunity_sourcing import source_all
 
     return _logged("opportunities_sweep", source_all(dry_run=dry_run, time_budget_s=800))
+
+
+def _maybe_founder_search() -> dict:
+    """Founder-search daily leg: read-only discovery sweep (HN Algolia + optional Reddit)
+    then venue drafts, for every campaign opted in via `founder_search = true` — at most
+    ONCE a day. Same guard shape as _maybe_sweep_opportunities: the app_settings marker's
+    own timestamp (not row counts — a steady-state run drafts zero new rows once venues are
+    covered, and a count guard would re-fire hourly, re-billing LLM drafting), stamped
+    BEFORE the run so a mid-run crash can't retry hourly. Draft-only by design: nothing is
+    ever auto-posted — a human pastes every post and sends every reachout (FOUNDERS.md)."""
+    import psycopg
+
+    from config import require
+    from workers.founders_draft import opted_in_slugs
+
+    if not opted_in_slugs():
+        return {"skipped": "no campaign has founder_search = true"}
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select 1 from app_settings where key = 'last_founder_search' "
+            "and (value #>> '{}')::timestamptz > now() - interval '20 hours'"
+        )
+        if cur.fetchone() is not None:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value) values ('last_founder_search', to_jsonb(now()::text)) "
+            "on conflict (key) do update set value = excluded.value"
+        )
+        conn.commit()
+    from workers.founders_draft import draft_all
+    from workers.founders_sweep import sweep_all
+
+    out: dict = {}
+    # Sweep first (reachouts to real people age fastest), then venue drafts. Each leg is
+    # isolated — a discovery failure must not cost the day's venue drafts.
+    try:
+        out["sweep"] = sweep_all(time_budget_s=180)
+    except Exception as e:  # noqa: BLE001
+        out["sweep"] = {"error": str(e)[:300]}
+    try:
+        out["draft"] = draft_all(time_budget_s=180)
+    except Exception as e:  # noqa: BLE001
+        out["draft"] = {"error": str(e)[:300]}
+    return out
+
+
+@app.function(secrets=secrets, timeout=600)
+def founders_sweep_now(dry_run: bool = False, campaign: str = "") -> dict:
+    """On-demand founder-candidate discovery (read-only: HN Algolia + optional Reddit).
+    `modal run modal_app.py::founders_sweep_now --dry-run [--campaign panelpath-partners]`."""
+    from workers.founders_sweep import sweep_all
+
+    return _logged("founders_sweep", sweep_all(campaign or None, dry_run=dry_run, time_budget_s=500))
+
+
+@app.function(secrets=secrets, timeout=600)
+def founders_draft_now(dry_run: bool = False, campaign: str = "") -> dict:
+    """On-demand founder venue drafting (posts + YC-CFM profile copy → /founders queue).
+    `modal run modal_app.py::founders_draft_now --dry-run [--campaign panelpath-partners]`."""
+    from workers.founders_draft import draft_all
+
+    return _logged("founders_draft", draft_all(campaign or None, dry_run=dry_run, time_budget_s=500))
 
 
 @app.function(secrets=secrets, timeout=60)

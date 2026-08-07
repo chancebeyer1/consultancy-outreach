@@ -124,6 +124,17 @@ class Config:
     # account. Forward Upwork alerts here (Gmail filter) or connect that Gmail to Unipile.
     upwork_alert_email_account_id: str = _env("UPWORK_ALERT_EMAIL_ACCOUNT_ID")
 
+    # Founder search — READ-ONLY candidate discovery for the /founders module. Reddit official
+    # API (script app: https://www.reddit.com/prefs/apps → refresh token with the `read` scope).
+    # All optional and only ever used to READ r/cofounder listings — the module never posts,
+    # DMs, or votes anywhere. Unset → the reddit sweep leg is skipped (HN's Algolia API needs
+    # no key at all) and reddit venues stay manual-drafted.
+    reddit_client_id: str = _env("REDDIT_CLIENT_ID")
+    reddit_client_secret: str = _env("REDDIT_CLIENT_SECRET")
+    reddit_refresh_token: str = _env("REDDIT_REFRESH_TOKEN")
+    # Reddit requires a descriptive UA that names your account, e.g. "script:founder-search:v1 (by /u/you)"
+    reddit_user_agent: str = _env("REDDIT_USER_AGENT", "script:founder-search:v1")
+
     # Bidding automation. AUTO-APPROVE: fit >= this (and is_software + eligible) → the drafted
     # bid lands pre-approved in "Ready to submit" instead of "Needs approval". 0 = off (every
     # bid waits for a human). A high floor (e.g. 80) keeps only strong-fit work hands-off.
