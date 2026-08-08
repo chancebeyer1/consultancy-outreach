@@ -1,6 +1,6 @@
 {
   "api": "classic",
   "category": "people",
-  "keywords": "\"mental health billing\" OR \"behavioral health billing\" OR \"therapist billing\" OR \"private practice coach\" OR \"private practice consultant\" OR \"group practice consultant\" OR (\"credentialing specialist\" AND \"behavioral health\")",
+  "keywords": "\"mental health billing\" OR \"behavioral health billing\" OR \"private practice coach\" OR \"group practice consultant\"",
   "location": ["103644278"]
 }
