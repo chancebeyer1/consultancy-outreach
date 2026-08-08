@@ -22,26 +22,27 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import psycopg
 
+from campaigns_loader import load_campaign
 from clients import claude, unipile
 from config import Config, require
 from operator_profile import operator_bio
-from prompts_loader import load_prompt
+from prompts_loader import load_prompt, system_prefix
+from workers.founders_draft import CAMPAIGNS_DIR, _campaign_meta
 
 # Rotate the niche query by weekday so the digest doesn't tunnel on one phrase.
-# 2026-08-07: refocused on PanelPath (credentialing/private-practice + founder circles)
-# while the consulting campaigns are paused. Two legacy AI keywords stay in rotation to
-# keep the consulting topic fingerprint warm. Previous list, for easy revert:
-#   ["AI agents", "AI automation business", "building AI agents",
-#    "AI agents production", "LLM automation"]
+# CONSULTING stream only (2026-08-08): campaign streams carry their own keywords via
+# `growth_keywords = [...]` in campaign.toml and are drafted in that campaign's persona,
+# tagged with campaign_slug in comment_queue. See comment_digest().
 KEYWORDS = [
-    "insurance credentialing",       # the direct niche — therapists + billers post here
-    "therapist private practice",    # broad ICP audience posts
-    "insurance panels therapist",    # paneling pain posts (Headway/Alma debates live here)
-    "behavioral health startup",     # founder/health-tech circles
-    "healthtech cofounder",          # founder-search visibility
-    "AI agents",                     # legacy — keeps consulting fingerprint warm
-    "AI automation business",        # legacy
+    "AI agents",
+    "AI automation business",
+    "building AI agents",
+    "AI agents production",
+    "LLM automation",
 ]
+
+CONSULTING_DAILY_TARGETS = 2   # consulting campaigns are paused; keep the fingerprint warm
+CAMPAIGN_DAILY_TARGETS = 4     # active product streams get the bulk of the daily approve-load
 
 MIN_REACTIONS = 5    # floor — search surfaces RECENT posts, and commenting early on a rising post
                      # beats being comment #400 on an old viral one (early engagement window)
@@ -88,9 +89,10 @@ def _is_recruitment(p: dict) -> bool:
     return bool(_RECRUIT_TEXT.search(p.get("text") or ""))
 
 
-def comment_digest(*, dry_run: bool = False) -> dict[str, Any]:
+def _stream_digest(keywords: list[str], *, stream: str, persona: str,
+                   max_targets: int, dry_run: bool = False) -> dict[str, Any]:
     """Find today's best in-niche posts, draft a comment for each, email the digest."""
-    kw = KEYWORDS[datetime.now(UTC).date().toordinal() % len(KEYWORDS)]
+    kw = keywords[datetime.now(UTC).date().toordinal() % len(keywords)]
     items: list[dict[str, Any]] = []
     cursor = None
     for _ in range(SEARCH_PAGES):
@@ -130,12 +132,12 @@ def comment_digest(*, dry_run: bool = False) -> dict[str, Any]:
 
     # Rank by engagement (comments weigh double — they mark conversation posts) and take the top.
     fresh.sort(key=lambda p: (p.get("reactions") or 0) + 2 * (p.get("comments") or 0), reverse=True)
-    targets = fresh[:MAX_TARGETS]
+    targets = fresh[:max_targets]
 
     # Draft all comments in one call, grounded in the operator's real background.
     payload = json.dumps(
         {
-            "operator_background": operator_bio(),
+            "operator_background": persona,
             "posts": [
                 {"social_id": p.get("social_id"), "author": p.get("author_name"),
                  "author_headline": (p.get("author_headline") or "")[:120],
@@ -190,11 +192,11 @@ def comment_digest(*, dry_run: bool = False) -> dict[str, Any]:
                 # recruitment-post gate + em-dash humanize already ran upstream, and the pacer's
                 # 1/hr weekday drip leaves a review window in /comments to reject before it posts.
                 "insert into comment_queue (social_id, post_url, author_name, author_headline, "
-                "post_excerpt, reactions, comments, keyword, body, status, approved_at) "
-                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,'approved',now()) on conflict (social_id) do nothing",
+                "post_excerpt, reactions, comments, keyword, campaign_slug, body, status, approved_at) "
+                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'approved',now()) on conflict (social_id) do nothing",
                 (sid, p.get("url"), p.get("author_name"), (p.get("author_headline") or "")[:200],
                  (p.get("text") or "")[:280], int(p.get("reactions") or 0),
-                 int(p.get("comments") or 0), kw, cmt),
+                 int(p.get("comments") or 0), kw, stream, cmt),
             )
             queued += cur.rowcount
         conn.commit()
@@ -215,3 +217,57 @@ def comment_digest(*, dry_run: bool = False) -> dict[str, Any]:
     )
     r = notify(subject=f"{queued} LinkedIn comments to approve", body=body)
     return {"queued": queued, "keyword": kw, "sent": bool(r.get("sent"))}
+
+
+def _growth_campaign_streams() -> list[dict[str, Any]]:
+    """Active campaigns that opt into their own comment stream via `growth_keywords = [...]`
+    in campaign.toml. Each is drafted in the campaign's own persona (system_prefix), not the
+    consulting operator bio, and tagged with its slug in comment_queue.campaign_slug."""
+    out: list[dict[str, Any]] = []
+    if not CAMPAIGNS_DIR.is_dir():
+        return out
+    for folder in sorted(CAMPAIGNS_DIR.iterdir()):
+        if not folder.is_dir() or not (folder / "campaign.toml").exists():
+            continue
+        meta = _campaign_meta(folder.name)
+        kws = meta.get("growth_keywords")
+        if not (isinstance(kws, list) and kws):
+            continue
+        if (meta.get("status") or "active") != "active":
+            continue
+        slug = meta.get("slug") or folder.name
+        try:
+            persona = system_prefix(load_campaign(slug))
+        except Exception as e:  # noqa: BLE001
+            print(f"WARNING growth stream {slug}: campaign load failed: {e}")
+            continue
+        out.append({"slug": slug, "keywords": [str(k).strip() for k in kws if str(k).strip()],
+                    "persona": persona})
+    return out
+
+
+def comment_digest(*, dry_run: bool = False) -> dict[str, Any]:
+    """One digest per STREAM, separately tagged for review in /comments:
+      * 'consulting' — the legacy AI-agent keywords, drafted from the operator bio.
+      * one stream per active campaign with `growth_keywords` in its toml — drafted in that
+        campaign's own persona (e.g. panelpath-partners comments credentialing posts as
+        PanelPath, not as the AI consultancy).
+    Same safety story as always: recruitment-gate + humanize upstream, pacer drips 1/hr."""
+    streams: list[dict[str, Any]] = [
+        {"slug": "consulting", "keywords": KEYWORDS, "persona": operator_bio(),
+         "max": CONSULTING_DAILY_TARGETS},
+    ]
+    streams += [{**s, "max": CAMPAIGN_DAILY_TARGETS} for s in _growth_campaign_streams()]
+
+    results: list[dict[str, Any]] = []
+    queued_total = 0
+    for s in streams:
+        try:
+            r = _stream_digest(s["keywords"], stream=s["slug"], persona=s["persona"],
+                               max_targets=s["max"], dry_run=dry_run)
+        except Exception as e:  # noqa: BLE001 - one stream failing must not kill the rest
+            r = {"error": str(e)[:160]}
+        r["stream"] = s["slug"]
+        results.append(r)
+        queued_total += int(r.get("queued") or 0)
+    return {"streams": results, "queued": queued_total, "dry_run": dry_run}

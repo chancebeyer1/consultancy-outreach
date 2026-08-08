@@ -14,6 +14,7 @@ export type CommentItem = {
   reactions: number;
   comments: number;
   keyword: string | null;
+  campaign_slug: string | null;
   body: string;
   status: string;
   error: string | null;
@@ -192,6 +193,20 @@ function Card({ item, editable = false }: { item: CommentItem; editable?: boolea
               <>
                 {" · "}
                 <span className="text-neutral-500">{item.keyword}</span>
+              </>
+            )}
+            {item.campaign_slug && (
+              <>
+                {" · "}
+                <span
+                  className={
+                    item.campaign_slug === "consulting"
+                      ? "rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400"
+                      : "rounded bg-emerald-900/60 px-1.5 py-0.5 text-[10px] text-emerald-300"
+                  }
+                >
+                  {item.campaign_slug}
+                </span>
               </>
             )}
           </div>

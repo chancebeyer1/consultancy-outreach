@@ -51,3 +51,14 @@ founder_keywords = [
 # Skip engineer-profile candidates in discovery (operator covers the technical side);
 # ops/sales/healthcare-ops signals override. See _wrong_role in workers/founders_sweep.py.
 founder_exclude_engineers = true
+
+# Own comment stream (separate from the consulting AI-agent stream): the daily growth
+# digest finds LinkedIn posts matching these and drafts comments in THIS campaign's
+# persona, tagged campaign_slug=panelpath-partners in /comments. See workers/growth.py.
+growth_keywords = [
+    "insurance credentialing",
+    "therapist private practice",
+    "insurance panels therapist",
+    "behavioral health startup",
+    "healthtech cofounder",
+]

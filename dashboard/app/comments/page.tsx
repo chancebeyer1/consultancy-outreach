@@ -29,7 +29,7 @@ export default async function CommentsPage({
     const { data, count } = await admin
       .from("comment_queue")
       .select(
-        "id, social_id, post_url, author_name, author_headline, post_excerpt, reactions, comments, keyword, body, status, error, approved_at, posted_at, created_at",
+        "id, social_id, post_url, author_name, author_headline, post_excerpt, reactions, comments, keyword, campaign_slug, body, status, error, approved_at, posted_at, created_at",
         { count: "exact" },
       )
       .neq("status", "rejected")
