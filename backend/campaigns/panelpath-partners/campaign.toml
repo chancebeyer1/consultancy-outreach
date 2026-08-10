@@ -18,7 +18,7 @@ status = "active"
 
 auto_send = false
 
-channels = ["linkedin_connect", "linkedin_dm"]
+channels = ["linkedin_connect", "linkedin_dm", "email"]  # 2026-08-10: email leg added (review-first)
 
 landing_url = "https://panelpath.vercel.app"
 

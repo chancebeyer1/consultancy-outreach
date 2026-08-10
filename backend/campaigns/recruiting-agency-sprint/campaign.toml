@@ -11,7 +11,7 @@ is_default = false
 auto_send = true
 
 # LinkedIn (Sales Nav leads) + email (Apollo-sourced leads), same ICP on both channels.
-channels = ["linkedin_connect", "linkedin_dm", "email"]
+channels = ["linkedin_dm"]  # 2026-08-10: email removed 07-18, connect removed 08-04; seed was stale
 
 # Sourcing is driven by the structured Sales-Navigator filters in `search.json`
 # (owner/partner seniority @ "Staffing and Recruiting", US, 1-200 employees) — far

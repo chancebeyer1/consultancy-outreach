@@ -1,0 +1,13 @@
+name = "PanelPath — BH Practices (email)"
+status = "active"
+channels = ["email"]
+auto_send = true
+landing_url = "https://panelpath.vercel.app"
+owner_email = "chanceb323@gmail.com"
+
+[apollo_params]
+titles = ["owner", "founder", "practice owner", "clinical director", "executive director", "practice manager"]
+locations = ["california"]
+seniorities = ["owner", "founder", "c_suite", "director"]
+num_employees_ranges = ["1,10", "11,50"]
+org_keywords = ["therapy", "counseling", "mental health", "behavioral health", "psychology", "psychiatry"]

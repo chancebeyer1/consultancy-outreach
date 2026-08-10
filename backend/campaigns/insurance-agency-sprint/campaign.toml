@@ -13,7 +13,7 @@ auto_send = true
 
 # LinkedIn (Sales Nav leads) + email (Apollo-sourced leads). Same ICP, both channels,
 # so the dashboard can compare LinkedIn vs email head-to-head within the campaign.
-channels = ["linkedin_connect", "linkedin_dm", "email"]
+channels = ["linkedin_connect", "linkedin_dm"]  # 2026-08-10: email moved to panelpath campaigns
 
 # Sourcing is driven by the structured Sales-Navigator filters in `search.json`
 # (owner/partner seniority @ "Insurance Agencies and Brokerages", US, 1-50 employees) —

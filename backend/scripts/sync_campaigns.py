@@ -40,8 +40,13 @@ from config import require
 app = typer.Typer(add_completion=False, help=__doc__)
 console = Console()
 
-# Columns written on every upsert (is_default handled separately to honor the
-# single-default unique index).
+# Columns written when UPDATING an existing campaign (is_default handled separately to honor
+# the single-default unique index). Persona/config content only.
+#
+# `status` and `channels` are RUNTIME STATE, owned by the DB + dashboard — they are set on
+# INSERT (a brand-new campaign takes its seed) but NEVER overwritten on update. On 2026-08-07
+# a sync with stale seeds silently REACTIVATED four paused campaigns (owner's premium was
+# canceled) and restored a retired email channel; that class of accident is now impossible.
 _WRITE_COLS = [
     "name",
     "icp_md",
@@ -53,11 +58,12 @@ _WRITE_COLS = [
     "search_url",
     "search_params",
     "apollo_params",
-    "channels",
     "auto_send",
     "inmail_min_fit",
-    "status",
 ]
+
+# Runtime-state columns: seed them on INSERT only.
+_INSERT_ONLY_COLS = ["channels", "status"]
 
 
 def _read_optional(path: Path) -> str | None:
@@ -172,11 +178,11 @@ def main(
     except ImportError as e:
         raise RuntimeError("psycopg not installed. Run: uv sync --extra worker") from e
 
-    def vals(c: dict) -> list:
+    def vals(c: dict, cols: list[str]) -> list:
         # search_params is jsonb — wrap the dict so psycopg adapts it; everything else passes through.
         return [
             Jsonb(c[col]) if col in ("search_params", "apollo_params") and c[col] is not None else c[col]
-            for col in _WRITE_COLS
+            for col in cols
         ]
 
     inserted = updated = 0
@@ -187,18 +193,28 @@ def main(
                 for c in campaigns:
                     cur.execute("select id from campaigns where slug = %s", (c["slug"],))
                     if cur.fetchone():
-                        sets = ", ".join(f"{col} = %s" for col in _WRITE_COLS)
+                        # Existing row: persona/config only — status/channels stay as the
+                        # DB has them (runtime state; see _WRITE_COLS note). A missing
+                        # search.json/apollo.json sidecar means "seed doesn't manage this
+                        # field" — never null out DB-configured params (a 2026-08-10 sync
+                        # wiped both panelpath campaigns' apollo_params exactly that way).
+                        cols = [
+                            col for col in _WRITE_COLS
+                            if not (col in ("search_params", "apollo_params") and c[col] is None)
+                        ]
+                        sets = ", ".join(f"{col} = %s" for col in cols)
                         cur.execute(
                             f"update campaigns set {sets} where slug = %s",
-                            (*vals(c), c["slug"]),
+                            (*vals(c, cols), c["slug"]),
                         )
                         updated += 1
                     else:
-                        cols = ["slug", *_WRITE_COLS, "is_default"]
+                        all_cols = [*_WRITE_COLS, *_INSERT_ONLY_COLS]
+                        cols = ["slug", *all_cols, "is_default"]
                         placeholders = ", ".join(["%s"] * len(cols))
                         cur.execute(
                             f"insert into campaigns ({', '.join(cols)}) values ({placeholders})",
-                            (c["slug"], *vals(c), False),
+                            (c["slug"], *vals(c, all_cols), False),
                         )
                         inserted += 1
 

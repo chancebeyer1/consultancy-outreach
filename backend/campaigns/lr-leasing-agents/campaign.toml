@@ -11,7 +11,7 @@
 name = "LawfulRent — Leasing Agent Partners"
 slug = "lr-leasing-agents"
 is_default = false
-status = "active"
+status = "paused"  # 2026-08-10: Tanner premium canceled 08-04; stale-active seed resurrected these on the 08-07 sync
 
 owner_email = "tannerbuyhomes@gmail.com"
 

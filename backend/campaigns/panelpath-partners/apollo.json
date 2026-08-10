@@ -1,0 +1,7 @@
+{
+  "titles": ["owner", "founder", "ceo", "president", "principal"],
+  "locations": ["united states"],
+  "seniorities": ["owner", "founder", "c_suite"],
+  "num_employees_ranges": ["1,10"],
+  "org_keywords": ["mental health billing", "behavioral health billing", "medical billing", "credentialing", "practice management"]
+}

@@ -143,15 +143,31 @@ def pick_connect_variant(campaign_ref: str | None, key: str | None) -> str:
         return connect_variant(key)
 
 
+def _active_campaign_ids() -> set[str] | None:
+    """Ids of status='active' campaigns; None on failure (callers then skip the filter)."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("select id::text from campaigns where coalesce(status,'active')='active'")
+            return {r[0] for r in cur.fetchall()}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def campaign_connect_weights() -> dict[str, float]:
     """{campaign_id: share} of the daily connect budget, Thompson-sampled from each campaign's
     matured accept posterior (pool prior). Seeded per UTC day: the tilt is stable within a day
     and re-rolls tomorrow. Floored at MIN_WEIGHT and renormalized. {} on any failure (callers
-    fall back to even shares)."""
+    fall back to even shares).
+
+    ACTIVE campaigns only (2026-08-10): paused campaigns kept their matured history in the
+    matrix and were silently claiming budget shares — the one active campaign was squeezed to
+    a 14% slice of its own channel cap. History still informs the pool prior; shares don't.
+    """
     try:
         from datetime import UTC, datetime
 
         matrix = _matrix()
+        active = _active_campaign_ids()
         pool = matrix.get("", {})
         pool_a = sum(a for a, _ in pool.values())
         pool_m = sum(m for _, m in pool.values())
@@ -165,7 +181,7 @@ def campaign_connect_weights() -> dict[str, float]:
         rng = random.Random(f"cw:{datetime.now(UTC).date().isoformat()}")
         samples: dict[str, float] = {}
         for cid, arms in matrix.items():
-            if not cid:
+            if not cid or (active is not None and cid not in active):
                 continue
             a_c = sum(a for a, _ in arms.values())
             m_c = sum(m for _, m in arms.values())
@@ -186,6 +202,7 @@ def allocator_report() -> dict[str, Any]:
     today's sampled budget weights. Read-only; safe to call from the report's defensive helpers."""
     matrix = _matrix()
     weights = campaign_connect_weights()
+    active = _active_campaign_ids()
     names: dict[str, str] = {}
     try:
         with _connect() as conn, conn.cursor() as cur:
@@ -195,7 +212,9 @@ def allocator_report() -> dict[str, Any]:
         pass
     campaigns = []
     for cid, arms in matrix.items():
-        if not cid:
+        # Report ACTIVE campaigns only — paused rows in the weekly table implied they were
+        # still competing for budget (and hid that the shares were being diluted).
+        if not cid or (active is not None and cid not in active):
             continue
         a = sum(x for x, _ in arms.values())
         m = sum(x for _, x in arms.values())
