@@ -645,12 +645,23 @@ def replenish_all_campaigns(dry_run: bool = False, time_budget_s: float | None =
                                 {"slug": campaign_slug, "error": str(e)[:140]}
                             )
 
-                # 1. Count messageable queue
-                queue_count = _messageable_count(cur, campaign_id)
+                # 1. Count the queue THIS sourcing leg actually feeds. LinkedIn-sourcing exists to
+                # fill the connect pipeline — gate it on the CONNECT queue. The blended
+                # _messageable_count let a full email queue mask an empty connect queue (2026-08-11:
+                # panelpath-partners sat at "queue=107" of pure email drafts while its LinkedIn
+                # motion had zero connects drafted — the 2026-07 recruiting starvation, reborn).
+                if li_channels is None or "linkedin_connect" in li_channels:
+                    queue_count = _li_queue_count(cur, campaign_id)
+                    threshold = LI_QUEUE_THRESHOLD
+                    qname = "li_queue"
+                else:
+                    queue_count = _messageable_count(cur, campaign_id)
+                    threshold = QUEUE_THRESHOLD
+                    qname = "queue"
 
-                if queue_count >= QUEUE_THRESHOLD:
+                if queue_count >= threshold:
                     summary["skipped"].append(
-                        {"slug": campaign_slug, "reason": f"queue={queue_count} >= {QUEUE_THRESHOLD}"}
+                        {"slug": campaign_slug, "reason": f"{qname}={queue_count} >= {threshold}"}
                     )
                     continue
 

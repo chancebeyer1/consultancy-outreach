@@ -13,6 +13,7 @@ import { dataSource } from "../lib/supabase";
 const links = [
   { href: "/content", label: "Content" },
   { href: "/comments", label: "Comments" },
+  { href: "/drafts", label: "Drafts" },
   { href: "/replies", label: "Replies" },
   { href: "/sends", label: "Sends" },
   { href: "/pipeline", label: "Pipeline" },

@@ -103,6 +103,13 @@ def generate_weekly_report(*, dry_run: bool = False) -> dict[str, Any]:
         # --- Needs-you list ---
         interested_unhandled = _one(cur, """select count(*) from replies
             where intent='interested' and handled_at is null""")
+        # Review-first campaigns (auto_send=false, e.g. panelpath-partners cofounder emails)
+        # queue drafts on /drafts — surface the count so they never sit invisible.
+        email_drafts_review = _one(cur, """select count(*) from drafts d
+            join leads l on l.id = d.lead_id
+            join campaigns c on c.id = l.campaign_id
+            where d.status = 'draft' and d.channel like 'email%'
+              and coalesce(c.status,'active') = 'active' and not c.auto_send""")
         drafts_review = _one(cur, "select count(*) from content_posts where status='draft'")
         comments_pending = _one(cur, "select count(*) from comment_queue where status='pending'")
         nudges_pending = _one(cur, """select count(*) from scheduled_replies
@@ -212,6 +219,7 @@ SYSTEM
 
 == NEEDS YOU ==
   -> {interested_unhandled} interested repl{'y' if interested_unhandled == 1 else 'ies'} awaiting YOUR response: {DASH}/replies
+  -> {email_drafts_review} outreach draft(s) awaiting YOUR approval (review-first campaigns): {DASH}/drafts
   -> {nudges_pending} revival nudge(s) to approve: {DASH}/replies
   -> {drafts_review} content draft(s) to review: {DASH}/content
   -> {comments_pending} growth comment(s) to approve: {DASH}/comments
