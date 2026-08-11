@@ -162,7 +162,8 @@ def _source_one(camp: dict, existing_urls: set, existing_emails: set, seen: set,
     # apollo_cursor, search_variant left null).
     variants = params.get("variants") if isinstance(params, dict) else None
     if variants:
-        cursors = camp.get("cursors") or {}
+        _c = camp.get("cursors")
+        cursors = _c if isinstance(_c, dict) else {}  # legacy list/None shapes must not .get-crash
         recipe = min(variants, key=lambda v: int(cursors.get(v.get("name", ""), 0)))
         variant_name = recipe.get("name")
         eff_params = {k: v for k, v in params.items() if k != "variants"}
