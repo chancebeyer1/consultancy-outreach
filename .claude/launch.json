@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "hatchhold-proto",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--no-project", "python", "-m", "http.server", "8323", "--directory", "C:/Users/chanc/Documents/Github/hatchhold"],
+      "port": 8323
+    },
+    {
       "name": "gravehold-proto",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "--no-project", "python", "-m", "http.server", "8322", "--directory", "C:/Users/chanc/Documents/Github/gravehold/prototype"],
