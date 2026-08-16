@@ -2,6 +2,9 @@ name = "PanelPath — BH Practices (email)"
 status = "active"
 channels = ["email"]
 auto_send = true
+# 2026-08-16: no fit floor — volume email campaign, operator never hand-reviews it
+# (89 sub-60 drafts had piled up in /drafts). Deliverability gate still applies.
+auto_approve_min_fit = 0
 landing_url = "https://panelpath.vercel.app"
 owner_email = "chanceb323@gmail.com"
 

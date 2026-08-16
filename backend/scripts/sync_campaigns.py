@@ -59,6 +59,7 @@ _WRITE_COLS = [
     "search_params",
     "apollo_params",
     "auto_send",
+    "auto_approve_min_fit",
     "inmail_min_fit",
 ]
 
@@ -109,6 +110,7 @@ def _read_campaign_dir(folder: Path) -> dict | None:
         "apollo_params": apollo_params,  # dict | None → Postgres jsonb
         "channels": meta.get("channels"),  # list[str] | None → Postgres text[]
         "auto_send": bool(meta.get("auto_send", False)),
+        "auto_approve_min_fit": meta.get("auto_approve_min_fit"),
         "inmail_min_fit": meta.get("inmail_min_fit"),
         "is_default": bool(meta.get("is_default", False)),
         "status": meta.get("status") or "active",

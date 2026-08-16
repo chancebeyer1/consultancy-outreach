@@ -106,7 +106,8 @@ def source_apollo_all(*, dry_run: bool = False, limit: int = APOLLO_PULL_LIMIT) 
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "select id, slug, apollo_params, auto_send, apollo_cursor, apollo_cursors from campaigns "
+                "select id, slug, apollo_params, auto_send, apollo_cursor, apollo_cursors, "
+                "auto_approve_min_fit from campaigns "
                 "where status = 'active' and apollo_params is not null "
                 # A campaign whose channels exclude email must not source email leads (the
                 # 2026-07-18 email reset dropped recruiting's email leg but kept it active for DMs).
@@ -114,7 +115,8 @@ def source_apollo_all(*, dry_run: bool = False, limit: int = APOLLO_PULL_LIMIT) 
             )
             camps = [
                 {"id": str(r[0]), "slug": r[1], "params": r[2], "auto_send": r[3],
-                 "cursor": r[4] or 0, "cursors": r[5] or {}}
+                 "cursor": r[4] or 0, "cursors": r[5] or {},
+                 "min_fit": AUTO_APPROVE_MIN_FIT if r[6] is None else int(r[6])}
                 for r in cur.fetchall()
             ]
             existing_urls, existing_emails = _existing(cur)
@@ -311,7 +313,10 @@ def _record_seen(campaign_id: str, marks: list[tuple]) -> None:
 
 def _ingest(camp: dict, person: dict, score_obj: dict, fit: int, email: str, email_status: str,
             body: str | None, *, variant: str | None = None, search_variant: str | None = None) -> None:
-    auto = bool(camp["auto_send"]) and fit >= AUTO_APPROVE_MIN_FIT and email_status == "deliverable"
+    # Per-campaign fit floor (campaigns.auto_approve_min_fit; None → global 60).
+    # 0 = the operator never reviews this campaign — everything deliverable ships.
+    min_fit = camp.get("min_fit", AUTO_APPROVE_MIN_FIT)
+    auto = bool(camp["auto_send"]) and fit >= min_fit and email_status == "deliverable"
     draft_status = "approved" if auto else "draft"
     with _connect() as conn:
         with conn.cursor() as cur:

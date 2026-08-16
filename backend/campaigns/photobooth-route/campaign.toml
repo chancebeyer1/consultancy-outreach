@@ -1,0 +1,23 @@
+# Photobooth Route — westside LA bar/venue placement outreach (MANUAL SEND ONLY).
+#
+# 2026-08-16: separate venture (vending-model photo booths in bars). This campaign
+# exists so its drafts appear in the dashboard /drafts review queue — the operator
+# copies each message and sends it PERSONALLY (IG DM or personal email). Nothing
+# here may ever route through Unipile or the mailbox fleet:
+#   - status stays "paused" → invisible to send fair-share math and every sender
+#     query (they filter c.status='active'), and sourcing never touches it
+#     (paused + no apollo_params).
+#   - channels are 'manual_ig' / 'manual_email' — no sender matches those strings.
+#   - venue leads are seeded with email_status NULL, so even a mislabeled 'email'
+#     draft could not pass the email sender's deliverability gate.
+# Seeded by scripts/seed_photobooth_route.py; venue list + field playbook live in
+# Documents/Github/photobooth-route/ (PLAYBOOK.md, targets.csv, QUEUE.md).
+
+name = "Photobooth Route (manual)"
+slug = "photobooth-route"
+status = "paused"
+auto_send = false
+
+channels = ["manual_ig", "manual_email"]
+
+owner_email = "chanceb323@gmail.com"

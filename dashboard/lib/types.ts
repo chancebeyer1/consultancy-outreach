@@ -32,7 +32,11 @@ export type Channel =
   | "linkedin_followup_2"
   | "email"
   | "email_followup_1"
-  | "email_followup_2";
+  | "email_followup_2"
+  // Manual channels (photobooth-route): the operator sends personally (IG DM /
+  // personal email) and clicks "Mark sent" — no sender worker matches these.
+  | "manual_ig"
+  | "manual_email";
 
 export type DraftStatus = "draft" | "approved" | "rejected" | "sent" | "failed";
 
@@ -101,6 +105,8 @@ export interface Hook {
   reference: string;
   why_it_matters: string;
   signal_strength: number;
+  // manual_email drafts carry their subject line here (drafts.hook jsonb).
+  subject?: string | null;
 }
 
 export interface Score {

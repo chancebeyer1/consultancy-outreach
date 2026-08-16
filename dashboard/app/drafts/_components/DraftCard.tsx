@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import clsx from "clsx";
-import type { Draft, Hook } from "../../../lib/types";
+import type { Draft, Hook, Lead } from "../../../lib/types";
 
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -16,8 +16,12 @@ async function copyToClipboard(text: string): Promise<boolean> {
 interface Props {
   draft: Draft;
   hook: Hook | null;
+  lead?: Lead;
   onApprove: (edited?: string) => void;
   onReject: () => void;
+  // Manual channels only (manual_ig / manual_email): the operator sent the
+  // message personally; this records it (status 'sent' + provider='manual').
+  onMarkSent?: (edited?: string) => void;
 }
 
 const channelLabel: Record<string, string> = {
@@ -29,6 +33,8 @@ const channelLabel: Record<string, string> = {
   email: "Email (cold)",
   email_followup_1: "Email follow-up #1",
   email_followup_2: "Email follow-up #2",
+  manual_ig: "IG DM — send from your personal IG",
+  manual_email: "Email — send from your personal address",
 };
 
 const channelLimit: Record<string, number> = {
@@ -38,12 +44,21 @@ const channelLimit: Record<string, number> = {
   email: 1000,
 };
 
-export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
+function igHandle(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const m = url.match(/instagram\.com\/([^/?#]+)/i);
+  return m ? m[1] : null;
+}
+
+export function DraftCard({ draft, hook, lead, onApprove, onReject, onMarkSent }: Props) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(draft.edited_body ?? draft.body);
   const [copied, setCopied] = useState(false);
+  const manual = draft.channel.startsWith("manual_");
   const limit = channelLimit[draft.channel] ?? 1000;
-  const over = text.length > limit;
+  const over = !manual && text.length > limit;
+  const handle = manual ? igHandle(lead?.linkedin_url) : null;
+  const subject = draft.hook?.subject ?? hook?.subject ?? null;
 
   async function handleCopy() {
     const ok = await copyToClipboard(text);
@@ -60,21 +75,51 @@ export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
           {channelLabel[draft.channel] ?? draft.channel}
         </div>
         <div className="flex items-center gap-3 text-xs text-neutral-500">
-          {hook && (
+          {hook && !manual && (
             <span className="font-mono">
               hook · {hook.type} · {hook.signal_strength}/5
             </span>
           )}
-          <span
-            className={clsx(
-              "font-mono",
-              over ? "text-red-400" : "text-neutral-500",
-            )}
-          >
-            {text.length} / {limit}
-          </span>
+          {!manual && (
+            <span
+              className={clsx(
+                "font-mono",
+                over ? "text-red-400" : "text-neutral-500",
+              )}
+            >
+              {text.length} / {limit}
+            </span>
+          )}
         </div>
       </div>
+
+      {manual && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-neutral-800 bg-neutral-900/60 px-4 py-2 text-xs">
+          {draft.channel === "manual_ig" && lead?.linkedin_url && (
+            <a
+              href={lead.linkedin_url}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-sky-400 hover:underline"
+            >
+              DM → @{handle ?? "instagram"} ↗
+            </a>
+          )}
+          {draft.channel === "manual_email" && lead?.email && (
+            <a
+              href={`mailto:${lead.email}?subject=${encodeURIComponent(subject ?? "")}&body=${encodeURIComponent(text)}`}
+              className="font-mono text-sky-400 hover:underline"
+            >
+              To → {lead.email} ↗
+            </a>
+          )}
+          {subject && (
+            <span className="font-mono text-neutral-400">
+              Subject: <span className="text-neutral-300">{subject}</span>
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="p-4">
         {editing ? (
@@ -93,8 +138,11 @@ export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
 
         {hook && (
           <div className="mt-3 rounded-md bg-neutral-900 px-3 py-2 text-xs text-neutral-400">
-            <span className="text-neutral-500">↳ anchored on </span>
+            <span className="text-neutral-500">↳ {manual ? "venue context: " : "anchored on "}</span>
             <span className="italic">"{hook.reference}"</span>
+            {manual && hook.why_it_matters && hook.why_it_matters !== "unknown" && (
+              <span className="text-neutral-500"> · {hook.why_it_matters}</span>
+            )}
           </div>
         )}
 
@@ -103,12 +151,16 @@ export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
             <>
               <button
                 onClick={() => {
+                  if (manual && onMarkSent) {
+                    setEditing(false);
+                    return; // manual: saving the edit ≠ sent; keep reviewing
+                  }
                   onApprove(text);
                   setEditing(false);
                 }}
                 className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium hover:bg-emerald-600"
               >
-                Save + approve
+                {manual ? "Done editing" : "Save + approve"}
               </button>
               <button
                 onClick={() => {
@@ -122,12 +174,21 @@ export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
             </>
           ) : (
             <>
-              <button
-                onClick={() => onApprove(text)}
-                className="rounded-md bg-emerald-900/60 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-900"
-              >
-                Approve
-              </button>
+              {manual && onMarkSent ? (
+                <button
+                  onClick={() => onMarkSent(text)}
+                  className="rounded-md bg-emerald-900/60 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-900"
+                >
+                  Mark sent ✓
+                </button>
+              ) : (
+                <button
+                  onClick={() => onApprove(text)}
+                  className="rounded-md bg-emerald-900/60 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-900"
+                >
+                  Approve
+                </button>
+              )}
               <button
                 onClick={handleCopy}
                 className={clsx(
@@ -149,7 +210,7 @@ export function DraftCard({ draft, hook, onApprove, onReject }: Props) {
                 onClick={onReject}
                 className="rounded-md bg-red-900/30 px-3 py-1.5 text-sm font-medium text-red-300 hover:bg-red-900/50"
               >
-                Reject
+                {manual ? "Skip venue" : "Reject"}
               </button>
             </>
           )}

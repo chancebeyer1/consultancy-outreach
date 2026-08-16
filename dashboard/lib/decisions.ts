@@ -6,7 +6,9 @@ import type { Draft, DraftReviewRow } from "./types";
 interface DecisionInput {
   row: DraftReviewRow;
   draft: Draft;
-  action: "approve" | "reject";
+  // "sent" = manual channels only (operator sent it personally; records status
+  // 'sent' + a sends row with provider='manual' server-side).
+  action: "approve" | "reject" | "sent";
   editedBody?: string;
 }
 
@@ -36,6 +38,9 @@ export async function persistDecision({ row, draft, action, editedBody }: Decisi
         channel: draft.channel,
         action,
         body,
+        // Persist edits so the sender's coalesce(edited_body, body) actually sees
+        // them (previously this key was never sent and the route nulled the column).
+        edited_body: editedBody ?? draft.edited_body ?? null,
         hook_reference: draft.hook?.reference ?? row.hooks[0]?.reference ?? null,
       }),
     });

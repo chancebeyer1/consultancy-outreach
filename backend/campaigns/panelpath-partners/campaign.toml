@@ -17,6 +17,9 @@ is_default = false
 status = "active"
 
 auto_send = true  # 2026-08-15: operator switched partners to full auto-send
+# 2026-08-16: no fit floor — operator never wants to hand-review this campaign's drafts
+# (sub-60s were piling up in /drafts). Deliverability gate still applies to email.
+auto_approve_min_fit = 0
 
 channels = ["linkedin_connect", "linkedin_dm", "email"]  # 2026-08-10: email leg added (review-first)
 

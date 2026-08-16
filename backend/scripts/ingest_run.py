@@ -44,8 +44,8 @@ def _connect():
     return psycopg.connect(require("DATABASE_URL")), Jsonb
 
 
-def _campaign_map(cur) -> tuple[dict[str, str], str | None, dict[str, bool]]:
-    """Return (slug→id, default_campaign_id, auto_send_by_id) from campaigns.
+def _campaign_map(cur) -> tuple[dict[str, str], str | None, dict[str, bool], dict[str, int]]:
+    """Return (slug→id, default_campaign_id, auto_send_by_id, min_fit_by_id) from campaigns.
 
     Empty / None when campaigns haven't been synced yet — leads then get a NULL
     campaign_id (the column is nullable), which is fine.
@@ -53,14 +53,16 @@ def _campaign_map(cur) -> tuple[dict[str, str], str | None, dict[str, bool]]:
     slug_to_id: dict[str, str] = {}
     default_id: str | None = None
     auto_by_id: dict[str, bool] = {}
-    cur.execute("select id, slug, is_default, auto_send from campaigns")
-    for cid, slug, is_default, auto_send in cur.fetchall():
+    min_fit_by_id: dict[str, int] = {}
+    cur.execute("select id, slug, is_default, auto_send, auto_approve_min_fit from campaigns")
+    for cid, slug, is_default, auto_send, min_fit in cur.fetchall():
         if slug:
             slug_to_id[slug] = str(cid)
         if is_default:
             default_id = str(cid)
         auto_by_id[str(cid)] = bool(auto_send)
-    return slug_to_id, default_id, auto_by_id
+        min_fit_by_id[str(cid)] = 60 if min_fit is None else int(min_fit)
+    return slug_to_id, default_id, auto_by_id, min_fit_by_id
 
 
 def _profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
@@ -96,7 +98,7 @@ def main(
 
     with conn:
         with conn.cursor() as cur, jsonl.open("r", encoding="utf-8") as f:
-            slug_to_id, default_campaign_id, auto_by_id = _campaign_map(cur)
+            slug_to_id, default_campaign_id, auto_by_id, min_fit_by_id = _campaign_map(cur)
             for line in f:
                 line = line.strip()
                 if not line:
@@ -213,7 +215,11 @@ def main(
                         continue
                     draft_status = (
                         "approved"
-                        if (auto_send and channel in first_touch and fit >= 60)
+                        if (
+                            auto_send
+                            and channel in first_touch
+                            and fit >= min_fit_by_id.get(campaign_id or "", 60)
+                        )
                         else "draft"
                     )
                     cur.execute(

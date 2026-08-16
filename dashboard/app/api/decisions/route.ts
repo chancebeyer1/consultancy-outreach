@@ -29,7 +29,10 @@ interface DecisionPayload {
   company?: string | null;
   segment?: string | null;
   channel: string;
-  action: "approve" | "reject";
+  // "sent" = manual channels only: the operator sent the message personally
+  // (photobooth-route IG DMs / personal email). Records drafts.status='sent'
+  // plus a sends row with provider='manual'.
+  action: "approve" | "reject" | "sent";
   body: string;
   hook_reference?: string | null;
   edited_body?: string | null;
@@ -43,7 +46,7 @@ function isValid(p: unknown): p is DecisionPayload {
     typeof o.lead_id === "string" &&
     typeof o.linkedin_url === "string" &&
     typeof o.channel === "string" &&
-    (o.action === "approve" || o.action === "reject") &&
+    (o.action === "approve" || o.action === "reject" || o.action === "sent") &&
     typeof o.body === "string"
   );
 }
@@ -58,6 +61,38 @@ async function appendToJsonl(payload: DecisionPayload): Promise<string> {
 
 async function updateDraftInSupabase(payload: DecisionPayload): Promise<void> {
   const supabase = serverAdminClient();
+
+  if (payload.action === "sent") {
+    // Manual-send bookkeeping — only ever valid for manual_* channels. Verify the
+    // channel against the DB (not the client payload) so a forged request can't
+    // flip a real sender-owned draft to 'sent' and dodge the pipeline.
+    const { data: draft, error: readErr } = await supabase
+      .from("drafts")
+      .select("channel")
+      .eq("id", payload.draft_id)
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!draft || !String(draft.channel).startsWith("manual_")) {
+      throw new Error(`action 'sent' is only valid for manual_* drafts (got ${draft?.channel})`);
+    }
+    const { error } = await supabase
+      .from("drafts")
+      .update({
+        status: "sent",
+        edited_body: payload.edited_body ?? null,
+        decided_at: new Date().toISOString(),
+      })
+      .eq("id", payload.draft_id);
+    if (error) throw error;
+    const { error: sendErr } = await supabase.from("sends").insert({
+      draft_id: payload.draft_id,
+      provider: "manual",
+      status: "sent",
+    });
+    if (sendErr) throw sendErr;
+    return;
+  }
+
   const status = payload.action === "approve" ? "approved" : "rejected";
   const { error } = await supabase
     .from("drafts")

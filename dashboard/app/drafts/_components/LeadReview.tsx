@@ -9,7 +9,7 @@ interface Props {
   onDecideOne: (
     leadId: string,
     draftId: string,
-    status: "approved" | "rejected",
+    status: "approved" | "rejected" | "sent",
     editedBody?: string,
   ) => void;
   onDecideAll: (leadId: string, status: "approved" | "rejected") => void;
@@ -22,6 +22,10 @@ export function LeadReview({ row, onDecideOne, onDecideAll }: Props) {
   const pending = drafts
     .filter((d) => d.status === "draft")
     .sort((a, b) => a.step_index - b.step_index);
+  // Manual rows (photobooth-route venues): no auto-send path exists — the
+  // operator copies each message, sends it personally, then marks it sent.
+  const manualOnly =
+    pending.length > 0 && pending.every((d) => d.channel.startsWith("manual_"));
 
   return (
     <div>
@@ -65,24 +69,28 @@ export function LeadReview({ row, onDecideOne, onDecideAll }: Props) {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-xs uppercase tracking-wide text-neutral-500">
-                Sequence ({pending.length} pending)
+                {manualOnly ? `Manual send (${pending.length} pending)` : `Sequence (${pending.length} pending)`}
               </h3>
               <p className="mt-0.5 text-[11px] text-neutral-600">
-                Connection note sends first; the DM auto-sends only after they accept.
+                {manualOnly
+                  ? "Copy the message, send it from your own account, then Mark sent."
+                  : "Connection note sends first; the DM auto-sends only after they accept."}
               </p>
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={() => onDecideAll(lead.id, "approved")}
-                className="rounded-md bg-emerald-900/50 px-3 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-900"
-              >
-                Approve sequence (a)
-              </button>
+              {!manualOnly && (
+                <button
+                  onClick={() => onDecideAll(lead.id, "approved")}
+                  className="rounded-md bg-emerald-900/50 px-3 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-900"
+                >
+                  Approve sequence (a)
+                </button>
+              )}
               <button
                 onClick={() => onDecideAll(lead.id, "rejected")}
                 className="rounded-md bg-red-900/40 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-900/70"
               >
-                Skip lead (r)
+                {manualOnly ? "Skip venue (r)" : "Skip lead (r)"}
               </button>
             </div>
           </div>
@@ -91,9 +99,15 @@ export function LeadReview({ row, onDecideOne, onDecideAll }: Props) {
             <DraftCard
               key={d.id}
               draft={d}
-              hook={hooks[0] ?? null}
+              hook={d.hook ?? hooks[0] ?? null}
+              lead={lead}
               onApprove={(edited) => onDecideOne(lead.id, d.id, "approved", edited)}
               onReject={() => onDecideOne(lead.id, d.id, "rejected")}
+              onMarkSent={
+                d.channel.startsWith("manual_")
+                  ? (edited) => onDecideOne(lead.id, d.id, "sent", edited)
+                  : undefined
+              }
             />
           ))}
         </div>

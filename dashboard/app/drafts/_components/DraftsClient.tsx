@@ -51,15 +51,20 @@ export function DraftsClient({ initialRows }: Props) {
     (leadId: string, status: "approved" | "rejected") => {
       // Capture which drafts we just decided on for persistence (post-state-update).
       const row = rows.find((r) => r.lead.id === leadId);
-      const pendingDrafts = row?.drafts.filter((d) => d.status === "draft") ?? [];
+      // Manual drafts (photobooth-route) can't be bulk-approved — "sent" is a
+      // per-card action that means "I personally sent this". Bulk-reject is fine.
+      const pendingDrafts = (row?.drafts.filter((d) => d.status === "draft") ?? []).filter(
+        (d) => status === "rejected" || !d.channel.startsWith("manual_"),
+      );
 
+      const decidedIds = new Set(pendingDrafts.map((d) => d.id));
       setRows((prev) =>
         prev.map((r) =>
           r.lead.id === leadId
             ? {
                 ...r,
                 drafts: r.drafts.map((d) =>
-                  d.status === "draft"
+                  decidedIds.has(d.id)
                     ? { ...d, status, decided_at: new Date().toISOString() }
                     : d,
                 ),
@@ -86,7 +91,12 @@ export function DraftsClient({ initialRows }: Props) {
   );
 
   const decideOne = useCallback(
-    (leadId: string, draftId: string, status: "approved" | "rejected", editedBody?: string) => {
+    (
+      leadId: string,
+      draftId: string,
+      status: "approved" | "rejected" | "sent",
+      editedBody?: string,
+    ) => {
       const ctx = findRowAndDraft(leadId, draftId);
       // Per-draft decision. Drafts for a lead form a SEQUENCE (connection note
       // first, then the DM after they accept) — approving one doesn't touch the
@@ -115,7 +125,7 @@ export function DraftsClient({ initialRows }: Props) {
         void persistDecision({
           row: ctx.row,
           draft: ctx.draft,
-          action: status === "approved" ? "approve" : "reject",
+          action: status === "approved" ? "approve" : status === "sent" ? "sent" : "reject",
           editedBody,
         });
       }
