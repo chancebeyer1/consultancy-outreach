@@ -16,7 +16,7 @@ slug = "panelpath-partners"
 is_default = false
 status = "active"
 
-auto_send = false
+auto_send = true  # 2026-08-15: operator switched partners to full auto-send
 
 channels = ["linkedin_connect", "linkedin_dm", "email"]  # 2026-08-10: email leg added (review-first)
 
