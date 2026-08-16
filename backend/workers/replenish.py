@@ -217,7 +217,12 @@ def draft_connects_for_existing(
                 print(f"draft_connects_for_existing: {campaign_slug} lead {lead_id}: {str(e)[:120]}")
                 continue
 
-            status = "approved" if (auto_send and int(fit or 0) >= 60) else "draft"
+            # Connect invites auto-approve on fit regardless of the campaign's auto_send flag
+            # (2026-08-14): auto_send=false exists to gate MESSAGE content (relationship-critical
+            # emails/DMs), but an invite is a light touch whose note is variant-templated and
+            # sanity-gated below — holding connects for review dammed the whole partners LinkedIn
+            # motion (41 drafts, 0 sent). Emails on review-first campaigns still queue for /drafts.
+            status = "approved" if int(fit or 0) >= 60 else "draft"
             # Sanity-gate the note (variant c's empty body is exempt — there is no note). A bad
             # note is stored as 'rejected': audit trail + blocks re-drafting the same lead.
             if variant != "c" and not _connect_note_ok(body):

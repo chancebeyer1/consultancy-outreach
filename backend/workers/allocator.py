@@ -32,7 +32,10 @@ from typing import Any
 # then showed b (peer statement) beating a (curiosity) in EVERY campaign (pooled 21.1% vs 11.5%),
 # so d iterates on the winning peer angle. New arm cold-starts on a uniform Beta prior — Thompson
 # explores it hard for the first ~week, then the data takes over.
-VARIANTS = ("a", "b", "c", "d")
+# 'c' (no-note) RETIRED 2026-08-14: matured 19% (19/99) vs d 25% / a+b 22% — the benchmark's
+# no-note lift never materialized on our funnel, and no note also means no context for the
+# post-accept DM. Historical c sends keep their attribution; the arm just stops being dealt.
+VARIANTS = ("a", "b", "d")
 MATURE_DAYS = 7      # a connect younger than this is unresolved, not a miss
 WINDOW_DAYS = 90     # ignore sends older than this
 PRIOR_N = 20         # pool pseudo-observations behind each campaign's Beta prior

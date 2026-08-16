@@ -64,7 +64,8 @@ def connect_variant(key: str | None) -> str:
     row, so sends made under the old two-way split keep their recorded bucket for attribution."""
     if not key:
         return "a"
-    return ("a", "b", "c")[sum(key.encode("utf-8", "ignore")) % 3]
+    # 'c' (no-note) retired 2026-08-14 — see workers/allocator.py VARIANTS for the data.
+    return ("a", "b", "d")[sum(key.encode("utf-8", "ignore")) % 3]
 
 
 def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:

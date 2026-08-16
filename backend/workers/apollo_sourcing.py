@@ -43,11 +43,17 @@ EMAIL_QUEUE_TARGET = 200  # build a deep buffer of approved leads so the moment 
 
 
 def _email_queue_count(cur, campaign_id: str) -> int:
+    """Unsent email drafts counted toward the queue target — approved AND awaiting-review.
+
+    Counting only 'approved' let review-first campaigns (auto_send=false) source forever:
+    their queue read 0 while unreviewed drafts piled to 311 (panelpath-partners, 2026-08-14).
+    A draft waiting for the operator is queued work either way.
+    """
     cur.execute(
         """
         select count(*) from drafts d
         join leads l on l.id = d.lead_id
-        where l.campaign_id = %s and d.channel = 'email' and d.status = 'approved'
+        where l.campaign_id = %s and d.channel = 'email' and d.status in ('approved', 'draft')
           and not exists (select 1 from sends s where s.draft_id = d.id)
         """,
         (campaign_id,),
