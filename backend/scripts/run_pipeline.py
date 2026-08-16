@@ -173,6 +173,9 @@ def _process_one(
         record["chosen_hook"] = chosen.__dict__ if chosen else None
 
         fit = int((record.get("score") or {}).get("fit_score") or 0)
+        # email_ok stays False: the CSV carries only LinkedIn URLs and ingest_run stores
+        # no address, so an email draft could never send (email_sender requires a
+        # verified-deliverable lead). Apollo sourcing owns the email leg.
         channels = draft.resolve_channels(campaign, fit)
         record["drafts"] = {
             channel: draft.draft_for_channel(channel, enrichment, chosen, campaign=campaign)

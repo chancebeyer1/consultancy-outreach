@@ -386,6 +386,8 @@ def _process_lead(
         record["chosen_hook"] = chosen.__dict__ if chosen else None
 
         fit = int((record.get("score") or {}).get("fit_score") or 0)
+        # email_ok stays False: LinkedIn search yields no address and _ingest_records
+        # stores none, so an email draft here could never send. Apollo owns the email leg.
         channels = draft.resolve_channels(campaign, fit)
         _url = record.get("linkedin_url")
         drafts_out: dict[str, str] = {}
@@ -463,7 +465,8 @@ def _ingest_records(records: list[dict]) -> dict:
                               campaign_id = coalesce(excluded.campaign_id, leads.campaign_id),
                               segment = coalesce(excluded.segment, leads.segment),
                               updated_at = now()
-                        returning id
+                        returning id,
+                                  (email is not null and coalesce(email_status, '') = 'deliverable')
                         """,
                         (
                             url,
@@ -484,7 +487,7 @@ def _ingest_records(records: list[dict]) -> dict:
                             rec.get("trigger") or "replenish",
                         ),
                     )
-                    lead_id = cur.fetchone()[0]
+                    lead_id, lead_email_ok = cur.fetchone()
                     inserted_leads += 1
 
                     # 2. UPSERT enrichment
@@ -550,6 +553,11 @@ def _ingest_records(records: list[dict]) -> dict:
                         )
                         # Empty body is only legitimate for variant 'c' (the no-note invite arm).
                         if not body and variant != "c":
+                            continue
+                        # Never store an email draft the sender can't deliver (lead has no
+                        # verified address) — resolve_channels stopped drafting these, but a
+                        # replayed pre-fix ledger can still carry them.
+                        if channel.startswith("email") and not lead_email_ok:
                             continue
                         # auto-approve only above a fit floor so a noisy search can't auto-blast
                         draft_status = (

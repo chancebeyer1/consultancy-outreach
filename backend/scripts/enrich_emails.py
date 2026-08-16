@@ -14,6 +14,13 @@ Dropcontact, …) into this script: read the approved email-channel decisions,
 look up an address per `linkedin_url`/name+company, and write an augmented
 decisions file with `email` populated — the same shape send_approvals expects.
 
+NOTE for that future finder: since 2026-08-16 the pipeline no longer pre-drafts
+the email channel for leads without a verified-deliverable address (those drafts
+could never send and sat in /drafts forever). So a finder can't count on an email
+draft already existing — when it discovers an address it must verify it, store
+email/email_status='deliverable' on the lead, and generate the email draft right
+then (draft_for_channel("email", ...)), the way workers/apollo_sourcing.py does.
+
 Usage (until a finder is added) just prints this notice.
 """
 

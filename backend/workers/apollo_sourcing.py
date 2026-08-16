@@ -48,12 +48,19 @@ def _email_queue_count(cur, campaign_id: str) -> int:
     Counting only 'approved' let review-first campaigns (auto_send=false) source forever:
     their queue read 0 while unreviewed drafts piled to 311 (panelpath-partners, 2026-08-14).
     A draft waiting for the operator is queued work either way.
+
+    Only SENDABLE drafts count — the lead must hold a verified-deliverable address, the
+    same predicate email_sender picks drafts up by. Dead inventory (email NULL, or decayed
+    to bounced) can never send, so counting it permanently occupies queue slots and
+    starves sourcing: 25 replenish-era approved drafts on email-NULL leads did exactly
+    that (panelpath-partners, 2026-08-16).
     """
     cur.execute(
         """
         select count(*) from drafts d
         join leads l on l.id = d.lead_id
         where l.campaign_id = %s and d.channel = 'email' and d.status in ('approved', 'draft')
+          and l.email is not null and l.email_status = 'deliverable'
           and not exists (select 1 from sends s where s.draft_id = d.id)
         """,
         (campaign_id,),

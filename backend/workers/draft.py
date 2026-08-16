@@ -68,19 +68,31 @@ def connect_variant(key: str | None) -> str:
     return ("a", "b", "d")[sum(key.encode("utf-8", "ignore")) % 3]
 
 
-def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:
+def resolve_channels(
+    campaign: "Campaign | None", fit_score: int, *, email_ok: bool = False,
+) -> list[str]:
     """First-touch channels to draft for one lead, applying InMail routing.
 
     Base channels come from campaign.channels (or all three). If the campaign sets
     inmail_min_fit and this lead scores >= it, the LinkedIn opener becomes a single
     cold InMail. Only the cold opener is drafted now; the DM/follow-ups are deferred
     (drafted on-demand by the sequence engine when due).
+
+    `email_ok` = this lead has a verified-deliverable address. email_sender only picks
+    up drafts whose lead is email_status='deliverable', so without it an email draft is
+    dead inventory: it parks in /drafts forever and counts against the apollo sourcing
+    queue target (43 such drafts bulk-cleared 2026-08-16). Default False because the
+    LinkedIn sourcing paths never learn an address; a caller that verified one (the way
+    apollo_sourcing does) opts in. Can empty the result for email-only campaigns —
+    a lead we can't email there has nothing to draft.
     """
     base = (
         [c for c in campaign.channels if c in CHANNEL_BUDGETS]
         if campaign and campaign.channels
         else ["linkedin_connect", "linkedin_dm", "email"]
     )
+    if not email_ok:
+        base = [c for c in base if not c.startswith("email")]
     if campaign and campaign.inmail_min_fit and fit_score >= campaign.inmail_min_fit:
         non_linkedin = [c for c in base if not c.startswith("linkedin_")]
         base = ["linkedin_inmail", *non_linkedin]

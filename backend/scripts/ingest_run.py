@@ -138,7 +138,8 @@ def main(
                           campaign_id = coalesce(excluded.campaign_id, leads.campaign_id),
                           segment = coalesce(excluded.segment, leads.segment),
                           updated_at = now()
-                    returning id
+                    returning id,
+                              (email is not null and coalesce(email_status, '') = 'deliverable')
                     """,
                     (
                         url,
@@ -154,7 +155,7 @@ def main(
                         rec.get("trigger") or "list",
                     ),
                 )
-                lead_id = cur.fetchone()[0]
+                lead_id, lead_email_ok = cur.fetchone()
                 inserted_leads += 1
 
                 # 2. UPSERT enrichment
@@ -212,6 +213,11 @@ def main(
                 first_touch = {"linkedin_connect", "linkedin_inmail"}
                 for step_index, (channel, body) in enumerate(drafts.items()):
                     if not body:
+                        continue
+                    # Never store an email draft the sender can't deliver (lead has no
+                    # verified address) — resolve_channels stopped drafting these, but a
+                    # replayed pre-fix JSONL can still carry them.
+                    if channel.startswith("email") and not lead_email_ok:
                         continue
                     draft_status = (
                         "approved"
