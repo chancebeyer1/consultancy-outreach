@@ -261,7 +261,15 @@ def draft_for_channel(
     instruction = load_prompt(prompt_name)
 
     profile = enrichment.get("profile") or {}
-    first_name = (profile.get("first_name") or "").strip()
+    # First name drives the greeting in every template. Apollo-sourced leads often have no
+    # enrichment profile, so fall back through every place the name can live — otherwise the
+    # greeting loses the name (or, worse, the model stops and asks the operator for it).
+    first_name = (
+        (profile.get("first_name") or "").strip()
+        or str(profile.get("full_name") or "").strip().split(" ")[0]
+        or str(enrichment.get("first_name") or "").strip()
+        or str(enrichment.get("name") or "").strip().split(" ")[0]
+    ).strip()
     landing_url = campaign.landing_url if campaign else Config.landing_url
     sender_first, sender_background = _sender_identity(campaign)
     payload = {

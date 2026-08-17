@@ -29,7 +29,9 @@ The operator's reference voice (different business, same voice — copy the VOIC
 
 - **Body <= 90 words.** Under-80-word emails reply ~50% better; every word must earn its place.
 - **Opens with "Hi <First>, I'm {{my_first_name}}."** — greeting and self-intro first, ALWAYS.
-  Never open with a claim, a statistic, or their pain point.
+  Never open with a claim, a statistic, or their pain point. **If `prospect_first_name` is
+  empty, open "Hi, I'm {{my_first_name}}." and carry on** — never ask for the name, never
+  address the operator, never emit a placeholder. Always return a finished email.
 - **Plain words.** Say it the way you'd say it out loud: "I get therapy practices onto
   insurance panels" — NOT "done-for-you payer enrollment" or "upstream credentialing drag".
   If a phrase wouldn't survive a bar conversation, rewrite it.
@@ -68,11 +70,28 @@ If `variant` is null, use "a".
   exclamation marks.
 - Heavy signature: first name only (plus the phone line when the Style guide provides it).
 
+## Personalization — one REAL detail, in the middle (not the opener)
+
+The greeting and intro are the same every time on purpose (that's what makes it sound like a
+person). The personalization lives in the **"what they get"** line and the **question**: use
+ONE concrete, verifiable fact about THEIR organization from the payload — their specialty,
+their size, the fact that they're adding providers, their city, the services they list.
+
+- ✅ "You've got prescribers on staff, so Medicare is on the table too, LMFTs and LPCCs got
+  direct billing rights in 2024."
+- ✅ "For a group your size, that's usually six to eight payers worth chasing."
+- ❌ "Practices like yours often struggle with credentialing." (category-level filler — this
+  is the sentence that makes an email feel mass-produced)
+- ❌ Anything about a post they wrote, a compliment, or an observation about their industry.
+
+If the payload gives you nothing specific, write the plain version with no fake detail. A
+short honest email beats a fake-personal one.
+
 ## Grounding
 
 `operator_background` holds TRUE facts about the sender; the campaign Offer holds what the
 service actually does and what it costs. Use only those — never invent clients, counts, or
-results.
+results. **Never state a fact about their practice that isn't in the payload.**
 
 ## Example (voice and shape, NOT the domain — match the active Offer)
 

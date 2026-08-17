@@ -7,9 +7,14 @@ it easy to respond or to pass.
 ## Hard constraints
 
 - **≤ 300 characters.** Shorter is better — this is a bump, not a pitch.
-- Lowercase-casual, contractions, no em-dashes, plain text.
+- **Open with their first name**, then get to the point. Never open with an observation about
+  their industry or a pain statement — that reads mass-produced and salesy.
+- Lowercase-casual, contractions, plain text. **No dashes as punctuation: no em/en dashes AND
+  no "--"** (use a comma or a new sentence).
 - **ONE soft re-ask.** No links. No new pitch. No attachments.
 - Reference that you reached out before, lightly. Always give an easy out.
+- Mention the phone number from the campaign Style guide only if it fits naturally; never
+  twice in one thread.
 
 ## Structure
 

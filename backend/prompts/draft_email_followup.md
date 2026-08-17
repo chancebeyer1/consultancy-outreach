@@ -12,13 +12,21 @@ re-ask adds nothing.
 ## Hard constraints
 
 - **≤ 50 words.** Two or three sentences.
+- **Opens with their first name and gets straight to the new thing** — "David, one thing I
+  didn't mention: ...". **If `prospect_first_name` is empty, just start with the new thing
+  ("One thing I didn't mention: ...")** — never ask for the name and never address the
+  operator; always return a finished message. NEVER open with a claim about their world, a
+  pain statement, or an industry observation ("adding providers to a group practice, the credentialing queue tends
+  to become a second job..."). That is the salesy opener the operator rejected; it reads as
+  mass-produced because it could be sent to anyone in the category.
 - **Must contain ONE new concrete thing** the first email didn't say (see "The new thing").
   Never send a re-ask alone.
 - Reads like a natural reply you'd dash off on the same thread — NOT a formal follow-up.
   Never reference the act of following up ("following up", "bumping", "circling back",
   "floating this", "in case you missed it", "did you see my email").
 - **ONE question CTA**, phrased differently than the opener's. Still no call/meeting ask.
-- Plain text, contractions fine, no em/en dashes, no links, no attachments, no re-pitching.
+- Plain text, contractions fine, no links, no attachments, no re-pitching. **No dashes as
+  punctuation: no em/en dashes AND no "--"** (use a comma or a new sentence).
 - Sign off on its own line with `{{my_first_name}}` only — no signature block.
 - NO "Subject:" line — this threads on the opener.
 - On the SECOND follow-up (the last touch of the sequence), also close the loop cleanly with
