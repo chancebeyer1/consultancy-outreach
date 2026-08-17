@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from typing import Any
 
@@ -67,7 +68,11 @@ def _should_send(signature: str, source: str, summary: str, cooldown_hours: floa
 
 def alert(source: str, summary: str, detail: str = "", *, cooldown_hours: float = 6.0) -> dict[str, Any]:
     """Email a throttled failure alert. `source` = process name, `summary` = short problem line."""
-    sig = hashlib.sha1(f"{source}|{summary}".encode("utf-8", "ignore")).hexdigest()[:20]
+    # Dedup on the problem, NOT its count: "email.boxes_failed=3" and "=4" are the same ongoing
+    # issue, but their raw strings differ, so each one re-alerted through the cooldown (2026-08-17
+    # inbox spam). Numbers are stripped from the SIGNATURE only — the summary still shows them.
+    sig_key = re.sub(r"\d+", "N", summary)
+    sig = hashlib.sha1(f"{source}|{sig_key}".encode("utf-8", "ignore")).hexdigest()[:20]
     # If the error agent already owns this failure (root-caused / PR open / muted), stay silent —
     # it's carried in the daily digest. Only NEW or not-yet-analyzed failures alert immediately, so
     # a novel breakage still pings fast while known ones stop spamming the inbox.

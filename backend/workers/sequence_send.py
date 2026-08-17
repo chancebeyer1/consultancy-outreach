@@ -288,10 +288,64 @@ def _send_via_unipile(lead: dict, draft: dict, channel: str) -> dict[str, Any]:
     # can't be matched and their reply is silently dropped. Best-effort, never blocks the send.
     _store_provider_id(lead.get("linkedin_url"), provider_id)
     if channel == "linkedin_connect":
+        # DUPLICATE-PERSON GUARD (2026-08-17): the same human can sit in the DB twice under two
+        # URL forms — a vanity slug (/in/jane-doe-123) and a provider-id URL (/in/ACoAA…) — so
+        # URL-string dedupe misses them. Inviting the second row earns LinkedIn's 422
+        # "already_invited_recently" and burns account trust. provider_id is the identity that
+        # actually matches; check it against everyone we've already invited.
+        if _already_invited(provider_id, lead.get("lead_id")):
+            raise AlreadyInvited(f"another lead row with provider_id {provider_id[:14]}… was already invited")
         return unipile.send_linkedin_invitation(provider_id, body, account_id=account_id)
     if channel == "linkedin_inmail":
         return unipile.send_linkedin_inmail(provider_id, body, account_id=account_id)
     return unipile.send_linkedin_message(provider_id, body, account_id=account_id)
+
+
+class AlreadyInvited(Exception):
+    """This person already has an invite out under a different lead row (duplicate)."""
+
+
+def _retire_draft(draft_id: str, reason: str) -> None:
+    """Mark a draft rejected so the send loop stops picking it up every hour."""
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "update drafts set status='rejected', rejection_reason=%s, decided_at=now() "
+                    "where id=%s",
+                    (reason[:200], draft_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _already_invited(provider_id: str | None, lead_id: str | None) -> bool:
+    """True if any OTHER lead with this provider_id already has a sent connect invite."""
+    if not provider_id:
+        return False
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select 1 from leads l
+                    join drafts d on d.lead_id = l.id and d.channel = 'linkedin_connect'
+                    join sends s on s.draft_id = d.id
+                    where l.provider_id = %s and (%s::uuid is null or l.id <> %s::uuid)
+                    limit 1
+                    """,
+                    (provider_id, lead_id, lead_id),
+                )
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — fail OPEN: a lookup problem must not block real sends
+        return False
 
 
 def _to_connect_note(body: str, limit: int = 280) -> str:
@@ -580,6 +634,7 @@ def send_approved_first_touch(
     remaining: dict[tuple[str, str | None], int] = {}
     blocked_fairness: list[str] = []
     blocked_cooldown: list[str] = []
+    already_invited: list[str] = []  # duplicate person; draft retired, not a failure
     connects_sent = 0  # per-run pacing for connection requests (avoid one daily burst)
     # Wall-clock bound so this leg can't blow the dispatcher's 600s watchdog when the send queue is
     # deep or Unipile is slow (each send is a ~1-5s API call, worse with retries). Remaining approved
@@ -672,6 +727,7 @@ def send_approved_first_touch(
         campaign_id = str(campaign_id) if campaign_id else None
         first, _, last = (name or "").partition(" ")
         lead = {
+            "lead_id": str(lead_id),  # duplicate-person guard compares against OTHER lead rows
             "linkedin_url": url,
             "first_name": first or None,
             "last_name": last or None,
@@ -759,12 +815,20 @@ def send_approved_first_touch(
                 cooldown_trip(send_channel, reason=str(e)[:280])
                 blocked_cooldown.append(str(lead_id))
                 continue
+            # This person already has an invite out (our duplicate guard, or LinkedIn's own
+            # "already_invited_recently" 422). Not a failure and not retryable: retire the
+            # draft so the cron stops re-sending it every hour and alerting each time.
+            if isinstance(e, AlreadyInvited) or "already_invited_recently" in str(e):
+                _retire_draft(str(draft_id), "duplicate: invite already out for this person")
+                already_invited.append(str(lead_id))
+                continue
             failed.append({"lead_id": str(lead_id), "error": str(e)})
 
     return {
         "candidates": len(rows),
         "pushed": len(pushed),
         "fell_back_to_connect": len(fell_back),
+        "already_invited": len(already_invited),  # deduped, not failed — never alert on these
         "blocked_quota": len(blocked_quota),
         "blocked_fairness": len(blocked_fairness),
         "blocked_cooldown": len(blocked_cooldown),
