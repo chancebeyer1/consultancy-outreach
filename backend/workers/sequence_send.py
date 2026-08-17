@@ -28,7 +28,13 @@ from typing import Any
 from clients import unipile
 from config import require
 from provider_cooldown import active as cooldown_active, trip as cooldown_trip
-from sender_limits import campaign_daily_sent, campaign_share, is_invite_limit_error, quota
+from sender_limits import (
+    DAILY_CAPS,
+    campaign_daily_sent,
+    campaign_share,
+    is_invite_limit_error,
+    quota,
+)
 from workers.sequence import determine_next_action
 
 # LinkedIn throttles new invites once too many sit unaccepted (422 cannot_resend_yet).
@@ -612,9 +618,20 @@ def send_approved_first_touch(
                 """
             )
             rows = cur.fetchall()
-            # How many campaigns are running → each gets an equal share of every cap.
-            cur.execute("select count(*) from campaigns where status = 'active'")
-            n_campaigns = int((cur.fetchone() or [1])[0] or 1)
+            # Fair-share denominator, PER CHANNEL: only campaigns that actually run a channel
+            # may claim a slice of its cap. Counting every active campaign stranded half the
+            # LinkedIn budget on an email-only campaign (2026-08-17: connects sat blocked at
+            # 15/15 while the 30/day cap was half unused).
+            cur.execute(
+                "select channels from campaigns where status = 'active'"
+            )
+            _chan_rows = [r[0] for r in cur.fetchall()]
+            n_by_channel: dict[str, int] = {}
+            for _ch in DAILY_CAPS:
+                n_by_channel[_ch] = sum(
+                    1 for c in _chan_rows if c is None or _ch in c
+                ) or 1
+            n_campaigns = max(n_by_channel.values() or [1])
     finally:
         conn.close()
 
@@ -666,7 +683,9 @@ def send_approved_first_touch(
     conn_weights: dict[str, dict[str, float] | None] = {"w": None}  # lazy, once per run
 
     def _campaign_has_share(cid: str | None, ch: str) -> bool:
-        if not cid or n_campaigns <= 1:
+        # Split this channel's cap only across the campaigns that actually run it.
+        n_ch = n_by_channel.get(ch, n_campaigns)
+        if not cid or n_ch <= 1:
             return True
         if ch not in cam_window:
             cam_window[ch] = campaign_daily_sent(ch)
@@ -685,7 +704,7 @@ def send_approved_first_touch(
             w = (conn_weights["w"] or {}).get(cid)
             if w:
                 return used < max(1, round(campaign_share(ch, 1) * w))
-        return used < campaign_share(ch, n_campaigns)
+        return used < campaign_share(ch, n_ch)
 
     # InMail credit budget for this run — fetched lazily once, decremented as spent.
     # When it hits 0, InMail drafts fall back to a connection request.
