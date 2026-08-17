@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import email
 import imaplib
+import re
 import smtplib
 import ssl
 from email.header import decode_header, make_header
 from email.message import Message
 from email.mime.text import MIMEText
 from email.utils import formataddr, make_msgid, parseaddr
+from html import unescape
 from typing import Any
 
 # Sensible per-provider defaults (host, smtp_port, imap_host, imap_port).
@@ -83,22 +85,59 @@ def _decode(value: str | None) -> str:
         return str(value)
 
 
-def _plain_body(msg: Message) -> str:
-    if msg.is_multipart():
-        for part in msg.walk():
-            disp = str(part.get("Content-Disposition") or "")
-            if part.get_content_type() == "text/plain" and "attachment" not in disp:
-                try:
-                    return part.get_payload(decode=True).decode(
-                        part.get_content_charset() or "utf-8", "replace"
-                    )
-                except Exception:  # noqa: BLE001
-                    continue
-        return ""
+def html_to_text(html: str) -> str:
+    """Readable plain text from an HTML email body.
+
+    Auto-responders and rich clients often send HTML-only mail. Storing the source meant the
+    dashboard rendered a wall of markup (Sabrina's OOO, 2026-08-16); returning "" when no
+    text/plain part existed meant replies looked EMPTY (Allison's, same day).
+    """
+    text = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", html)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</(p|div|tr|li|h[1-6])\s*>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)          # remaining tags
+    text = unescape(text)
+    text = text.replace("‌", "").replace("\xa0", " ")  # zero-width + nbsp
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)  # collapse blank-line runs
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
+
+
+def _decode(part: Message) -> str:
     try:
-        return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", "replace")
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return ""
+        return payload.decode(part.get_content_charset() or "utf-8", "replace")
     except Exception:  # noqa: BLE001
-        return str(msg.get_payload())
+        return ""
+
+
+def _plain_body(msg: Message) -> str:
+    """Best available text: prefer text/plain, fall back to HTML converted to text.
+
+    Never returns markup, and never returns "" just because the sender omitted a plain part.
+    """
+    if msg.is_multipart():
+        html_fallback = ""
+        for part in msg.walk():
+            if part.is_multipart():
+                continue
+            disp = str(part.get("Content-Disposition") or "")
+            if "attachment" in disp:
+                continue
+            ctype = part.get_content_type()
+            if ctype == "text/plain":
+                body = _decode(part)
+                if body.strip():
+                    return body
+            elif ctype == "text/html" and not html_fallback:
+                html_fallback = _decode(part)
+        return html_to_text(html_fallback) if html_fallback.strip() else ""
+    body = _decode(msg) or str(msg.get_payload() or "")
+    if msg.get_content_type() == "text/html" or re.search(r"(?i)<(html|div|p|br|span)\b", body):
+        return html_to_text(body)
+    return body
 
 
 def fetch_replies(

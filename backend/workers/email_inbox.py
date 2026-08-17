@@ -203,7 +203,20 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 unseen_only=True, limit=limit_per_box, mark_seen=not dry_run,
             )
         except Exception as e:  # noqa: BLE001
+            # A box that can't be reached silently DROPS every reply sent to it. Record the
+            # failure on the mailbox row so /mailboxes shows it, and count it into the result
+            # so alerts.scan_result raises (2026-08-16: 6/31 boxes were failing unnoticed and
+            # a real prospect reply landed with an empty body).
             errors.append({"box": email, "error": str(e)[:160]})
+            try:
+                with _connect() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        "update mailboxes set last_error = %s, updated_at = now() where id = %s",
+                        (f"IMAP unreachable: {str(e)[:200]}", _mid),
+                    )
+                    conn.commit()
+            except Exception:  # noqa: BLE001
+                pass
             continue
         for m in msgs:
             m["_box"] = email
@@ -309,10 +322,18 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                     continue
                 if already:
                     continue
+                # Empty body: the parser found no readable text (rare, e.g. image-only mail).
+                # Fall back to the subject so the reply card is never a blank box — a real
+                # prospect reply showed up empty on 2026-08-16 and looked like a UI bug.
+                _body = (m.get("body") or "").strip()
+                if not _body:
+                    _subj = (m.get("subject") or "").strip()
+                    _body = (f"(no readable text in this message. subject: {_subj})"
+                             if _subj else "(no readable text in this message)")
                 rec = {
                     "lead_id": str(lead_id), "campaign_id": str(campaign_id) if campaign_id else None,
                     "lead_name": lead_name, "from_email": m.get("from_email"),
-                    "subject": m.get("subject"), "body": (m.get("body") or "")[:4000],
+                    "subject": m.get("subject"), "body": _body[:4000],
                 }
                 if not dry_run:
                     draft_id = _email_opener_draft_id(cur, lead_id)
@@ -390,8 +411,12 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 except Exception as e:  # noqa: BLE001
                     errors.append({"notify": r["from_email"], "error": str(e)[:160]})
 
+    # Unreachable boxes are a silent reply-loss channel — surface them as a *_failed counter
+    # so alerts.scan_result turns them into an operator alert instead of a buried list.
+    boxes_failed = sum(1 for e in errors if "box" in e)
     return {
         "boxes_polled": len(boxes),
+        "boxes_failed": boxes_failed,
         "fetched": len(fetched),
         "warmup_filtered": warmup,
         "bounces_handled": bounced,
