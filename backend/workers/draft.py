@@ -95,8 +95,17 @@ def _humanize(text: str) -> str:
     swap them for the natural human appositive (a comma) and tidy the spacing. This
     runs on every draft, so even if the model slips one in, it never ships.
     """
+    # Markdown code fences: prompts show the output shape inside ``` blocks and the model
+    # sometimes echoes the fences. Nine emails SHIPPED with literal ``` around the body
+    # (2026-08-16). Strip them before anything else.
+    text = re.sub(r"^\s*```[a-zA-Z]*\s*\n?", "", text)
+    text = re.sub(r"\n?\s*```\s*$", "", text)
+    text = text.replace("```", "")
     text = text.replace(" — ", ", ").replace(" – ", ", ")
     text = text.replace("—", ", ").replace("–", ", ")
+    # The em-dash ban pushes models to type "--" instead, which is the same tell in ASCII.
+    text = re.sub(r"\s+--+\s+", ", ", text)
+    text = re.sub(r"--+", ", ", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)  # no space before punctuation
     text = re.sub(r",\s*,+", ",", text)            # collapse doubled commas
     text = re.sub(r"[ \t]{2,}", " ", text)         # collapse runs of spaces

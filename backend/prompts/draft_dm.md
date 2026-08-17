@@ -1,121 +1,60 @@
 # Draft: LinkedIn DM (post-accept)
 
-Sent AFTER they accept the connection request. The connect is the foot-in-the-door; this is where you offer value.
+Sent AFTER they accept the connection request.
+
+**The operator's template (2026-08-16).** They accepted a note that already said who you are,
+so this message re-introduces briefly and gets to the point in plain words. Same voice as the
+connect note: a person talking, not an industry essay.
+
+```
+Hi <First>, thanks for connecting. <one plain sentence: what I do / what I've built>.
+<what THEY get, plainly>. <ONE simple question OR a yes/no offer to send something>.
+<phone line, only if the campaign Style guide supplies one>
+```
+
+Reference voice (different business, same voice):
+> Hi, I'm Chance and I put vintage style photo booths in bars. Free to the bar, I handle all
+> upkeep, you keep a cut of every strip. Is that your call or the owner's? Feel free to reply
+> or contact me at 323-710-1190. Thanks
 
 ## Hard constraints
 
-- **≤ 500 characters** (LinkedIn DMs technically allow more, but 500 keeps it scannable)
-- **One link maximum** — the `landing_url` provided in the payload, when appropriate
-- **One ask maximum** (soft)
-- 2–4 sentences total
+- **<= 400 characters.** Two to four short sentences.
+- **Opens with the greeting + a thanks-for-connecting**, then who you are / what you do. Never
+  open with an observation about their industry or their pain.
+- **Plain words only.** "I get therapy practices onto insurance panels" — NOT "done-for-you
+  payer enrollment", "upstream credentialing drag", "enrollment gap analysis". If a phrase
+  wouldn't survive a bar conversation, rewrite it.
+- **ONE ask**, soft: a simple question they can answer in a line, OR a yes/no offer to send
+  something ("want the one-paragraph version?"). **No call/meeting ask** in a first DM.
+- **One link maximum**, and only when it genuinely helps (`landing_url`, or `audit_url` when
+  present and the Offer is pitch-mode). Phone number only if the Style guide supplies one.
+- **No dashes as punctuation: no em/en dashes AND no "--"** (use a comma or a new sentence).
+  No markdown, no bullet points. **Never wrap the output in ``` fences.**
+- Never "not a pitch" / "not selling anything" — the disclaimer is the tell. No unnamed social
+  proof ("I've helped people like you"). No flattery.
 
-## Structure
+## What goes in the middle (from the campaign Offer)
 
-The Offer in the system prompt sets the angle — its TITLE/HEADER names the mode. Three modes,
-and the choice is binding: an Offer headed "give-first" MUST use the give-first structure (a
-research question as the CTA is then wrong); "research-led" uses research mode; otherwise pitch.
+- **Give-first / pitch offers:** name the concrete thing that exists and what it does for
+  them, in one clause, then the yes/no offer to show it.
+- **Research offers:** name plainly what you're mapping, then the one research question they
+  can answer in a line, and offer to share what you're hearing back.
+- Never invent findings, counts, or quotes. Promising to share what you learn is fine;
+  claiming you already heard it is fabrication.
 
-*Pitch offers* (default):
-```
-[acknowledge the hook OR pick up from connect note]
-[the relevant case-study sentence — what you built]
-[soft ask OR link drop]
-```
+## Examples (voice and shape, NOT the domain)
 
-*Research / discovery offers* (when the Offer says it leads with research, not a pitch):
-```
-[acknowledge the hook OR pick up from connect note]
-[one plain line naming the specific thing you're mapping — NO product, NO claims, NO link]
-[THE actual research question — ONE specific question they can answer in a single
- line by replying, about how THEY run the thing. "one line back is plenty."]
-[give-first close: you'll share what you're hearing from everyone else you ask]
-```
-The meeting ask is NOT made here. If they answer the question, the reply conversation
-earns the "happy to trade notes properly for 15 min" offer — asking a stranger for a
-meeting in message one is the most pattern-matched move in cold outreach.
+✅ (give-first)
+> Hi Marcus, thanks for connecting. I run a service that gets therapy practices onto insurance
+> panels, CAQH through approval, including Medicare. If you refer a practice, you get a cut and
+> we do the paperwork. Want the one-paragraph version? You can also text me at 323-710-1190.
 
-*Give-first offers* (when the Offer says it leads with a demo/artifact give):
-```
-[acknowledge the hook OR pick up from connect note]
-[ONE line: the specific thing you already BUILT for their exact grind — a real
- mechanism, stated plainly ("an agent that watches the doc inbox and preps the
- renewal file before anyone opens it")]
-[the give as a yes/no offer: "want the 3-minute version?" / "want me to point it
- at {{company}}?" — THEY receive value by saying yes; you ask for nothing]
-```
-Why this mode exists (funnel data, 2026-08): our research-mode DMs replied at 17%
-with ~zero interested; the house's best-performing DM flow (38% reply, 7 interested)
-won on VALUE SYMMETRY — the recipient gained more from replying than the sender did.
-An out-of-tribe sender manufactures that symmetry with a working artifact: offering
-to SHOW a real thing beats asking them to answer a research question. The demo
-yes/no is the whole CTA — no meeting ask, no link unless they say yes (or use
-`audit_url` per the audit-tool section, which pairs naturally with this mode).
-
-## Examples (target voice)
-
-✅ (pitch offer)
-> thanks for the accept. quick context since I doubt you remember the connect note —
-> just wrapped a multi-month contract building the agent layer on a production app
-> (one line about what you do — pull it from the Offer in the system prompt). saw
-> {{company}} is doing similar work and figured worth introducing myself. happy to
-> share architecture notes if useful: {{landing_url}}
-
-✅ (pitch offer)
-> appreciate the connect. the eval-harness thing you posted about — ended up
-> rolling our own with a labeled trace replay setup. wrote up the approach here
-> if curious: {{landing_url}} . happy to compare notes either way.
-
-✅ (research offer — question-first, no call ask, give-first close)
-> thanks for the connect. I'm mapping how independent shops handle the document
-> grind this month. quick one since you run your own book — do you chase docs by
-> hand or does your system actually do it? one line back is plenty, and I'll send
-> you what I hear from the other owners I'm asking.
-
-✅ (give-first offer — artifact yes/no, they gain by replying)
-> thanks for the connect. built an agent this spring that watches an agency's doc
-> inbox and preps the renewal file before a CSR ever opens it, dec pages and ACORDs
-> included. happy to send the 3-minute version of how it works if that chase is
-> still a person at {{company}} — want it?
-
-## The audit-tool give (optional — only when `audit_url` is in the payload)
-
-`audit_url` (when present) is the sender's free AI-opportunity-audit tool: paste a company website
-in, it returns the 3 highest-impact automations for that business. It is the strongest value-give
-available for a *pitch-mode* DM because it's about THEIR business, takes them 30 seconds, and asks
-nothing:
-
-> ...happy to be useful either way — I built a free tool that reads a company's site and maps its
-> 3 biggest automation wins. takes 30 seconds if you want to point it at {{company}}: {{audit_url}}
-
-Rules for using it:
-- **Pitch-mode DMs only.** Research-mode DMs ask the research question instead — never both.
-- It REPLACES `landing_url` as the one allowed link (never include two links).
-- Frame it as a give about THEIR business, never "check out my tool."
-- Skip it when the hook gives you something sharper to offer (a specific observation beats a
-  generic tool every time). It's the strong default when the hook is thin.
-
-## Rules
-
-- Refer back to the hook (proves you're not blasting).
-- **Let the Offer set what you reference about yourself.** For *pitch* offers that's
-  ONE case-study sentence (the single place you "sell"); draw it from the Offer. For
-  *research / discovery* offers it's one plain line on what you're learning — no
-  product, no claims, no link.
-- Soft asks only: "happy to share", "happy to compare notes", "would value hearing how you run it".
-- **No call ask in a first DM, for any offer type.** Pitch offers: save it for after
-  they reply. Research offers: ask the actual research question instead (one-line
-  answerable); the 15-min offer comes once they've engaged.
-- **Anti-template**: never "not selling anything" / "not pitching" / "this isn't a
-  pitch" — the disclaimer is the tell. Never unnamed social proof ("I've been helping
-  people like you"). Substance over flattery; a detail that proves you actually
-  looked, or no reference at all.
-- **Never invent findings, counts, or quotes** ("everyone tells me…", "three owners
-  said…") — you have no research data in this payload. Promising to SHARE what you
-  hear is fine; claiming you already heard it is fabrication.
-- The examples below are AI-consultancy / pitch flavored; they illustrate *structure
-  and voice*, not the domain or the angle — match the active Offer.
-- Match register from their recent posts.
+✅ (research)
+> Hi Dana, thanks for connecting. I'm mapping how small practices handle payer enrollment right
+> now, since it eats 10-20 hours per provider. Are you doing that in-house or sending it out?
+> One line back is plenty, and I'll share what other owners tell me.
 
 ## Output format
 
-Return ONLY the DM text. No quotes, no preamble.
+Return ONLY the DM text. No quotes, no preamble, no code fences.

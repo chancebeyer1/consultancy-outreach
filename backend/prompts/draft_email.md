@@ -1,116 +1,100 @@
 # Draft: Cold email
 
-Used when we have an email address for the prospect and either no LinkedIn relationship or
-the LinkedIn DM didn't get a reply after follow-up.
+**The operator's template (2026-08-16 — this replaced the hook-first style).** The old emails
+opened with an industry observation ("billing companies with mental-health books tell me the
+same thing...") and read like nobody talks. Real people INTRODUCE themselves first. Same shape
+as the connect note, with room for one extra clause of detail:
 
-Write it **reader-first**: their situation comes before anything about you. Confident, human,
-peer-to-peer — like a note you'd send a busy person in Slack, not a marketing email.
+```
+Subject: <plain, specific, lowercase, <= 45 chars>
 
-**Why this framework (2026 benchmark data):** emails under ~80 words reply ~50% better than
-longer ones; problem-first positioning with a SINGLE ask wins; the opener earns 58% of all
-sequence replies, so this one message is the whole battle. Generic = deleted on pattern-match.
+Hi <First>, I'm {{my_first_name}}. <what I do, in plain everyday words — one sentence>.
+
+<what THEY get, plainly — one or two short sentences. A concrete number is good; jargon is not>
+
+<ONE simple question they can answer in a line>
+
+{{my_first_name}}
+<phone, only if the campaign Style guide supplies one>
+
+(reply "no thanks" and I'll never write again)
+```
+
+The operator's reference voice (different business, same voice — copy the VOICE):
+> Hi, I'm Chance and I put vintage style photo booths in bars. Free to the bar, I handle all
+> upkeep, you keep a cut of every strip. Is that your call or the owner's? Feel free to reply
+> or contact me at 323-710-1190. Thanks
 
 ## Hard constraints
 
-- **≤ 75 words in the body** (everything between the subject and the sign-off). Count them.
-  Every word must earn its place; cutting a sentence usually beats compressing it.
-- **Subject ≤ 40 chars**, lowercase preferred, names a SPECIFIC problem/outcome/detail of
-  THEIR world, no clickbait. Generic subjects ("quick question", "intro") are dead on arrival.
-- **ONE ask** — a reply-able question. Never two asks, never a call/meeting ask (a stranger
-  asking for 15 minutes is the most pattern-matched delete in the inbox; calls come after they
-  reply).
-- **Link optional** — include the `landing_url` as the single link ONLY if one is provided in
-  the payload; if it's null/empty, write a clean reply-based ask with NO link. Never invent a URL.
-- One-line opt-out at the bottom; the inbound List-Unsubscribe header is added automatically.
-- **Sign off on its own line with `my_first_name` from the payload (the sender's real name) —
-  never invent a sender name, never leave a `{{...}}` placeholder.**
-- Plain text only. No em/en dashes anywhere. Format EXACTLY as in "Output format" below.
+- **Body <= 90 words.** Under-80-word emails reply ~50% better; every word must earn its place.
+- **Opens with "Hi <First>, I'm {{my_first_name}}."** — greeting and self-intro first, ALWAYS.
+  Never open with a claim, a statistic, or their pain point.
+- **Plain words.** Say it the way you'd say it out loud: "I get therapy practices onto
+  insurance panels" — NOT "done-for-you payer enrollment" or "upstream credentialing drag".
+  If a phrase wouldn't survive a bar conversation, rewrite it.
+- **ONE question** as the CTA (see variants). Never two asks; never a call/meeting ask — a
+  stranger asking for 15 minutes is the most pattern-matched delete in the inbox.
+- **Link optional** — include `landing_url` on its own line ONLY if one is provided. Never
+  invent a URL. Phone number only if the Style guide supplies one.
+- Sign off on its own line with `my_first_name`, and **when the Style guide supplies a phone
+  number, put it on the line directly under the name — every time, in every variant.** Never
+  invent a sender name, never leave a literal `{{...}}` placeholder.
+- Plain text only. No markdown, no bullets, no images. **No dashes as punctuation: no em/en
+  dashes AND no "--". Use a comma or start a new sentence** (the operator's own template uses
+  commas: "Free to the bar, I handle all upkeep, you keep a cut of every strip").
+- **Return the raw email. NEVER wrap the output in ``` code fences** — the fences ship to the
+  prospect verbatim.
 
-## Framework (3 beats, ≤75 words total)
+## A/B variant (the arm changes the QUESTION, not the opening)
 
-1. **Open on THEIR specific reality** — one line naming a concrete thing about their shop/world
-   (from enrichment) or the specific grind that role carries. "You" language. Never "I'm
-   reaching out", never "hope you're well", never flattery.
-2. **One line of concrete substance from YOUR side** — per the variant below. Substance means a
-   real thing that exists with a specific outcome, drawn from the Offer and
-   `operator_background`. TRUE facts only; a number or named mechanism beats an adjective.
-   (Our single interested reply to date came from an owner who wanted to talk about how the
-   thing was actually built. Specificity IS the credibility.)
-3. **One reply-able question as the CTA** — answerable in one line by hitting reply, about how
-   THEY handle the thing today. Give-first sweetener where natural: you'll share what other
-   owners/operators tell you.
+The greeting and self-intro are identical across arms. Pick the closing question by `variant`:
 
-## Avoid (kills replies + deliverability)
-
-- Clichés: "I'm reaching out", "We offer a solution that helps…", "hope this finds you well",
-  "quick question", "circling back".
-- **The AI-outreach skeleton** — flattery + artifact ("came across your post, great stuff"),
-  unnamed social proof ("I've helped others like you"), the disclaimer ("this isn't a pitch" /
-  "not selling anything"), the stranger meeting ask ("worth 15 minutes?"). NONE of these may
-  ever appear. A no-pitch email doesn't need to announce it.
-- "We/our/I" openers. Deficit or insulting framing ("here's why your X is broken").
-- Spam-trigger words (free, guarantee, act now, limited time, $$$, "increase revenue", click
-  here), ALL CAPS, exclamation marks.
-- Heavy signature: **first name only** — no phone, title, company line, links, or logo.
-- Images, HTML, tracking pixels — plain text only.
-
-## A/B variant (use the angle matching `variant` in the payload)
-
-Split-test of what beat 2 leads with — shapes the subject AND the body's substance line:
-
-- **variant "a" — proof-led:** the substance line is a concrete artifact/outcome you built or
-  measured ("built an agent that watches renewal docs and preps the ACORD before the CSR opens
-  the file"). Subject names their problem or the outcome. Direct, builder-to-owner.
-- **variant "b" — peer-question-led:** the substance line is what you're LEARNING from others
-  like them ("the owners I've asked this month split about 50/50 on whether the AMS actually
-  does it"). Subject is a genuine specific question about their operation. The email reads as
-  research between peers; the CTA question carries the whole email.
+- **variant "a" — authority/decision question:** whether this is their call ("Is that your
+  call, or does someone else handle it?").
+- **variant "b" — fit question:** whether this touches their world ("Do your clients run into
+  that wait too?").
 
 If `variant` is null, use "a".
 
-## Grounding — use your real background
+## Avoid (kills replies + deliverability)
 
-`operator_background` holds TRUE facts about you (the sender): real projects, builds, numbers.
-The substance line must come from these or the campaign Offer — never fabricated, never a
-client name-drop, never a résumé dump. One fact, chosen for THEIR world.
+- Any opener that is not the greeting. No "I'm reaching out", "hope this finds you well",
+  "quick question", "circling back", "I noticed".
+- **The AI-outreach skeleton**: flattery + artifact, unnamed social proof ("I've helped others
+  like you"), the disclaimer ("this isn't a pitch"), the stranger meeting ask. Never.
+- Jargon nobody says out loud. Deficit framing ("here's why your X is broken").
+- Spam-trigger words (free, guarantee, act now, limited time, $$$, click here), ALL CAPS,
+  exclamation marks.
+- Heavy signature: first name only (plus the phone line when the Style guide provides it).
 
-## Structure
+## Grounding
 
-```
-Subject: <specific, lowercase, ≤40 chars>
+`operator_background` holds TRUE facts about the sender; the campaign Offer holds what the
+service actually does and what it costs. Use only those — never invent clients, counts, or
+results.
 
-<line 1: their specific reality>
+## Example (voice and shape, NOT the domain — match the active Offer)
 
-<line 2: your one line of concrete substance> <line 3: the one reply-able question>
+Subject: insurance panels for your clients
 
-{{my_first_name}}
+Hi Dana, I'm Chance. I run a service that gets therapy practices onto insurance panels, the
+CAQH setup, the applications, and the chasing until they're approved.
 
-(reply "no thanks" and I'll never write again)
-```
+If you send us a practice, we handle the whole thing and you get a cut. Nothing about your
+billing work changes.
 
-## Example (target voice — illustrates structure and length, NOT the domain; match the active Offer)
+Do your clients ever stall waiting on panel approvals?
 
-```
-Subject: the renewal doc chase at {{company}}
-
-{{first_name}}, running a multi-carrier shop, dec pages and ACORDs still land on the same two
-people by hand at most agencies I talk to.
-
-I built an agent for exactly that chase, it watches the doc inbox and preps the renewal file
-before anyone opens it. does your AMS actually handle that today, or is it still a person? one
-line back is plenty and I'll send what other owners tell me.
-
-{{my_first_name}}
+Chance
+323-710-1190
 
 (reply "no thanks" and I'll never write again)
-```
 
 ## Output format
 
-Return the email in EXACTLY this format — no surrounding code fences, no preamble:
+Return the email EXACTLY in this shape, with no code fences and no preamble:
 
-```
 Subject: <subject>
 
 <body>
-```
