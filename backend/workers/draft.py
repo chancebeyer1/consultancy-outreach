@@ -288,7 +288,30 @@ def draft_for_channel(
     raw = raw.replace("{{my_first_name}}", sender_first)
     if first_name:
         raw = raw.replace("{{first_name}}", first_name)
-    return _humanize(raw)
+    out = _humanize(raw)
+
+    # Connect notes have a HARD 300-char provider cap, and an over-cap note is rejected by the
+    # sanity gate — which burns the lead permanently (rejected drafts block a redraft). One
+    # shortening pass recovers those instead: cheaper than losing the prospect.
+    if channel == "linkedin_connect" and len(out) > 295:
+        try:
+            shorter = claude.call(
+                instruction=(
+                    "Shorten this LinkedIn connection note to 280 characters or fewer. Keep the "
+                    "exact same voice, the greeting, the offer, the question, and the sign-off "
+                    "line with the phone number. Cut adjectives and list items only. Return ONLY "
+                    "the shortened note."
+                ),
+                user_payload=out,
+                model=Config.claude_model_draft,
+                max_tokens=400,
+            )
+            shorter = _humanize(shorter.replace("{{my_first_name}}", sender_first))
+            if 0 < len(shorter) <= 300:
+                out = shorter
+        except Exception:  # noqa: BLE001 — keep the original; the gate still guards the send
+            pass
+    return out
 
 
 def draft_all_channels(
