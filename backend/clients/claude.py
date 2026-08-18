@@ -28,16 +28,38 @@ def _client() -> Anthropic:
 
 
 def _system_blocks(prefix: str, extra: str | None = None) -> list[dict[str, Any]]:
-    """Build the system content array. The big prefix is marked for caching."""
+    """Build the system content array with TWO cache breakpoints (2026-08-18).
+
+    Breakpoint 1, the campaign prefix (ICP+offer+style+voice), 1h TTL: it is identical
+    across EVERY task the hourly dispatcher runs for a campaign, and each hit refreshes
+    the entry for free, so one 2x-priced write in the morning keeps it warm all day
+    across hourly crons (a 5m entry would expire between runs and re-write every hour).
+    Cache hits also don't count against rate limits.
+
+    Breakpoint 2, the task instruction (draft_email.md etc.), default 5m TTL: stable
+    within a drafting batch, different per task. Its own breakpoint means switching
+    tasks re-writes only the instruction while the prefix keeps hitting. Before this,
+    only the prefix was cached and every call re-paid the ~1k-token instruction.
+
+    API constraint: longer TTLs must precede shorter ones, so the 1h block stays FIRST.
+    Blocks below the model's minimum (1024 tokens for sonnet-5) are silently uncached;
+    the hash is cumulative, so the instruction breakpoint covers prefix+instruction.
+    """
     blocks: list[dict[str, Any]] = [
         {
             "type": "text",
             "text": prefix,
-            "cache_control": {"type": "ephemeral"},
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
         }
     ]
     if extra:
-        blocks.append({"type": "text", "text": extra})
+        blocks.append(
+            {
+                "type": "text",
+                "text": extra,
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
     return blocks
 
 
