@@ -210,19 +210,12 @@ def _stream_digest(keywords: list[str], *, stream: str, persona: str,
     if not queued:
         return {"queued": 0, "keyword": kw, "reason": "drafted posts were all already queued"}
 
-    from workers.email_sender import notify
-
-    dash = "https://linkedin-outreach-dun-eta.vercel.app/comments"
-    body = (
-        f"{queued} LinkedIn comment{'s' if queued != 1 else ''} drafted — posts pulling engagement "
-        f"in \"{kw}\" right now.\n\n"
-        f"Review + approve (one click each, or approve all):\n{dash}\n\n"
-        "Approved comments post automatically, spaced across the day at good times — never all at "
-        "once — so the activity reads as human.\n\n"
-        f"{preview}"
-    )
-    r = notify(subject=f"{queued} LinkedIn comments to approve", body=body)
-    return {"queued": queued, "keyword": kw, "sent": bool(r.get("sent"))}
+    # No per-stream digest email (removed 2026-08-18, operator request): comments auto-approve
+    # on insert and the pacer posts them unattended, so "review + approve" mail was pure noise,
+    # three of them a day at three streams. Queue state lives at /comments; posted-comment
+    # engagement is read out in the Monday weekly report.
+    _ = preview  # kept: the preview builder above stays for /comments display parity
+    return {"queued": queued, "keyword": kw}
 
 
 def _growth_campaign_streams() -> list[dict[str, Any]]:
