@@ -26,6 +26,13 @@
       "port": 8300
     },
     {
+      "name": "paf-dashboard-local",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--directory", "C:/Users/chanc/Documents/Github/process-agent-factory/backend", "python", "cli.py", "dashboard", "--port", "8301"],
+      "port": 8301,
+      "env": { "DATABASE_URL": "" }
+    },
+    {
       "name": "agentry-site",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "website", "run", "dev"],
