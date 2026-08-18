@@ -1694,7 +1694,10 @@ def detect_connections_now(dry_run: bool = False, limit: int | None = None) -> d
     return progress_accepted_connections(dry_run=dry_run, limit=limit)
 
 
-@app.function(secrets=secrets, timeout=300)
+# The :30 schedule adds a second pacer tick each hour INSIDE the posting window only —
+# together with the hourly dispatcher leg that makes ~16 ticks/weekday, which at
+# SKIP_PROB=0.15 lands ~13-14 posted comments against DAILY_CAP=15 (operator raise, 2026-08-18).
+@app.function(secrets=secrets, timeout=300, schedule=modal.Cron("30 15-22 * * 1-5"))
 def dispatch_comments_cron() -> dict:
     """Release at most one operator-approved LinkedIn growth comment, paced to look human.
 
@@ -1906,7 +1909,7 @@ def _run_job(name: str, fn, timeout: int = 600, stragglers: list | None = None) 
 
 
 @app.function(
-    schedule=modal.Cron("0 * * * *"),  # the ONE scheduled function for this app
+    schedule=modal.Cron("0 * * * *"),  # the main scheduled function (plus dispatch_comments_cron's :30 window tick)
     secrets=secrets,
     timeout=4800,  # backstop only — the per-job caps in _run_job keep the real total well under this
     retries=0,  # each job alerts + logs on failure; the next tick is an hour away

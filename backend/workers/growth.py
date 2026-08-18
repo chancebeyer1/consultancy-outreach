@@ -39,10 +39,16 @@ KEYWORDS = [
     "building AI agents",
     "AI agents production",
     "LLM automation",
+    # 2026-08-18 operator ask: AI-CTO and AI-content are first-class comment streams again.
+    "fractional AI CTO",
+    "AI CTO startup",
+    "AI content marketing",
+    "AI content strategy",
+    "content automation AI",
 ]
 
-CONSULTING_DAILY_TARGETS = 2   # consulting campaigns are paused; keep the fingerprint warm
-CAMPAIGN_DAILY_TARGETS = 4     # active product streams get the bulk of the daily approve-load
+CONSULTING_DAILY_TARGETS = 5   # raised 2->5 (2026-08-18): AI CTO + AI content back to full volume
+CAMPAIGN_DAILY_TARGETS = 6     # raised 4->6 (2026-08-18): per active campaign stream
 
 MIN_REACTIONS = 5    # floor — search surfaces RECENT posts, and commenting early on a rising post
                      # beats being comment #400 on an old viral one (early engagement window)

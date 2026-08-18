@@ -28,9 +28,13 @@ from config import require
 # later and the 8h span matches DAILY_CAP at the 1/hr drip.
 WINDOW_START_UTC = 15   # 15:00 UTC ≈ 11am ET / 8am PT — US feed is fully awake
 WINDOW_END_UTC = 23     # last eligible hour is 22:xx (range is [start, end))
-DAILY_CAP = 8           # ceiling; the real limiter is how many the operator approves (digest drafts ≤6)
-SKIP_PROB = 0.30        # random hold per tick so the cadence isn't clockwork
-MIN_GAP_MIN = 40        # floor between two posts (guards manual/double runs; the cron is already hourly)
+# 2026-08-18: operator raised comment volume. The pacer now ticks every ~30 min in the window
+# (hourly dispatcher leg + a :30 window-only schedule on dispatch_comments_cron), so the cap,
+# gap, and jitter are retuned for ~13-15 posts/day instead of ~5-6. Still one post per tick,
+# still 22+ min apart, still weekdays-only — a chatty human, not a burst bot.
+DAILY_CAP = 15          # ceiling; supply is ~17/day drafted across the three streams
+SKIP_PROB = 0.15        # random hold per tick so the cadence isn't clockwork
+MIN_GAP_MIN = 22        # floor between two posts (ticks are ~30 min apart)
 
 
 def _connect():
