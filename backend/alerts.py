@@ -137,6 +137,11 @@ def scan_result(source: str, result: Any) -> None:
             if summary in seen:
                 continue
             seen.add(summary)
-            alert(source, summary, detail)
+            # Mailbox-health alerts get a 24h cooldown instead of 6h (2026-08-19): the
+            # underlying condition (a provider host flapping) can persist for days, the
+            # /mailboxes page and daily error digest already carry it, and boxes_failed
+            # now only counts 3+-consecutive-sweep outages — one page a day is plenty.
+            hours = 24.0 if "boxes_failed" in summary else 6.0
+            alert(source, summary, detail, cooldown_hours=hours)
     except Exception as e:  # noqa: BLE001 — alerting must never break the run
         print("scan_result failed:", str(e)[:200])
