@@ -196,6 +196,7 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
     # 1. Fetch unseen mail from every box (network only; no DB held).
     fetched: list[dict] = []
     errors: list[dict] = []
+    fail_streaks: dict[str, int] = {}  # box email -> consecutive failed sweeps (incl. this one)
     for (_mid, email, ih, ip, user, pw) in boxes:
         try:
             msgs = smtp_email.fetch_replies(
@@ -203,21 +204,39 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 unseen_only=True, limit=limit_per_box, mark_seen=not dry_run,
             )
         except Exception as e:  # noqa: BLE001
-            # A box that can't be reached silently DROPS every reply sent to it. Record the
-            # failure on the mailbox row so /mailboxes shows it, and count it into the result
-            # so alerts.scan_result raises (2026-08-16: 6/31 boxes were failing unnoticed and
-            # a real prospect reply landed with an empty body).
+            # A box that can't be reached silently DROPS every reply sent to it — but only if it
+            # STAYS unreachable. Unseen mail waits on the server, so a single failed sweep loses
+            # nothing; the next successful sweep picks it up. Track a consecutive-failure streak
+            # per box: streak >= 3 (about 3h down) is a real outage and alerts; less is a blip
+            # that's logged but never pages (2026-08-19: Maildoso's hecaterus host flaps — clean
+            # sweeps at 02:00/03:00, all five dripwithai boxes EOF at 04:00, fine again after).
             errors.append({"box": email, "error": str(e)[:160]})
+            streak = 1
             try:
                 with _connect() as conn, conn.cursor() as cur:
                     cur.execute(
-                        "update mailboxes set last_error = %s, updated_at = now() where id = %s",
+                        "update mailboxes set last_error = %s, imap_fail_streak = imap_fail_streak + 1, "
+                        "updated_at = now() where id = %s returning imap_fail_streak",
                         (f"IMAP unreachable: {str(e)[:200]}", _mid),
                     )
+                    row = cur.fetchone()
+                    streak = int(row[0]) if row else 1
                     conn.commit()
             except Exception:  # noqa: BLE001
                 pass
+            fail_streaks[email] = streak
             continue
+        # Success: clear any prior failure state so a recovered box stops counting.
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "update mailboxes set imap_fail_streak = 0, last_error = null, updated_at = now() "
+                    "where id = %s and (imap_fail_streak > 0 or last_error is not null)",
+                    (_mid,),
+                )
+                conn.commit()
+        except Exception:  # noqa: BLE001
+            pass
         for m in msgs:
             m["_box"] = email
             m["_box_id"] = _mid
@@ -411,12 +430,14 @@ def poll_inboxes(*, limit_per_box: int = 25, dry_run: bool = False, notify_alert
                 except Exception as e:  # noqa: BLE001
                     errors.append({"notify": r["from_email"], "error": str(e)[:160]})
 
-    # Unreachable boxes are a silent reply-loss channel — surface them as a *_failed counter
-    # so alerts.scan_result turns them into an operator alert instead of a buried list.
-    boxes_failed = sum(1 for e in errors if "box" in e)
+    # Only PERSISTENT unreachability (3+ consecutive sweeps) is a reply-loss risk worth paging
+    # on; scan_result alerts on the *_failed key. Single-sweep blips go in boxes_blip (a name
+    # scan_result ignores) and the errors list, so the activity log keeps the forensics.
+    boxes_failed = sum(1 for s in fail_streaks.values() if s >= 3)
     return {
         "boxes_polled": len(boxes),
         "boxes_failed": boxes_failed,
+        "boxes_blip": sum(1 for s in fail_streaks.values() if s < 3),
         "fetched": len(fetched),
         "warmup_filtered": warmup,
         "bounces_handled": bounced,
