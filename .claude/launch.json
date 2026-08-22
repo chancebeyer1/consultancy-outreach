@@ -33,6 +33,13 @@
       "env": { "DATABASE_URL": "" }
     },
     {
+      "name": "usa-express-dashboard",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--directory", "C:/Users/chanc/Documents/Github/usa-express-intake/backend", "python", "cli.py", "serve", "--host", "127.0.0.1", "--port", "8400"],
+      "port": 8400,
+      "env": { "DATABASE_URL": "", "LLM_BACKEND": "fake" }
+    },
+    {
       "name": "agentry-site",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "website", "run", "dev"],
