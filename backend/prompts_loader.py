@@ -56,6 +56,12 @@ def system_prefix(campaign: Campaign) -> str:
         "# Offer / sales artifact\n\n" + campaign.offer_md,
         "# Voice corpus (few-shot examples — match this voice)\n\n"
         + (campaign.voice_md or load_prompt("voice_corpus")),
+        # House writing rules, ALWAYS appended (2026-08-23). Campaigns can override the style
+        # guide but not these — they're the operator's editing standard and they apply to every
+        # generator (email, DM, connect, comment, post). Lives in the cached prefix, so it costs
+        # one cache write per campaign per hour and nothing per call.
+        "# House writing rules (NON-NEGOTIABLE — apply to every word you write)\n\n"
+        + load_prompt("writing_rules"),
     ]
     return "\n\n---\n\n".join(parts)
 

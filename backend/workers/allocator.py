@@ -35,7 +35,7 @@ from typing import Any
 # 'c' (no-note) RETIRED 2026-08-14: matured 19% (19/99) vs d 25% / a+b 22% — the benchmark's
 # no-note lift never materialized on our funnel, and no note also means no context for the
 # post-accept DM. Historical c sends keep their attribution; the arm just stops being dealt.
-VARIANTS = ("a", "b", "d")
+VARIANTS = ("a", "b", "d", "e")  # "e" added 2026-08-23: same as "a" minus the phone line
 MATURE_DAYS = 7      # a connect younger than this is unresolved, not a miss
 WINDOW_DAYS = 90     # ignore sends older than this
 PRIOR_N = 20         # pool pseudo-observations behind each campaign's Beta prior

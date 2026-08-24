@@ -65,7 +65,7 @@ def connect_variant(key: str | None) -> str:
     if not key:
         return "a"
     # 'c' (no-note) retired 2026-08-14 — see workers/allocator.py VARIANTS for the data.
-    return ("a", "b", "d")[sum(key.encode("utf-8", "ignore")) % 3]
+    return ("a", "b", "d", "e")[sum(key.encode("utf-8", "ignore")) % 4]
 
 
 def resolve_channels(campaign: "Campaign | None", fit_score: int) -> list[str]:

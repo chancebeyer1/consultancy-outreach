@@ -34,7 +34,8 @@ The operator's reference example (different business, same voice — copy the VO
   bar conversation, rewrite it.
 - **ONE question**, chosen by `variant` (below) — a real question a stranger can answer in
   five words. It comes AFTER the intro and the deal, never first.
-- **No links.** Phone number ONLY if the campaign Style guide supplies one.
+- **No links.** Phone number ONLY if the campaign Style guide supplies one AND the variant is
+  not "e" (variant "e" never carries a phone number — see the variant list).
 - No em/en dashes. No "not a pitch" disclaimers. No flattery, no "I noticed", no
   "love what you're doing". No call/meeting ask.
 
@@ -46,6 +47,13 @@ The operator's reference example (different business, same voice — copy the VO
   wait too?" / "Is that something your shop runs into?")
 - **variant "d" — open-invite question:** low-commitment interest check ("Worth sending
   you the details?" / "Want the one-paragraph version?")
+- **variant "e" — authority question, NO PHONE LINE.** Word-for-word the same job as "a" (same
+  greeting, same offer clause, same authority question), but the note ENDS after the question:
+  no "Feel free to reply or text me at ...", no number, just "Thanks". Nothing else may differ
+  from "a" — this arm exists to isolate one question: does a phone number in a LinkedIn invite
+  read as a sales solicitation? (New-template accepts ran 7% vs 16% for the old hook-first
+  copy over 127 sends, and the phone line is the one element imported from the operator's
+  photobooth template, where the recipient is a local bar owner rather than a LinkedIn user.)
 - (variant "c" is retired; if you somehow receive it, treat it as "a".)
 
 ## What comes from where
