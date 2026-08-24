@@ -155,12 +155,16 @@ def draft_connects_for_existing(
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "select id, auto_send from campaigns where slug = %s", (campaign_slug,)
+                "select id, auto_send, coalesce(auto_approve_min_fit, 60) from campaigns "
+                "where slug = %s",
+                (campaign_slug,),
             )
             row = cur.fetchone()
             if not row:
                 return {"slug": campaign_slug, "error": "campaign not found"}
-            campaign_id, auto_send = str(row[0]), bool(row[1])
+            # min_fit: the campaign's own floor (2026-08-23 — the hardcoded 60 kept starving
+            # the connect queue after the operator set auto_approve_min_fit=0 on both).
+            campaign_id, auto_send, min_fit = str(row[0]), bool(row[1]), int(row[2])
             cur.execute(
                 """
                 select l.id, l.linkedin_url, l.company, sc.fit_score,
@@ -170,7 +174,7 @@ def draft_connects_for_existing(
                 join enrichments e on e.lead_id = l.id
                 where l.campaign_id = %s
                   and l.linkedin_url is not null
-                  and sc.fit_score >= 60
+                  and sc.fit_score >= %s
                   and not exists (
                       select 1 from drafts d
                       where d.lead_id = l.id and d.channel in ('linkedin_connect', 'linkedin_inmail')
@@ -179,7 +183,7 @@ def draft_connects_for_existing(
                 order by sc.fit_score desc
                 limit %s
                 """,
-                (campaign_id, limit),
+                (campaign_id, min_fit, limit),
             )
             candidates = cur.fetchall()
 
@@ -222,7 +226,7 @@ def draft_connects_for_existing(
             # emails/DMs), but an invite is a light touch whose note is variant-templated and
             # sanity-gated below — holding connects for review dammed the whole partners LinkedIn
             # motion (41 drafts, 0 sent). Emails on review-first campaigns still queue for /drafts.
-            status = "approved" if int(fit or 0) >= 60 else "draft"
+            status = "approved" if int(fit or 0) >= min_fit else "draft"
             # Sanity-gate the note (variant c's empty body is exempt — there is no note). A bad
             # note is stored as 'rejected': audit trail + blocks re-drafting the same lead.
             if variant != "c" and not _connect_note_ok(body):
@@ -422,14 +426,18 @@ def _ingest_records(records: list[dict]) -> dict:
     try:
         with conn:
             with conn.cursor() as cur:
-                # Build campaign slug → id map (+ auto_send flag per campaign)
-                cur.execute("select id, slug, auto_send from campaigns")
+                # Build campaign slug → id map (+ auto_send flag and fit floor per campaign)
+                cur.execute(
+                    "select id, slug, auto_send, coalesce(auto_approve_min_fit, 60) from campaigns"
+                )
                 slug_to_id: dict[str, str] = {}
                 auto_by_id: dict[str, bool] = {}
-                for cid, slug, auto_send in cur.fetchall():
+                min_fit_by_id: dict[str, int] = {}
+                for cid, slug, auto_send, mf in cur.fetchall():
                     if slug:
                         slug_to_id[slug] = str(cid)
                     auto_by_id[str(cid)] = bool(auto_send)
+                    min_fit_by_id[str(cid)] = int(mf)
 
                 for rec in records:
                     if rec.get("status") != "ok":
@@ -536,6 +544,7 @@ def _ingest_records(records: list[dict]) -> dict:
                     drafts = rec.get("drafts") or {}
                     chosen_hook = rec.get("chosen_hook")
                     auto_send = auto_by_id.get(campaign_id or "", False)
+                    min_fit = min_fit_by_id.get(campaign_id or "", 60)
                     fit = int(score_data.get("fit_score") or 0)
                     lead_url = rec.get("linkedin_url")
                     first_touch = {"linkedin_connect", "linkedin_inmail"}
@@ -554,7 +563,7 @@ def _ingest_records(records: list[dict]) -> dict:
                         # auto-approve only above a fit floor so a noisy search can't auto-blast
                         draft_status = (
                             "approved"
-                            if (auto_send and channel in first_touch and fit >= 60)
+                            if (auto_send and channel in first_touch and fit >= min_fit)
                             else "draft"
                         )
                         # Same output-sanity gate as draft_connects_for_existing: a note that leaks

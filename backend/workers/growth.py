@@ -50,10 +50,12 @@ KEYWORDS = [
 CONSULTING_DAILY_TARGETS = 5   # raised 2->5 (2026-08-18): AI CTO + AI content back to full volume
 CAMPAIGN_DAILY_TARGETS = 6     # raised 4->6 (2026-08-18): per active campaign stream
 
-MIN_REACTIONS = 5    # floor — search surfaces RECENT posts, and commenting early on a rising post
-                     # beats being comment #400 on an old viral one (early engagement window)
+MIN_REACTIONS = 3    # floor — search surfaces RECENT posts, and commenting early on a rising post
+                     # beats being comment #400 on an old viral one. Lowered 5->3 (2026-08-23):
+                     # niche BH keywords rarely clear 5 reactions while fresh, which starved the
+                     # campaign streams to 1-2 queued/day against a target of 6.
 MAX_TARGETS = 6      # a 15-minute daily habit, not a chore
-SEARCH_PAGES = 4     # ~10 results/page; pool a few pages before ranking
+SEARCH_PAGES = 8     # ~10 results/page; doubled 4->8 (2026-08-23) for the same starvation reason
 
 
 def _connect():
