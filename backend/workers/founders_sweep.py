@@ -1,14 +1,16 @@
 """Founder-candidate discovery sweep — READ-ONLY. Finds people showing co-founder /
 operating-partner signals and drafts a reachout for each into the /founders review queue.
 
-Two legs, both discovery-only (the ONLY outbound HTTP in the founder-search module):
+Two legs, both discovery-only (the only network calls the founder-search module makes):
   - HN via the free Algolia API (no key): the latest "Who wants to be hired?" and
     "Who is hiring?" megathreads, top-level comments matched against the campaign's ICP
     keywords. A "wants to be hired" match is the strong signal — a person in the campaign's
     domain actively looking for their next thing.
-  - Reddit official API (optional — only when REDDIT_CLIENT_ID/SECRET/REFRESH_TOKEN are
-    set): new posts in r/cofounder matched against the same keywords. No creds → the leg is
-    skipped and reddit venues stay manual.
+  - Reddit via the shared read-only client (clients/reddit.py), optional — only when
+    REDDIT_CLIENT_ID/SECRET/REFRESH_TOKEN are set: new posts in r/cofounder matched against
+    the same keywords. No creds → the leg is skipped and reddit venues stay manual. This is
+    the only caller that asks that client for post authors, because a reachout_dm needs a
+    person to address; the pain-mining corpus still stores none.
 
 Each hit becomes a founder_posts row (kind='comment_reply' for HN threads, 'reachout_dm'
 for r/cofounder posters) with target_url + a drafted reply via prompts/draft_founder_post.md
@@ -32,12 +34,14 @@ import httpx
 import psycopg
 
 from campaigns_loader import load_campaign
+from clients import reddit
 from config import Config, require
 from prompts_loader import system_prefix
 from workers.founders_draft import call_draft, campaign_keywords, exclude_engineers, opted_in_slugs
 
 HITS_PER_CAMPAIGN = 5     # max NEW reachouts drafted per campaign per run (bounds LLM cost)
 HN_COMMENT_MIN_LEN = 60   # ignore stub comments
+REDDIT_SCAN_POSTS = 50    # newest r/cofounder posts pulled per run, BEFORE keyword filtering
 TARGET_TEXT_CAP = 3000    # how much of the matched post we hand the drafting prompt
 
 _HN_SEARCH = "https://hn.algolia.com/api/v1/search_by_date"
@@ -168,53 +172,23 @@ def _hn_candidates(kw: re.Pattern, *, limit: int) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _reddit_configured() -> bool:
-    return bool(Config.reddit_client_id and Config.reddit_client_secret
-                and Config.reddit_refresh_token)
-
-
-def _reddit_token() -> str:
-    """Access token via the refresh-token grant (script app). Raises on failure —
-    the caller isolates the whole reddit leg."""
-    r = httpx.post(
-        "https://www.reddit.com/api/v1/access_token",
-        auth=(Config.reddit_client_id, Config.reddit_client_secret),
-        data={"grant_type": "refresh_token", "refresh_token": Config.reddit_refresh_token},
-        headers={"User-Agent": Config.reddit_user_agent},
-        timeout=30.0,
-    )
-    r.raise_for_status()
-    token = r.json().get("access_token")
-    if not token:
-        raise RuntimeError("reddit token exchange returned no access_token")
-    return str(token)
-
-
 def _reddit_candidates(kw: re.Pattern, *, limit: int) -> list[dict[str, Any]]:
-    """New r/cofounder posts matching the campaign keywords, via the official READ-ONLY
-    listing endpoint. Never submits, votes, or messages — discovery only."""
-    token = _reddit_token()
-    with httpx.Client(timeout=30.0) as c:
-        r = c.get(
-            f"https://oauth.reddit.com/r/{_REDDIT_SUB}/new",
-            params={"limit": "50"},
-            headers={"Authorization": f"Bearer {token}",
-                     "User-Agent": Config.reddit_user_agent},
-        )
-        r.raise_for_status()
-        children = (r.json().get("data") or {}).get("children") or []
+    """New r/cofounder posts matching the campaign keywords, via the shared read-only
+    client (clients/reddit.py). Never submits, votes, or messages — discovery only.
+
+    `include_author=True` is the one place this system asks Reddit for usernames: a
+    reachout_dm has to be addressed to someone. The name lives only in the founder_posts
+    draft a human sends — the pain-mining corpus still stores no authors.
+    """
     out: list[dict[str, Any]] = []
-    for ch in children:
-        d = ch.get("data") or {}
-        text = f"{d.get('title') or ''}\n{d.get('selftext') or ''}".strip()
-        if len(text) < 30 or not kw.search(text):
-            continue
-        permalink = d.get("permalink") or ""
-        if not permalink:
+    for post in reddit.newest(_REDDIT_SUB, limit=REDDIT_SCAN_POSTS, include_author=True):
+        # The client already drops posts too thin to judge and those with no permalink.
+        text = f"{post['title']}\n{post['text']}".strip()
+        if not kw.search(text):
             continue
         out.append({
-            "url": f"https://www.reddit.com{permalink}",
-            "author": d.get("author"),
+            "url": post["url"],
+            "author": post.get("author"),
             "text": text[:TARGET_TEXT_CAP],
             "thread": f"r/{_REDDIT_SUB} (new)",
             "thread_kind": "cofounder_post",
@@ -326,7 +300,7 @@ def sweep_all(campaign_slug: str | None = None, *, dry_run: bool = False,
                              _hn_candidates(kw, limit=HITS_PER_CAMPAIGN * 3)))
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{slug}: hn leg failed: {e}")
-        if reddit_venue is not None and _reddit_configured():
+        if reddit_venue is not None and reddit.configured():
             try:
                 legs.append((reddit_venue, "reachout_dm",
                              _reddit_candidates(kw, limit=HITS_PER_CAMPAIGN * 3)))
@@ -373,7 +347,7 @@ def sweep_all(campaign_slug: str | None = None, *, dry_run: bool = False,
     return {
         "dry_run": dry_run,
         "campaigns": slugs,
-        "reddit_configured": _reddit_configured(),
+        "reddit_configured": reddit.configured(),
         "matched": found,
         "skipped_wrong_role": skipped_role,
         "drafted": drafted,

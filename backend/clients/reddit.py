@@ -6,9 +6,12 @@ complaint breaks subreddit rules and reads as spam; the pipeline reaches buyers 
 channels where cold contact is legitimate (LinkedIn, email, phone) and uses Reddit
 purely to learn what the work actually feels like.
 
-We deliberately do NOT retain post authors. The value is the described pain, not who
-described it, and storing usernames would turn a research corpus into a contact list
-this system must never build.
+Post authors are omitted by default. The value is the described pain, not who described
+it, and storing usernames would turn a research corpus into a contact list this system
+must never build. `include_author=True` is a deliberate opt-in for the one caller with a
+different job — the founder reachout queue, which drafts a message a human then sends to
+a named person on a channel where that contact is welcome. Anything writing pain_signals
+must leave it off.
 
 Auth reuses the founders module's script-app refresh-token grant
 (REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET / REDDIT_REFRESH_TOKEN). Every call degrades
@@ -69,10 +72,13 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_token()}", "User-Agent": Config.reddit_user_agent}
 
 
-def _normalize(child: dict[str, Any], venue: str) -> dict[str, Any] | None:
+def _normalize(
+    child: dict[str, Any], venue: str, *, include_author: bool = False
+) -> dict[str, Any] | None:
     """One listing child → our normalized signal shape. None when unusable.
 
     `external_id` is Reddit's fullname (t3_xxxxx), stable across edits and the dedup key.
+    `include_author` adds the username; see the module docstring before passing it.
     """
     d = child.get("data") or {}
     fullname = d.get("name")
@@ -83,7 +89,7 @@ def _normalize(child: dict[str, Any], venue: str) -> dict[str, Any] | None:
     body = (d.get("selftext") or "").strip()
     if len(f"{title}{body}") < 40:
         return None  # a bare title with no substance can't be scored for real pain
-    return {
+    row: dict[str, Any] = {
         "source": "reddit",
         "external_id": str(fullname),
         "url": f"https://www.reddit.com{permalink}",
@@ -96,16 +102,21 @@ def _normalize(child: dict[str, Any], venue: str) -> dict[str, Any] | None:
         "upvotes": int(d.get("score") or 0),
         "num_comments": int(d.get("num_comments") or 0),
     }
+    if include_author:
+        # Absent unless asked for, so a caller that never opts in cannot store it by accident.
+        row["author"] = d.get("author") or None
+    return row
 
 
-def _listing(path: str, params: dict[str, str], venue: str, limit: int) -> list[dict[str, Any]]:
+def _listing(path: str, params: dict[str, str], venue: str, limit: int,
+             *, include_author: bool = False) -> list[dict[str, Any]]:
     with httpx.Client(timeout=30.0) as c:
         r = c.get(f"{_API}{path}", params=params, headers=_headers())
         r.raise_for_status()
         children = (r.json().get("data") or {}).get("children") or []
     out: list[dict[str, Any]] = []
     for ch in children:
-        row = _normalize(ch, venue)
+        row = _normalize(ch, venue, include_author=include_author)
         if row:
             out.append(row)
         if len(out) >= limit:
@@ -140,8 +151,14 @@ def search(
     )
 
 
-def newest(subreddit: str, *, limit: int = 25) -> list[dict[str, Any]]:
-    """Newest posts in one subreddit (no keyword filter)."""
+def newest(subreddit: str, *, limit: int = 25,
+           include_author: bool = False) -> list[dict[str, Any]]:
+    """Newest posts in one subreddit (no keyword filter).
+
+    `include_author=True` is an opt-in the module docstring governs — pass it only when
+    the caller has a legitimate reason to address a person, never for the pain corpus.
+    """
     if not configured():
         return []
-    return _listing(f"/r/{subreddit}/new", {"limit": str(min(limit * 2, 100))}, f"r/{subreddit}", limit)
+    return _listing(f"/r/{subreddit}/new", {"limit": str(min(limit * 2, 100))},
+                    f"r/{subreddit}", limit, include_author=include_author)
