@@ -254,6 +254,13 @@ def replenish_queue_cron() -> dict:
         founders = _maybe_founder_search()
     except Exception as e:  # noqa: BLE001
         founders = {"error": str(e)}
+    # And — at most once a day — the pain-mining sweep: read-only discovery across
+    # occupational forums in every industry, scored into `pain_signals`. Finds problems
+    # worth building for, not leads; nobody is ever contacted from it (pain_mining.py).
+    try:
+        pain = _maybe_pain_sweep()
+    except Exception as e:  # noqa: BLE001
+        pain = {"error": str(e)}
     # And — Monday mornings — the weekly "state of the machine" report (funnel, experiments,
     # system health, needs-you list). One email replaces the ad-hoc "how's it going" audit.
     try:
@@ -276,7 +283,7 @@ def replenish_queue_cron() -> dict:
         "cron_replenish",
         {"linkedin": linkedin, "apollo_email": email, "deal_briefs": briefs,
          "blog": blog, "growth_digest": digest, "bids": bids, "founders": founders,
-         "weekly_report": weekly, "revivals": revivals, "proof": proof},
+         "pain": pain, "weekly_report": weekly, "revivals": revivals, "proof": proof},
     )
 
 
@@ -610,6 +617,57 @@ def founders_draft_now(dry_run: bool = False, campaign: str = "") -> dict:
     from workers.founders_draft import draft_all
 
     return _logged("founders_draft", draft_all(campaign or None, dry_run=dry_run, time_budget_s=500))
+
+
+def _maybe_pain_sweep() -> dict:
+    """Pain-mining daily leg: read-only sweep of occupational forums across every industry,
+    LLM-triaged into `pain_signals`. Same guard shape as the other daily legs — the
+    app_settings marker's OWN timestamp, not row counts (a steady-state sweep ingests zero
+    new rows once dedup catches up, and a count guard would then re-fire hourly and re-bill
+    the scoring), stamped BEFORE the run so a mid-run crash can't retry hourly.
+
+    Discovery only. This never contacts anyone and stores no post authors."""
+    import psycopg
+
+    from config import require
+    from workers.pain_mining import sweep
+
+    with psycopg.connect(require("DATABASE_URL")) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select 1 from app_settings where key = 'last_pain_sweep' "
+            "and (value #>> '{}')::timestamptz > now() - interval '20 hours'"
+        )
+        if cur.fetchone() is not None:
+            return {"skipped": "already ran today"}
+        cur.execute(
+            "insert into app_settings (key, value) values ('last_pain_sweep', to_jsonb(now()::text)) "
+            "on conflict (key) do update set value = excluded.value"
+        )
+        conn.commit()
+    # 180s, matching the other daily legs: the dispatcher runs several sequentially and no
+    # single leg may eat the hour. Whatever doesn't get scored defers to tomorrow's sweep.
+    return sweep(time_budget_s=180)
+
+
+@app.function(secrets=secrets, timeout=900)
+def pain_sweep_now(dry_run: bool = False) -> dict:
+    """On-demand pain-mining sweep (read-only forum discovery, all industries).
+    `modal run modal_app.py::pain_sweep_now --dry-run`. Ignores the once-a-day guard."""
+    from workers.pain_mining import sweep
+
+    return _logged("pain_sweep", sweep(dry_run=dry_run, time_budget_s=800))
+
+
+@app.function(secrets=secrets, timeout=120)
+def pain_themes_now(min_signals: int = 3, limit: int = 25) -> dict:
+    """The clustered view: tasks several operators independently complained about.
+
+    This is the output that matters — a lone high-scoring post is one person's bad week,
+    while the same theme recurring across posters and venues is a candidate market.
+    `modal run modal_app.py::pain_themes_now --min-signals 3`."""
+    from workers.pain_mining import top_themes
+
+    return {"themes": top_themes(min_signals=min_signals, limit=limit)}
 
 
 @app.function(secrets=secrets, timeout=60)

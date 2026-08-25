@@ -1,0 +1,40 @@
+name = "Abatement — notification discovery (interviews)"
+status = "active"
+channels = ["linkedin_connect", "email"]
+
+# DISCOVERY CAMPAIGN — NOT A SALES CAMPAIGN. Nothing is being sold and no product exists.
+# The goal is 10 Mom Test conversations about how these firms actually file state abatement
+# notifications, to find out whether the pain is real before anything gets built.
+#
+# auto_send MUST stay false. A wrong-footed message here doesn't cost a sale, it burns the
+# only 10 operators willing to talk in a small industry where people know each other.
+auto_send = false
+auto_approve_min_fit = 0
+
+growth_keywords = [
+    "asbestos abatement contractor",
+    "asbestos notification",
+    "lead abatement",
+    "NESHAP notification",
+    "environmental remediation contractor",
+]
+owner_email = "chanceb323@gmail.com"
+
+# Multi-state operators feel the fragmentation hardest — each state runs its own portal
+# (MA eDEP to two agencies, TX online system, MI ANS, GA GEOS) — so the Northeast corridor
+# plus TX is deliberate: small firms there routinely cross state lines on a single week's work.
+[apollo_params]
+titles = ["owner", "president", "vice president", "general manager", "operations manager", "project manager"]
+locations = ["massachusetts", "connecticut", "new jersey", "new york", "texas"]
+seniorities = ["owner", "founder", "c_suite", "vp", "director", "manager"]
+num_employees_ranges = ["1,10", "11,50", "51,200"]
+org_keywords = [
+    "asbestos abatement",
+    "asbestos removal",
+    "lead abatement",
+    "environmental remediation",
+    "mold remediation",
+    "demolition contractor",
+    "environmental services",
+    "hazardous materials",
+]
