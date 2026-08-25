@@ -20,12 +20,25 @@ growth_keywords = [
 ]
 owner_email = "chanceb323@gmail.com"
 
-# Multi-state operators feel the fragmentation hardest — each state runs its own portal
-# (MA eDEP to two agencies, TX online system, MI ANS, GA GEOS) — so the Northeast corridor
-# plus TX is deliberate: small firms there routinely cross state lines on a single week's work.
+# TARGETING REVISED 2026-08-24 after deep research. The original premise was "multi-state
+# operators feel the fragmentation hardest". That is still true but it targets a MINORITY:
+# licence reciprocity between states is uncommon, so most abatement firms operate in one
+# state and never feel the cross-portal pain at all.
+#
+# Target FILING VOLUME instead. Michigan alone processed 95,000+ notifications and
+# modifications in 2024, so the cost that bites is labour time per filing, not the penalty
+# (median notification-only fine is ~$1,533 — too small to sell fear against). Three states
+# publish notification searches showing WHO files and HOW OFTEN — use those to rank targets
+# before falling back to Apollo:
+#   MI https://asbestosprogram.apps.lara.state.mi.us/ProjectNotification/ProjectNotificationSearch
+#   MA https://eeaonline.eea.state.ma.us/portal#!/search/asbestos
+#   TX https://vo.ras.dshs.state.tx.us/datamart/notificationSearchAction.do
+#
+# VA and OR are in the list because their licensing bodies publish bulk files WITH EMAILS
+# (VA ~162, OR ~86), which is the fastest route to a real contact list.
 [apollo_params]
 titles = ["owner", "president", "vice president", "general manager", "operations manager", "project manager"]
-locations = ["massachusetts", "connecticut", "new jersey", "new york", "texas"]
+locations = ["massachusetts", "michigan", "texas", "virginia", "oregon", "new york"]
 seniorities = ["owner", "founder", "c_suite", "vp", "director", "manager"]
 num_employees_ranges = ["1,10", "11,50", "51,200"]
 org_keywords = [

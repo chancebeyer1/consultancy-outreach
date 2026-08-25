@@ -9,6 +9,42 @@ remaining candidate for one reason: the fragmentation is verified real and the b
 enumerable in public licensing databases. Whether the pain is real is the open question, and
 only contractors can answer it.
 
+## Read this first: the thesis got weaker, not stronger (2026-08-24)
+
+Deep research came back **MARGINAL**, and three findings cut against the original premise.
+
+**1. The penalty engine is not there.** EPA Region 4's September 2024 batch of 15 Georgia
+settlements shows notification-only penalties running **$195 to $6,544, median $1,533**,
+against a $59,114/day statutory maximum. Air districts issue written warnings for late
+paperwork; real money attaches to physical failures like failing to wet material. OSHA
+requires no agency notification at all. So a contractor is being asked to buy insurance
+against roughly a $1,500 risk. **Do not sell fear.** It won't work and it isn't honest.
+
+**2. Most contractors are single-state.** Licence reciprocity between states is uncommon, so
+the cross-portal fragmentation that makes this interesting applies to a minority of an already
+small base: roughly 2,000 to 2,600 dedicated abatement firms nationally, from 4,829 firms in
+NAICS 562910 of which 81.5% have under 20 employees.
+
+**3. A funded competitor already owns this customer.** **FieldFlo raised $35M from Mainsail
+Partners in October 2025**, is Denver-based with 46 employees, and its CEO comes out of the
+abatement and demolition industry. This is the kill signal that ended round 4's niches. It
+does not currently submit notifications, but it is now very well funded to try.
+
+**What survives.** The narrow "actually submits the filing" gap is genuinely unclaimed: of
+nine vendors examined, **not one files anything**, and no multi-state clearinghouse exists.
+Deelo's own blog concedes no general platform submits to EPA or state portals. That gap is
+defended structurally rather than by neglect, which is why nobody has taken it: fees fall due
+at submission by card, portal accounts are per-licence and sometimes issued only by phone, and
+CROMERR means the electronic signature is legally the contractor's, so a vendor holding their
+credentials takes on real liability.
+
+**So the pitch, if there is one, is time and not fear.** Michigan alone processed **over 95,000
+notifications and modifications in 2024**. That is the number worth chasing. The interviews
+should be testing whether filing labour is a real cost, not whether fines are scary.
+
+**Verify before betting.** Two independent agents concluded no state portal offers an API. That
+agreement is reassuring but neither was confirmed by me directly.
+
 ## What we already know (verified 2026-08-24)
 
 Massachusetts requires an asbestos removal notification (AQ 04) filed **ten working days**
@@ -22,8 +58,30 @@ Other states run entirely separate systems: Texas has its own Online Asbestos No
 System, Michigan requires the Asbestos Notification System (ANS), Georgia routes through GEOS.
 The ten day lead time is broadly common; nothing else is.
 
-**The unknown that decides everything:** does the $35-per-revision refiling actually hurt, or
-is it noise against a job's margin? A contractor answers that in one sentence.
+**The unknown that decides everything:** does refiling actually hurt, or is it noise against a
+job's margin? A contractor answers that in one sentence.
+
+### The amendment traps (this is the real story)
+
+Massachusetts' $35 revision is the mild end. Abatement schedules slip constantly, and what a
+slip costs varies wildly by jurisdiction. This is the best interview ammunition we have:
+
+| Where | What a schedule change costs |
+|---|---|
+| **Chicago** | Change the date later than **24 hours** before the original start and you restart the whole process, pay a new fee, and wait another 10 days. **No refunds.** Harshest rule found anywhere. |
+| **Illinois (state)** | **$150 per revision**, mailed on paper with an original signature. Electronic submission is "not available at this time". |
+| **Cook County** | Revisions capped at **six**; a seventh expires the permit. $55 to lift a hold. |
+| **Puget Sound (WA)** | $20 amendment, but an **address change cannot be amended at all** — it means a whole new notification and fee. |
+| **New Jersey** | One job can need **three to four independent filings** (DOL, DOH, DCA, local permit), each amended separately. DCA requires the amendment *before* the change happens, backed by stop-work orders. |
+| **Federal floor** | A delayed start must be noticed **on or before the original start date**; an earlier start restarts the full 10 working days. |
+
+Illinois also splits by job size between two agencies (IEPA and IDPH) with different lead times
+(10 working days vs 2), and a school job files with both. Washington has seven local clean air
+agencies plus Ecology, plus L&I as a wholly separate filing on its own 5 day clock.
+
+**This is why the time thesis may survive even though the fear thesis died.** Nobody is buying
+protection from a $1,533 fine. They might buy back the hours and the forfeited fees that a
+moved start date costs across three agencies in two states.
 
 ## The target list
 
@@ -118,6 +176,15 @@ tool sounds useful and that answer is worth nothing.
 
 Question 5 matters most. Someone already paying an admin or a consultant has proven the budget
 exists. Everyone else is describing a budget that doesn't.
+
+**Question 3 is now the real one.** The research killed the fine-avoidance angle, so the whole
+thesis rests on whether schedule changes are expensive. Push on it: how many jobs moved last
+month, what did each one cost in refiling fees and time, and has a late date change ever cost
+a forfeited fee or a stop-work order. If jobs rarely move, or moving them is cheap, this dies.
+
+Do not lead with the horror stories in the table above. Ask what happened to them and let them
+volunteer it. Feeding a contractor the Chicago rule and asking "isn't that terrible" produces
+agreement, not information.
 
 ## Gates
 
